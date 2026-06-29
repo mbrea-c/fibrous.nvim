@@ -5,6 +5,18 @@ built on top of [`nui.nvim`](https://github.com/MunifTanjim/nui.nvim). It brings
 a VDOM, hooks, and subtree reconciliation to Neovim UI development. See
 [`design.md`](design.md) for the architecture.
 
+## Examples
+
+Runnable sample UIs live in [`examples/`](examples/). They open in a clean,
+isolated Neovim (no user config or other plugins):
+
+```sh
+make example              # opens Neovim; then :Examples / :Example <name>
+make example EX=counter   # opens and runs one example directly
+```
+
+See [`examples/README.md`](examples/README.md) for the full list.
+
 ## Development
 
 This project is built with **red-green TDD**: write a failing test, make it pass

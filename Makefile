@@ -13,3 +13,11 @@ test:
 .PHONY: test-file
 test-file:
 	$(NVIM_BIN) --headless -u NONE -i NONE -l tests/run.lua $(FILE)
+
+# Launch an interactive, fully isolated Neovim with only this plugin loaded, and
+# (optionally) open one example straight away:
+#   make example            # opens, then :Examples / :Example <name>
+#   make example EX=counter  # opens and runs the counter example
+.PHONY: example
+example:
+	$(NVIM_BIN) --clean -u examples/init.lua $(if $(strip $(EX)),-c "Example $(EX)",)

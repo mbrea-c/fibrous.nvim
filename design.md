@@ -274,5 +274,6 @@ plugin in case we need to add any patches (hard-fork, deleting the .git
 diretory).
 
 ## 7. Final notes
+
 With the exception of the API, the contents of this doc are open to discussion
 if you have any better ideas.
