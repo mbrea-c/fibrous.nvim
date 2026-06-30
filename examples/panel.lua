@@ -16,8 +16,8 @@
 --     fire only while the plan window is focused, because the hook binds them
 --     across that component's subtree (not globally).
 
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 local use_keymap = nr.hooks.use_keymap
 local util = require("examples.util")
 
@@ -144,7 +144,7 @@ local function Panel(ctx, props)
             props = {
               size = 6,
               border = titled("Session"),
-              lines = { "", " model   claude-opus-4-8", " cwd     ~/src/nui-reactive", " status  ● ready" },
+              lines = { "", " model   claude-opus-4-8", " cwd     ~/src/fibrous", " status  ● ready" },
             },
           },
           {

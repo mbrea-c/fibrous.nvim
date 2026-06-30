@@ -217,7 +217,7 @@ local function sync_inputs(fiber, inputs)
       vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, vim.split(value, "\n", { plain = true }))
     end
 
-    local group = vim.api.nvim_create_augroup("NuiReactiveInput_" .. bufnr, { clear = true })
+    local group = vim.api.nvim_create_augroup("FibrousInput_" .. bufnr, { clear = true })
     vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
       group = group,
       buffer = bufnr,
@@ -235,7 +235,7 @@ local function sync_inputs(fiber, inputs)
       if inst.on_submit then
         inst.on_submit(buf_text(bufnr))
       end
-    end, { buffer = bufnr, desc = "nui-reactive: submit input" })
+    end, { buffer = bufnr, desc = "fibrous: submit input" })
 
     inputs[#inputs + 1] = inst
   end)
@@ -297,7 +297,7 @@ function M.new(layout_config)
           }),
         }
       end
-      error("nui-reactive: unknown host primitive '" .. tostring(tag) .. "'")
+      error("fibrous: unknown host primitive '" .. tostring(tag) .. "'")
     end,
 
     -- Content/geometry updates are applied wholesale in `commit` (which has the

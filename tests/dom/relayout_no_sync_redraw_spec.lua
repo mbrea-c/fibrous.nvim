@@ -1,5 +1,5 @@
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 
 -- A relayout must not force a synchronous screen redraw while it is still
 -- repositioning windows. nui's float layout places regions in two passes (fixed

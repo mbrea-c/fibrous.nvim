@@ -3,13 +3,13 @@
 ## 1. Executive Summary
 
 The goal of this project is to build an interactive, high-impact marketing and
-documentation homepage for `nvim-react`—a React-like framework built completely
+documentation homepage for `fibrous`—a React-like framework built completely
 in Lua for the Neovim ecosystem.
 
 To demonstrate the capabilities of the framework without friction, the homepage
 will present a standalone, fullscreen Neovim terminal instance running entirely
 client-side inside the user's web browser via WebAssembly (WASM). The user
-interface of this website will be constructed natively using the `nvim-react`
+interface of this website will be constructed natively using the `fibrous`
 Lua components running inside that sandboxed Neovim instance.
 
 ______________________________________________________________________
@@ -22,12 +22,12 @@ build pipeline.
 
 ```
 +-----------------------------------+
-|       1. nvim-react (Lua)         |  <-- Pure plugin logic
+|       1. fibrous (Lua)         |  <-- Pure plugin logic
 +-----------------------------------+
                   |
                   v (Pulled at build time)
 +-----------------------------------+
-|     3. nvim-react-docs (Web)      |  <-- Injects Lua via static bundle
+|     3. fibrous-docs (Web)      |  <-- Injects Lua via static bundle
 +-----------------------------------+
                   ^
                   | (Consumes binary artifacts)
@@ -37,7 +37,7 @@ build pipeline.
 
 ```
 
-### 2.1. Tier 1: Core Library (`nvim-react`)
+### 2.1. Tier 1: Core Library (`fibrous`)
 
 - **Responsibility:** The underlying framework providing reconciliation, virtual
   DOM/tree mappings, state management hooks (`useState`), and side effects
@@ -51,14 +51,14 @@ build pipeline.
 
 - **Responsibility:** Compiles the upstream Neovim source code (written in C and
   Lua) into raw WebAssembly binaries.
-- **Characteristics:** Completely agnostic of `nvim-react`. It mocks the
+- **Characteristics:** Completely agnostic of `fibrous`. It mocks the
   operating system filesystem in memory and patches platform-specific
   abstractions (like `libuv` async I/O loops) to execute smoothly inside a
   browser sandbox.
 - **Output Artifacts:** `nvim.wasm` (compiled executable binary) and `nvim.js`
   (Emscripten JavaScript glue code).
 
-### 2.3. Tier 3: The Documentation Site (`nvim-react-docs`)
+### 2.3. Tier 3: The Documentation Site (`fibrous-docs`)
 
 - **Responsibility:** The customer-facing, single-page application orchestrating
   the layout, bootstrapping the web terminal, and injecting the framework
@@ -80,7 +80,7 @@ Rather than executing a heavy compilation script or loading modules over the
 network dynamically at runtime, a lightweight Node.js script converts the
 filesystem layer into code assets during production compilation.
 
-1. The build script scans the local path of the `nvim-react` repository.
+1. The build script scans the local path of the `fibrous` repository.
 1. Every `.lua` source file is read and mapped into a single JSON dictionary
    (`LUA_VIRTUAL_FS`), where keys are the explicit target sandbox paths and
    values are strings of raw Lua code.
@@ -90,8 +90,8 @@ filesystem layer into code assets during production compilation.
 ```javascript
 // Generated inside public/lua_bundle.js
 window.LUA_VIRTUAL_FS = {
-  "/root/.config/nvim/lua/nvim-react/init.lua": "...",
-  "/root/.config/nvim/lua/nvim-react/reconciler.lua": "..."
+  "/root/.config/nvim/lua/fibrous/init.lua": "...",
+  "/root/.config/nvim/lua/fibrous/reconciler.lua": "..."
 };
 
 ```
@@ -123,7 +123,7 @@ for (const [path, content] of Object.entries(window.LUA_VIRTUAL_FS)) {
 
 3. **Execution:** The browser invokes `Module.callMain()`. Neovim boots,
    processes the newly mounted virtual configurations, and executes
-   `require('nvim-react')` locally in RAM with 0ms network latency.
+   `require('fibrous')` locally in RAM with 0ms network latency.
 
 ______________________________________________________________________
 
@@ -173,7 +173,7 @@ cache overrides required by Emscripten's system code generation.
 
 ```
 
-### 4.2. Documentation Site Flake (`nvim-react-docs/flake.nix`)
+### 4.2. Documentation Site Flake (`fibrous-docs/flake.nix`)
 
 Automates the compilation of web bundles and packages raw outputs into a
 production directory ready for static edge hosting.
@@ -196,7 +196,7 @@ production directory ready for static edge hosting.
         };
 
         packages.default = pkgs.stdenv.mkDerivation {
-          pname = "nvim-react-homepage";
+          pname = "fibrous-homepage";
           version = "1.0.0";
           src = ./.;
           buildInputs = [ pkgs.nodejs_20 ];

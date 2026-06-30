@@ -1,5 +1,5 @@
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 
 local function buf_text(bufnr)
   return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")

@@ -1,5 +1,5 @@
 {
-  description = "nui-reactive — a React-like reactive UI framework for Neovim";
+  description = "fibrous — a React-like reactive UI framework for Neovim";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -33,7 +33,7 @@
       # fully isolated headless Neovim (no user config, no plugins).
       checks = forAllSystems (pkgs: {
         tests =
-          pkgs.runCommandLocal "nui-reactive-tests"
+          pkgs.runCommandLocal "fibrous-tests"
             {
               nativeBuildInputs = [
                 pkgs.neovim

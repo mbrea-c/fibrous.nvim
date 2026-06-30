@@ -1,4 +1,4 @@
-local runtime = require("nui-reactive.reactive.runtime")
+local runtime = require("fibrous.reactive.runtime")
 
 describe("reconciliation", function()
   it("renders nested function components from the returned element", function()

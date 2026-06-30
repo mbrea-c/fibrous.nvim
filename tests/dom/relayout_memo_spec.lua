@@ -1,5 +1,5 @@
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 local Layout = require("nui.layout")
 
 -- Spy on nui.layout's relayout. `commit` must only call it when the Box tree's

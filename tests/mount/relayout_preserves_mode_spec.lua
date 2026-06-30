@@ -1,5 +1,5 @@
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 
 -- A relayout (structural change, or a host-pane resize) must not yank the user
 -- out of visual mode. nui's float relayout historically ran a workaround that

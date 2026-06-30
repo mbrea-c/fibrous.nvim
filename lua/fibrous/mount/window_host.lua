@@ -15,8 +15,8 @@
 -- difference is the layout is anchored to a window rather than the editor, so we
 -- reuse the same nui_host bridge with a window-relative layout_config.
 
-local runtime = require("nui-reactive.reactive.runtime")
-local nui_host = require("nui-reactive.dom.nui_host")
+local runtime = require("fibrous.reactive.runtime")
+local nui_host = require("fibrous.dom.nui_host")
 
 local M = {}
 
@@ -92,7 +92,7 @@ function M.mount(component, props, opts)
   root:render()
 
   -- Engine-level autocmds live in one group so teardown is a single clear.
-  local group = vim.api.nvim_create_augroup("NuiReactiveWindowHost_" .. host_winid, { clear = true })
+  local group = vim.api.nvim_create_augroup("FibrousWindowHost_" .. host_winid, { clear = true })
 
   local unmounted = false
   local function teardown()
@@ -155,7 +155,7 @@ function M.mount(component, props, opts)
             vim.api.nvim_set_current_win(host_winid)
           end
           vim.cmd("wincmd " .. motion)
-        end, { buffer = bufnr, nowait = true, desc = "nui-reactive: leave app pane" })
+        end, { buffer = bufnr, nowait = true, desc = "fibrous: leave app pane" })
       end
     end)
   end

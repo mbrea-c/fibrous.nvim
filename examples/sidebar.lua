@@ -4,8 +4,8 @@
 -- when you resize with `<C-w>>` / `<C-w><`, the <C-w> shims keep focus from
 -- stranding inside an overlay, and closing the pane (`:q`) auto-unmounts the app.
 
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 local util = require("examples.util")
 
 local function Sidebar(ctx, props)

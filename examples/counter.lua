@@ -4,8 +4,8 @@
 -- the state handle closes over a stable hook slot, so the captured inc/dec/reset
 -- stay live across every re-render.
 
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 local util = require("examples.util")
 
 local function Counter(ctx, props)

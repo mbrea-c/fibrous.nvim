@@ -1,5 +1,5 @@
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 
 -- Find a valid buffer / window containing an exact line. Used to assert that
 -- content actually reached a real Neovim buffer arranged by the layout.

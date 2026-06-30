@@ -3,8 +3,8 @@
 -- cursor) and rendered. Returns an imperative handle (design.md §4) for external
 -- control of the live tree.
 
-local runtime = require("nui-reactive.reactive.runtime")
-local nui_host = require("nui-reactive.dom.nui_host")
+local runtime = require("fibrous.reactive.runtime")
+local nui_host = require("fibrous.dom.nui_host")
 
 local M = {}
 

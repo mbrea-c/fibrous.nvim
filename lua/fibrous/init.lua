@@ -1,8 +1,8 @@
--- nui-reactive public entry point. A React-like reactive UI framework for
+-- fibrous public entry point. A React-like reactive UI framework for
 -- Neovim. See design.md for the architecture.
 
-local floating = require("nui-reactive.mount.floating")
-local window_host = require("nui-reactive.mount.window_host")
+local floating = require("fibrous.mount.floating")
+local window_host = require("fibrous.mount.window_host")
 
 local M = {}
 
@@ -17,12 +17,12 @@ M.mount = floating.mount
 M.mount_as_window_host = window_host.mount
 
 -- Built-in host primitives (popup, …) for building component trees.
-M.components = require("nui-reactive.components")
+M.components = require("fibrous.components")
 
 -- Built-in composite hooks (built atop use_state/use_effect/use_ref). Also the
 -- reference pattern for user-defined hooks: a function taking `ctx`.
 M.hooks = {
-  use_keymap = require("nui-reactive.hooks.use_keymap"),
+  use_keymap = require("fibrous.hooks.use_keymap"),
 }
 
 return M

@@ -2,8 +2,8 @@
 -- component returning a `col` container with a single bordered `text` leaf, and
 -- the floating mount target (design.md §3A).
 
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 local util = require("examples.util")
 
 local function Hello()
@@ -17,7 +17,7 @@ local function Hello()
           border = "rounded",
           lines = {
             "",
-            "   Hello from nui-reactive! ",
+            "   Hello from fibrous! ",
             "",
             "   A React-like reactive UI",
             "   framework for Neovim.",

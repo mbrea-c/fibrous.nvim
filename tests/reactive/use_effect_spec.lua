@@ -1,4 +1,4 @@
-local runtime = require("nui-reactive.reactive.runtime")
+local runtime = require("fibrous.reactive.runtime")
 
 describe("use_effect", function()
   it("runs the effect once on mount", function()

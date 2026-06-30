@@ -1,4 +1,4 @@
-local runtime = require("nui-reactive.reactive.runtime")
+local runtime = require("fibrous.reactive.runtime")
 
 -- A mock HostConfig: records the sequence of host operations the reconciler
 -- drives, so we can assert lifecycle behavior without touching nui/Neovim.

@@ -1,5 +1,5 @@
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 
 local function buf_with_line(text)
   for _, b in ipairs(vim.api.nvim_list_bufs()) do

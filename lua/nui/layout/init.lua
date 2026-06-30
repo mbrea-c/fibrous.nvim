@@ -22,10 +22,10 @@ local u = {
 
 -- GitHub Issue: https://github.com/neovim/neovim/issues/18925
 --
--- Forked for nui-reactive. Upstream forced `relative="win"` floats to repaint
+-- Forked for fibrous. Upstream forced `relative="win"` floats to repaint
 -- after a layout update by switching into every anchor window and running
 -- `normal! jk` (a cursor wiggle), then switching back. For a static dashboard
--- that fires once at mount that's tolerable, but nui-reactive relayouts on
+-- that fires once at mount that's tolerable, but fibrous relayouts on
 -- structural changes and on every host-pane resize — and switching the current
 -- window mid-edit exits the user's visual/select mode and flashes the screen on
 -- every relayout. The floats have already been repositioned via

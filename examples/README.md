@@ -1,4 +1,4 @@
-# nui-reactive examples
+# fibrous examples
 
 Small, self-contained sample UIs you can run in a clean Neovim — no user config
 or other plugins involved, just this library and its vendored copy of `nui`.

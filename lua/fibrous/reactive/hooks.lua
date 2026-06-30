@@ -2,7 +2,7 @@
 -- use_effect, the effect-flush phase, and the per-fiber `ctx` that exposes them.
 -- Pure Lua; depends only on the fiber execution context.
 
-local context = require("nui-reactive.reactive.context")
+local context = require("fibrous.reactive.context")
 
 ---@class StateHandle
 ---@field get fun(): any          read the current value

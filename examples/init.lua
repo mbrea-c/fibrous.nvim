@@ -1,4 +1,4 @@
--- Bootstrap for running the nui-reactive examples in an isolated Neovim.
+-- Bootstrap for running the fibrous examples in an isolated Neovim.
 --
 -- Launch a clean Neovim with only this plugin on the runtime path:
 --   nvim --clean -u examples/init.lua
@@ -49,7 +49,7 @@ end
 local function run(name)
   name = (name and name ~= "") and name or "hello"
   if not DESCRIPTIONS[name] then
-    vim.notify("nui-reactive: unknown example '" .. name .. "'. Try :Examples", vim.log.levels.ERROR)
+    vim.notify("fibrous: unknown example '" .. name .. "'. Try :Examples", vim.log.levels.ERROR)
     return
   end
   stop()
@@ -63,24 +63,24 @@ end, {
   complete = function()
     return ORDER
   end,
-  desc = "Run a nui-reactive example",
+  desc = "Run a fibrous example",
 })
 
 vim.api.nvim_create_user_command("Examples", function()
-  local lines = { "nui-reactive examples — run with :Example <name>" }
+  local lines = { "fibrous examples — run with :Example <name>" }
   for _, n in ipairs(ORDER) do
     lines[#lines + 1] = ("  %-9s %s"):format(n, DESCRIPTIONS[n])
   end
   vim.notify(table.concat(lines, "\n"))
-end, { desc = "List nui-reactive examples" })
+end, { desc = "List fibrous examples" })
 
 -- If launched as `make example EX=<name>`, run it straight away.
-if vim.g.nui_reactive_example and vim.g.nui_reactive_example ~= "" then
+if vim.g.fibrous_example and vim.g.fibrous_example ~= "" then
   vim.schedule(function()
-    run(vim.g.nui_reactive_example)
+    run(vim.g.fibrous_example)
   end)
 else
   vim.schedule(function()
-    vim.notify("nui-reactive examples loaded. :Examples to list, :Example <name> to run.")
+    vim.notify("fibrous examples loaded. :Examples to list, :Example <name> to run.")
   end)
 end

@@ -4,8 +4,8 @@
 -- `use_state` so the label below updates reactively. The mount auto-focuses the
 -- input and drops you into insert mode.
 
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
+local nr = require("fibrous")
+local el = require("fibrous.components")
 local util = require("examples.util")
 
 local function Form(ctx)

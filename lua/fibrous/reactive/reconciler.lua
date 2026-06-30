@@ -9,9 +9,9 @@
 -- HostConfig at create/update/destroy time. This keeps the layer pure and lets
 -- tests run reconciliation against a mock host. (Mirrors React's HostConfig.)
 
-local Fiber = require("nui-reactive.reactive.fiber")
-local context = require("nui-reactive.reactive.context")
-local hooks = require("nui-reactive.reactive.hooks")
+local Fiber = require("fibrous.reactive.fiber")
+local context = require("fibrous.reactive.context")
+local hooks = require("fibrous.reactive.hooks")
 
 ---@class VNode
 ---@field comp Component|HostDescriptor   component function, or a host primitive descriptor

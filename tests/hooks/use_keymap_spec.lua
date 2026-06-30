@@ -1,6 +1,6 @@
-local nr = require("nui-reactive")
-local el = require("nui-reactive.components")
-local use_keymap = require("nui-reactive.hooks.use_keymap")
+local nr = require("fibrous")
+local el = require("fibrous.components")
+local use_keymap = require("fibrous.hooks.use_keymap")
 
 local function find_map(bufnr, mode, lhs)
   for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, mode)) do

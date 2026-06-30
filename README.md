@@ -1,4 +1,4 @@
-# nui-reactive
+# fibrous.nvim
 
 A declarative, component-based, React-like UI framework for Neovim plugins,
 built on top of [`nui.nvim`](https://github.com/MunifTanjim/nui.nvim). It brings

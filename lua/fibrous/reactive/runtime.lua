@@ -6,9 +6,9 @@
 --   reconciler.lua  create / render / reconcile / unmount
 -- This layer is pure Lua and fully unit-testable outside of Neovim.
 
-local Fiber = require("nui-reactive.reactive.fiber")
-local hooks = require("nui-reactive.reactive.hooks")
-local reconciler = require("nui-reactive.reactive.reconciler")
+local Fiber = require("fibrous.reactive.fiber")
+local hooks = require("fibrous.reactive.hooks")
+local reconciler = require("fibrous.reactive.reconciler")
 
 local M = {}
 

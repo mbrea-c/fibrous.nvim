@@ -70,8 +70,8 @@ and a configuration table (`props`). They return a virtual node definition
 separating configuration properties from structural layout children.
 
 ```lua
-local checkbox = require("nui-reactive.components.checkbox")
-local layout = require("nui-reactive.layout")
+local checkbox = require("fibrous.components.checkbox")
+local layout = require("fibrous.layout")
 
 -- This is a component
 local function hello_world(ctx, props)
@@ -194,7 +194,7 @@ external event loops to feed top-down state changes into the root fiber.
 ### Mounting Execution Signature
 
 ```lua
-local framework = require("nui-reactive")
+local framework = require("fibrous")
 local My_Sidebar_App = require("my-plugin.ui.sidebar")
 
 local app_handle = framework.mount_as_window_host(My_Sidebar_App, {

@@ -18,7 +18,7 @@
 -- subject to the usual Rules of Hooks (call it unconditionally, once per binding,
 -- at the top of render).
 
-local context = require("nui-reactive.reactive.context")
+local context = require("fibrous.reactive.context")
 
 ---@class KeymapSpec
 ---@field lhs string                     the left-hand side (e.g. "j", "<CR>", "<C-s>")
