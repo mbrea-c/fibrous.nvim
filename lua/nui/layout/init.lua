@@ -21,31 +21,22 @@ local u = {
 }
 
 -- GitHub Issue: https://github.com/neovim/neovim/issues/18925
+--
+-- Forked for nui-reactive. Upstream forced `relative="win"` floats to repaint
+-- after a layout update by switching into every anchor window and running
+-- `normal! jk` (a cursor wiggle), then switching back. For a static dashboard
+-- that fires once at mount that's tolerable, but nui-reactive relayouts on
+-- structural changes and on every host-pane resize — and switching the current
+-- window mid-edit exits the user's visual/select mode and flashes the screen on
+-- every relayout. The floats have already been repositioned via
+-- nvim_win_set_config in `_process_layout`; on modern Neovim a plain scheduled
+-- `redraw` is enough to paint them, with no window switch and no cursor move, so
+-- the editor mode and cursor are left exactly as the user had them.
 local function apply_workaround_for_float_relative_position_issue_18925(layout)
-  local winids_len = 1
-  local winids = { layout.winid }
-  local function collect_anchor_winids(box)
-    for _, child in ipairs(box.box) do
-      if child.component then
-        local border = child.component.border
-        if border and border.winid then
-          winids_len = winids_len + 1
-          winids[winids_len] = border.winid
-        end
-      else
-        collect_anchor_winids(child)
-      end
-    end
-  end
-  collect_anchor_winids(layout._.box)
-
   vim.schedule(function()
     -- check in case layout was immediately hidden or unmounted
-    if layout.winid == winids[1] and vim.api.nvim_win_is_valid(winids[1]) then
-      vim.cmd(
-        ("noa call nvim_set_current_win(%s)\nnormal! jk\nredraw\n"):rep(winids_len):format(unpack(winids))
-          .. ("noa call nvim_set_current_win(%s)"):format(vim.api.nvim_get_current_win())
-      )
+    if layout.winid and vim.api.nvim_win_is_valid(layout.winid) then
+      vim.cmd("redraw")
     end
   end)
 end

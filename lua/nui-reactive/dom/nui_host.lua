@@ -68,6 +68,45 @@ local function build_box(fiber, is_root)
   return Layout.Box(fiber.instance.nui, sizing(fiber, is_root))
 end
 
+-- A string capturing ONLY what affects the geometry of the Box tree: structure
+-- (nesting, container direction) and sizing (size / grow), never content (lines,
+-- border, focusable). Two commits with the same signature lay out identically,
+-- so `commit` can skip nui's relayout when it is unchanged. This is the flicker
+-- fix: content-only updates (typing, toggling a list item) no longer re-issue
+-- nvim_win_set_config across every overlay, which momentarily collapsed columns.
+---@param fiber Fiber
+---@param is_root boolean
+---@param out string[]
+local function box_signature(fiber, is_root, out)
+  if type(fiber.type) == "function" then
+    local child = fiber.child_fibers and fiber.child_fibers[1]
+    if child then
+      box_signature(child, is_root, out)
+    end
+    return
+  end
+
+  local tag = fiber.type.__host
+  local s = sizing(fiber, is_root)
+  out[#out + 1] = tag .. ":" .. (s.size ~= nil and ("s=" .. vim.inspect(s.size)) or ("g=" .. tostring(s.grow)))
+  if CONTAINERS[tag] then
+    out[#out + 1] = "["
+    for _, child in ipairs(fiber.child_fibers or {}) do
+      box_signature(child, false, out)
+    end
+    out[#out + 1] = "]"
+  end
+end
+
+-- Signature for the whole committed tree (see box_signature).
+---@param root Fiber
+---@return string
+local function layout_signature(root)
+  local out = {}
+  box_signature(root, true, out)
+  return table.concat(out, ",")
+end
+
 -- Walk all leaf fibers in the tree, invoking `fn(leaf_fiber)` on each. Descends
 -- through function components and containers.
 ---@param fiber Fiber
@@ -216,6 +255,10 @@ function M.new(layout_config)
   -- mount target installing buffer-local keymaps on every overlay).
   ---@type Fiber|nil
   local last_root = nil
+  -- Geometry signature of the last laid-out tree, so content-only commits skip
+  -- nui's relayout (the flicker fix; see layout_signature).
+  ---@type string|nil
+  local last_signature = nil
 
   -- Wipe the buffer when its window closes so a child removed from the tree
   -- (layout:update closes the window) doesn't leave an orphan buffer behind.
@@ -273,11 +316,16 @@ function M.new(layout_config)
       if not box then
         return
       end
+      local signature = layout_signature(root_fiber)
       if not layout then
         layout = Layout(layout_config, box)
         layout:mount()
-      else
+        last_signature = signature
+      elseif signature ~= last_signature then
+        -- Geometry changed (added/removed/resized region): relayout. Content-only
+        -- commits fall through and just rewrite buffers below — no float reflow.
         layout:update(box)
+        last_signature = signature
       end
       write_contents(root_fiber)
       populate_refs(root_fiber)

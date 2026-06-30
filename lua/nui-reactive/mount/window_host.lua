@@ -109,13 +109,27 @@ function M.mount(component, props, opts)
   end
 
   -- Geometry Sync Engine: realign overlays whenever window dimensions change.
-  vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
-    group = group,
-    callback = function()
+  -- A single drag fires WinResized repeatedly (once per affected window, every
+  -- redraw tick); relaying out synchronously on each is what made resizing flash
+  -- badly. Coalesce the burst into one relayout per event-loop tick via a
+  -- pending flag — responsive (no added latency beyond the tick) but no redundant
+  -- reflows within a tick.
+  local relayout_pending = false
+  local function schedule_relayout()
+    if relayout_pending then
+      return
+    end
+    relayout_pending = true
+    vim.schedule(function()
+      relayout_pending = false
       if not unmounted and vim.api.nvim_win_is_valid(host_winid) and host.relayout then
         host.relayout()
       end
-    end,
+    end)
+  end
+  vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+    group = group,
+    callback = schedule_relayout,
   })
 
   -- Lifecycle: a user `:q`/`<C-w>q` on the host pane unmounts the whole app.

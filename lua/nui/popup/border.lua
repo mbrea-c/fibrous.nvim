@@ -515,7 +515,9 @@ function Border:_open_window()
 
   adjust_popup_win_config(self)
 
-  vim.api.nvim_command("redraw")
+  -- Forked for nui-reactive: dropped upstream's synchronous `:redraw` (see the
+  -- matching note in Border:_relayout). A freshly opened border window paints on
+  -- the layout's scheduled post-mount/-update redraw, with no mid-sweep flash.
 end
 
 function Border:_close_window()
@@ -623,7 +625,12 @@ function Border:_relayout()
 
   adjust_popup_win_config(self)
 
-  vim.api.nvim_command("redraw")
+  -- Forked for nui-reactive: upstream forced a synchronous `:redraw` here. During
+  -- a layout reflow this fires once per complex (titled) border, mid-sweep, while
+  -- nui's two-pass float layout has only half-placed the windows — painting the
+  -- transient state (fixed regions briefly at col 0, growable region zero-width)
+  -- and producing the resize flicker. The reflow now repaints once at the end via
+  -- the layout's scheduled redraw, so this intermediate repaint is removed.
 end
 
 ---@param edge "'top'" | "'bottom'"

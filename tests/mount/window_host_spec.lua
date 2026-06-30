@@ -50,10 +50,15 @@ describe("mount_as_window_host", function()
     local float_winid = box.ref.current.winid
     local narrow = vim.api.nvim_win_get_config(float_winid).width
 
-    -- Manually widen the host pane (as `<C-w>>` would) and announce it.
+    -- Manually widen the host pane (as `<C-w>>` would) and announce it. The
+    -- relayout is coalesced onto the scheduler (debounced against resize bursts),
+    -- so wait for it to land before observing the overlay's new width.
     vim.api.nvim_win_set_width(handle.host_winid, 50)
     vim.api.nvim_exec_autocmds("WinResized", {})
 
+    vim.wait(200, function()
+      return vim.api.nvim_win_get_config(float_winid).width > narrow
+    end)
     local wide = vim.api.nvim_win_get_config(float_winid).width
     assert.is_true(wide > narrow, "overlay should widen with the host pane")
 
