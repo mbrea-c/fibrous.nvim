@@ -12,6 +12,12 @@
   - Fixed: neutralized nui's cursor-wiggle relayout workaround (no window switch / cursor move on relayout). Pinned by `tests/mount/relayout_preserves_mode_spec.lua`.
 - Split pane synchronization issues
   - [ ] When mounted on a pane, closing the floats with `:q` leaves the pane open
+- [ ] Pre-existing suite failures (2, nui-host relayout specs; confirmed on a clean
+  tree 2026-07-02, unrelated to the inline host work):
+  `relayout_no_sync_redraw_spec` (expected 0 redraws, got 4) and
+  `relayout_preserves_mode_spec` (visual mode dropped to normal) — likely an
+  nvim-version behavior change; both guard the old nui host, which is slated
+  for deletion after the inline-host migration.
 
 ## Website / WASM playground (`website_design.md`)
 
@@ -87,6 +93,7 @@ Incremental build plan (each step has a runnable smoke check under headless
   - **Verified end-to-end in node**: welcome panel renders → `q` + `:Example counter` → `+++` → `Count: 3` → `-` → `Count: 2` → `:qa!` exit 0. use_state/use_effect/keymaps/nui popups all work inside nvim.wasm. Chromium screenshot confirms the browser rendering. Testing lesson: **ext_linegrid sends delta cells** — asserting on a concatenated grid_line stream misses re-renders (only the changed digit is sent); tests must maintain a real 2D grid model.
 - [x] **GitHub Pages — DONE (workflow) / BLOCKED (activation).** `.github/workflows/pages.yml`: nix build .#site → upload-pages-artifact → deploy-pages on push to main. Static hosting is sufficient (no COOP/COEP needed — JSPI, not SharedArrayBuffer). **Before CI can build**: publish nvim-wasm-core + fibrous.nvim to GitHub and switch fibrous-docs' flake inputs from `path:/home/manuel/src/...` (local-dev only; relative path inputs can't escape the flake root) to `github:` URLs — TODO markers in flake.nix; also set repo Settings → Pages → Source: GitHub Actions.
 
+
 ### UI demos (built in fibrous, run inside the WASM instance)
 
 - [ ] Interactive counter: source-code pane (left) + live rendering button (right) responding to keyboard/mouse
@@ -99,3 +106,124 @@ Incremental build plan (each step has a runnable smoke check under headless
 - [ ] Loading indicator: DOM/CSS progress UI for the multi-MB engine download (bounce mitigation)
 - [ ] Keyboard-theft mitigation: design navigation around Vim primitives (leader, arrows, buffer-local hotkeys) — avoid browser-reserved `Ctrl+W`/`Ctrl+N`
 - [ ] Viewport stabilization CSS: `touch-action: none`, `user-select: none` on the nvim container
+
+### IMPORTANT: NEW UI HOST
+The current nui-host is insufficient for a web application (and also not great
+as a neovim UI host). We need a new UI host that truly feels "neovim-native", satisfying the following:
+
+* Layouts render _inline_ into the parent buffer; that is, layouts don't automatically
+  create new float windows.
+* Most components also render directly into the parent buffer:
+  * e.g. Buttons, checkboxes, text labels and paragraphs can render inline into
+    the parent buffer via text and extmarks (which ought to be ummodifiable)
+  * Exceptions are for example:
+    * a dedicated "raw buffer" component that renders a subbuffer
+      in a float (like components do in nui-host) and gives control of the buffer
+      to the user, 
+    * Any text input elements need their own buffer as they do right now
+* Components should support a "box model" like in css:
+  * Border, inner margins, outer margins. Each should be configurable "per
+    direction" if needed (i.e. border only on left and right with specific
+    characters, no borders up and down)
+  * Highlights on hover and such are desirable. The vim cursor determines the hover
+    and "click"/interaction (e.g. with checkboxes and buttons)
+* Mouse integration is a plus (can be a follow-up task if complicated)
+* Native vim buffer scrolling is respected and leveraged to make the UI "feel" native. Since most components are 
+  rendered inline, they scroll naturally.
+  * For "subbufer" type components, they act as if they occupied a space in the
+    parent buffer, and scroll accordingly (their floats move when the parent
+    buffer is scrolled). They need to support partial and full occlusion
+* Native cursor motions are respected and the primary way of navigating.
+  * <C-w>-hjkl when focused in a subbufer will move the focus to either the parent buffer
+  * hjkl (and other motions like <C-u>/<C-d>) in normal mode in a subbuffer navigates within the
+    buffer as expected, unless the motion would bring the cursor to a parent
+    buffer (i.e. if the cursor is already at the "end" of the buffer in the
+    given direction), in which case they move to the buffer that exists in that
+    direction. When in a parent buffer, navigating to a position in the buffer
+    occupied by a mounted subbuffer will move the focus onto that subbuffer.
+  * ...and so on. Essentially the UI should "feel" native.
+* Obviously this means we'll need to do our own layouting. Let's keep it
+  relatively simple but powerful. We need composable row/column layouts, with
+  align/justify support, and box-model support as I previously specified. We can
+  discuss this further if more details are needed.
+  * Very open to discussion on this, but I think we'd need a two-pass layouting:
+    * Bottom-up "measure()" pass
+    * Top-down "layout()" pass
+* Example. Suppose our component tree has these components:
+  ```
+  Rows
+    Columns
+      label
+      checkbox
+      checkbox
+    TextInput
+  ```
+  And we're mounted on a split pane. Then the only physical neovim windows we have are
+  * Split pane
+  * Floating window covering the full split pane (UI root)
+    * TextInput float window in the correct position in the parent buffer
+* Performance is important. Let's add benchmarks
+
+#### Decisions (2026-07-02)
+- **Root is ALWAYS a full-covering float** over the host window (even on split
+  mounts). Rendering into the host window's buffer directly would let a resize
+  clobber widgets before we can relayout (flicker), and subwindows need resize
+  sync anyway.
+- **Build alongside nui_host, migrate at the end** — nui_host, the current
+  examples and the fibrous-docs site stay green until the new host reaches
+  parity; then port + delete nui_host and vendored nui.
+- **measure() takes a width constraint** — paragraphs wrap CSS-style (height
+  depends on laid-out width). `raw_buffer` is the escape hatch when native
+  Neovim wrapping is wanted (e.g. a massive streaming transcript where custom
+  wrapping would be slow).
+- **Two core targeted use-cases** drive the root constraint modes:
+  1. width fixed to viewport, height unbounded → content taller than the
+     viewport scrolls vertically natively (website-like);
+  2. width AND height fixed (classic Neovim UI) → vertical grow/justify apply,
+     content is bounded.
+  Engine API: `layout.compute(tree, { width = w, height = h|nil })` — nil
+  height = scroll mode (root height = content height, vertical grow/justify
+  inert), fixed height = app mode.
+- **Subwindow strategy: clipping first.** Partial occlusion = resize the float
+  to its visible rows + re-anchor its viewport; fully occluded = hide. Known
+  accepted artifact to evaluate: WinScrolled fires post-redraw, so floats lag
+  the parent scroll by one frame ("swim"). If that proves annoying for text
+  inputs, the *maybe-later* optimization is float-on-focus (inline placeholder
+  when unfocused, float materializes on focus) — rejected as the default
+  because an inline placeholder can't reproduce native wrapping of multiline
+  float content. The clipping engine is needed for `raw_buffer` regardless.
+- **Perf posture:** full measure + repaint per commit is acceptable to start;
+  cache display-width lookups (`nvim_strwidth` per cell adds up); keep
+  damage-tracking (repaint only dirty subtrees) in the back pocket, don't
+  build it up front. Benchmarks (task 7) gate this.
+
+#### Module plan — `lua/fibrous/inline/`
+- `box.lua` — box-model resolution: per-side margin/padding/border normalization, border char sets
+- `layout.lua` — pure two-pass engine: bottom-up `measure(node, max_w)`, top-down `layout(node, rect)`; row/col with grow/align/justify/gap
+- `canvas.lua` — cell-grid painter → buffer lines + highlight spans (multibyte-safe)
+- `render.lua` — laid-out tree → canvas: borders, padding, per-component painters
+- `host.lua` — HostConfig: fiber tree → layout tree → commit into the root float buffer (extmarks, hit-map)
+- `components.lua` — primitives: `rows, cols, label, paragraph, button, checkbox, text_input, raw_buffer`
+- `interact.lua` — cursor-driven hover highlights + `<CR>`/`<Space>` activation via hit-map
+- `subwin.lua` — subwindow floats: layout-driven position, scroll sync, partial/full occlusion, focus handoff
+- `mount.lua` — floating + split mount targets (both create the root float; resize sync; teardown)
+
+#### Task breakdown
+- [x] 1. Layout engine core (pure Lua, TDD): box model, measure/layout passes, row/col grow/align/justify/gap, text wrap under width constraint
+  - `lua/fibrous/inline/box.lua` + `layout.lua`; specs `tests/inline/box_spec.lua` (13) + `layout_spec.lua` (19). Grow = flex-basis-0 shares (remainder to last); explicit width/height are border-box and win over stretch; scroll mode makes vertical grow/justify naturally inert.
+- [x] 2. Canvas renderer: cell grid → lines + highlight spans; per-side border drawing with custom chars; multibyte-safe
+  - `lua/fibrous/inline/canvas.lua` (cell grid; byte-indexed merged hl spans for extmarks; wide-char cells with continuation handling) + `render.lua` (bg → border → content paint order; corners only where both adjacent sides exist; text cropped to its content box). Specs: `canvas_spec.lua` (8) + `render_spec.lua` (9).
+- [x] 3. Inline HostConfig + root-float mount targets (floating + split), resize sync, teardown
+  - `lua/fibrous/inline/host.lua` (HostConfig: whole fiber tree → layout.compute → render.paint → ONE host-owned unmodifiable scratch buffer, lines + extmarks in ns `fibrous_inline`; size read from injected `get_size` at every flush; `relayout()` re-flushes without re-rendering; `host.tree` keeps the laid-out tree with fiber backrefs for the task-6 hit-map) + `mount.lua` (`floating` = editor-relative root float, `split` = pane + covering relative="win" float; `mode = "fixed"|"scroll"`; coalesced WinResized/VimResized sync; WinClosed on pane or float tears the app down). Specs: `host_spec.lua` (8) + `mount_spec.lua` (7).
+- [x] 4. Subwindow clipping risk-spike (pulled forward): one text_input float positioned by layout, scroll sync on WinScrolled, resize+re-anchor clipping, hide on full occlusion
+  - `lua/fibrous/inline/subwin.lua`: text_input is laid out (and border/bg painted) INLINE; its content box is covered by an editable zindex-60 float keyed by fiber instance. Repositioning subtracts the root's topline (relative="win" floats anchor to the window grid, not scrolled content); partial top-clip resizes to visible rows + winrestview-scrolls the float's own topline; full occlusion → `hide = true`. WinScrolled (pattern = root winid) resyncs, synchronous/uncoalesced to minimize the swim. host.lua collects `host.subwins` per flush + `on_flush` hook; mount targets attach the manager and tear it down. Specs: `subwin_spec.lua` (6). Value seeding from props.value on create only (buffer = source of truth after); on_change/focus wiring is task 7.
+  - [x] 4b. EVALUATE THE SWIM — verdict (2026-07-02, interactive eval): **no visible swim**; clipping strategy stays, float-on-focus stays a deferred task-10 option. Two feedback items from the eval: full-line hover on button/checkbox (fixed — see task 6 note) and no navigation into/out of subwindows yet (= task 7 scope, now unblocked).
+- [x] 5. Component painters: label, paragraph, button, checkbox (unmodifiable inline content)
+  - `lua/fibrous/inline/components.lua`: thin function components over the `text` host leaf (reconciler/host untouched). Prop mapping: `hl` = foreground (→ text_hl), `bg` = background fill (→ node hl); box/layout props pass through. button = `[ label ]`, checkbox = `[x]/[ ] label`; both forward handlers + a `role` marker onto node props (what the hit-map reads). Re-exports col/row/text/text_input. Specs: `components_spec.lua` (7).
+- [x] 6. Cursor interaction: hit-map, hover highlight, `<CR>`/`<Space>` activation on the component under cursor
+  - `lua/fibrous/inline/interact.lua`: hit-map = pure walk of `host.tree` for the deepest node with a `role` under the cursor (reverse child order = paint order; role-less subtrees fall through to the closest interactive ancestor — containers can be interactive). Hover paints the node's rect with `hover_hl` (default CursorLine) in its own namespace at priority 4200, re-evaluated on CursorMoved AND after every flush. `<CR>`/`<Space>` buffer-local: button → on_press(), checkbox → on_toggle(not checked). Wired into both mount targets alongside the subwin manager. Specs: `interact_spec.lua` (5). The `inline_scroll` example now demos hover/activation too. **Post-eval fix (2026-07-02):** button/checkbox used to stretch to the container width (default cross-axis align), so hover lit the whole line; added per-child `align_self` to the layout engine (overrides container `align`) and both widgets now default to `align_self = "start"` — hover hugs the widget; pass `align_self = "stretch"` or a `width` for full-width widgets.
+- [ ] 7. Subwindow engine (full): raw_buffer, focus traversal (edge motions hjkl/`<C-u>`/`<C-d>`, `<C-w>`-hjkl, parent-cursor entry into subwindow regions)
+- [x] 8. Benchmarks (`make bench`): full commit for N components, incremental update, scroll-sync tick
+  - `bench/run.lua` (headless, isolated; `make bench` / `make bench BENCH_N=500`). Scenarios: pure layout+paint, mount, full re-commit (set_props), incremental update (one leaf use_state), scroll tick (WinScrolled subwin resync). Numbers at N=100 sections (~600 nodes, this machine, headless): pure layout+paint 2.5ms · mount 7.7ms · full re-commit 7.7ms · incremental 7.6ms · scroll tick 0.007ms. Perf work the bench forced (suite-guarded refactors): `width.lua` (memoized char widths + ASCII fast path — nvim_strwidth API overhead dominated), canvas rewritten to parallel per-row arrays (was a table per cell; alloc dominated), border edges via direct put. Before: full commit ~36ms. Damage tracking stays in the back pocket — remaining commit cost is reconciler + set_lines + ~2k extmarks, fine at realistic tree sizes.
+- [ ] 9. Migration: port examples + welcome panel + fibrous-docs site; delete nui_host + vendored nui
+- [ ] 10. Follow-up: mouse integration; float-on-focus text inputs if scroll-swim warrants it

@@ -14,6 +14,13 @@ test:
 test-file:
 	$(NVIM_BIN) --headless -u NONE -i NONE -l tests/run.lua $(FILE)
 
+# Benchmarks for the inline host (headless, isolated like the tests):
+#   make bench            # default N=100 sections (~600 nodes)
+#   make bench BENCH_N=500
+.PHONY: bench
+bench:
+	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/run.lua
+
 # Launch an interactive, fully isolated Neovim with only this plugin loaded, and
 # (optionally) open one example straight away:
 #   make example            # opens, then :Examples / :Example <name>

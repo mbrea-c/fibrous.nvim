@@ -27,13 +27,14 @@ package.path = table.concat({
 }, ";")
 
 -- name → module. Order is the listing/completion order.
-local ORDER = { "hello", "counter", "form", "sidebar", "panel" }
+local ORDER = { "hello", "counter", "form", "sidebar", "panel", "inline_scroll" }
 local DESCRIPTIONS = {
   hello = "static floating panel",
   counter = "use_state + use_effect, keymap-driven",
   form = "uncontrolled text_input with live mirror",
   sidebar = "native split mode (mount_as_window_host)",
   panel = "ACP-shaped flex layout + use_keymap + custom hook",
+  inline_scroll = "NEW inline host: scroll-mode split, clipped input floats (task-4 spike)",
 }
 
 ---@type table|nil  the currently running example's handle

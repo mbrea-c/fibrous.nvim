@@ -1,0 +1,299 @@
+-- The pure two-pass layout engine for the inline host (tracker "NEW UI HOST"):
+-- bottom-up `measure` under a width constraint, top-down `layout` assigning
+-- rects. Pure Lua over plain node tables — no buffers, no windows — so it unit
+-- tests fast and the host can call it on every commit.
+--
+-- Node (input):  { kind = "text"|.., props?, text?, children? }
+-- Annotations (output):
+--   node.size    measured margin-box { w, h } (intrinsic under the constraint)
+--   node.rect    assigned border-box { x, y, w, h } (absolute, 0-indexed)
+--   node.content rect inset by border+padding (where content/children go)
+--   node.lines   (text nodes) final display lines, wrapped to the final width
+--
+-- Root constraint modes (tracker decision): height = nil is scroll mode — the
+-- root's height is its content height and the buffer scrolls natively; a fixed
+-- height is app mode.
+
+local box = require("fibrous.inline.box")
+local width = require("fibrous.inline.width")
+
+local M = {}
+
+local char_width, str_width = width.char, width.str
+
+local CONTAINERS = { col = true, row = true }
+
+local measure, layout -- forward declarations (containers recurse)
+
+-- Iterate the UTF-8 characters of `s`.
+local function chars(s)
+  return s:gmatch("[%z\1-\127\194-\244][\128-\191]*")
+end
+
+-- Emit `word` in display-width chunks of at most `max_w`, returning the final
+-- (unemitted) chunk and its width — it becomes the current line, so following
+-- words can share it.
+---@return string remainder, integer remainder_width
+local function hard_break(word, max_w, out)
+  local chunk, w = "", 0
+  for ch in chars(word) do
+    local cw = char_width(ch)
+    if w + cw > max_w and chunk ~= "" then
+      out[#out + 1] = chunk
+      chunk, w = "", 0
+    end
+    chunk, w = chunk .. ch, w + cw
+  end
+  return chunk, w
+end
+
+-- Greedy word-wrap of one logical line into display lines of width <= max_w.
+-- Words wider than max_w are hard-broken.
+local function wrap_line(logical, max_w, out)
+  local line, lw = "", 0
+  local any = false
+  for word in logical:gmatch("%S+") do
+    any = true
+    local ww = str_width(word)
+    if ww > max_w then
+      if line ~= "" then
+        out[#out + 1] = line
+      end
+      line, lw = hard_break(word, max_w, out)
+    elseif line == "" then
+      line, lw = word, ww
+    elseif lw + 1 + ww <= max_w then
+      line, lw = line .. " " .. word, lw + 1 + ww
+    else
+      out[#out + 1] = line
+      line, lw = word, ww
+    end
+  end
+  if any then
+    out[#out + 1] = line
+  else
+    out[#out + 1] = "" -- blank logical line = paragraph break, preserved
+  end
+end
+
+---@param text string
+---@param max_w integer
+---@return string[]
+local function wrap_text(text, max_w)
+  local out = {}
+  for _, logical in ipairs(vim.split(text, "\n", { plain = true })) do
+    wrap_line(logical, max_w, out)
+  end
+  return out
+end
+
+---@param lines string[]
+---@return integer
+local function max_line_width(lines)
+  local w = 0
+  for _, l in ipairs(lines) do
+    w = math.max(w, str_width(l))
+  end
+  return w
+end
+
+-- Bottom-up pass: resolve the box model and compute node.size — the intrinsic
+-- margin-box size under an available-width constraint. Wrapping text reflows
+-- here, so heights already reflect the constrained width.
+---@param node table
+---@param avail_w integer  available margin-box width
+function measure(node, avail_w)
+  local props = node.props or {}
+  node.box = box.resolve(props)
+  local r = node.box
+  local content_avail = math.max(avail_w - box.h_outer(r), 1)
+
+  if node.kind == "text" then
+    if props.wrap then
+      node.lines = wrap_text(node.text or "", content_avail)
+      node._wrap_w = content_avail
+    else
+      node.lines = vim.split(node.text or "", "\n", { plain = true })
+    end
+    node.content_size = { w = max_line_width(node.lines), h = #node.lines }
+  elseif CONTAINERS[node.kind] then
+    local children = node.children or {}
+    local gap = props.gap or 0
+    local gaps = gap * math.max(#children - 1, 0)
+    local main_sum, cross_max = 0, 0
+    if node.kind == "col" then
+      for _, child in ipairs(children) do
+        measure(child, content_avail)
+        main_sum = main_sum + child.size.h
+        cross_max = math.max(cross_max, child.size.w)
+      end
+      node.content_size = { w = cross_max, h = main_sum + gaps }
+    else
+      -- Row: each child is measured against the width still unclaimed, so a
+      -- wrapping child after fixed siblings wraps to what is actually left.
+      local remaining = content_avail
+      for i, child in ipairs(children) do
+        measure(child, math.max(remaining, 1))
+        remaining = remaining - child.size.w - (i < #children and gap or 0)
+        main_sum = main_sum + child.size.w
+        cross_max = math.max(cross_max, child.size.h)
+      end
+      node.content_size = { w = main_sum + gaps, h = cross_max }
+    end
+  else
+    error("fibrous: unknown layout node kind '" .. tostring(node.kind) .. "'")
+  end
+
+  -- Explicit width/height props are border-box sizes (box-sizing: border-box).
+  local cs = node.content_size
+  node.size = {
+    w = props.width and (props.width + r.margin.left + r.margin.right)
+      or (cs.w + box.h_outer(r)),
+    h = props.height and (props.height + r.margin.top + r.margin.bottom)
+      or (cs.h + box.v_outer(r)),
+  }
+end
+
+-- Top-down pass: assign the node's margin-box to (x, y, w, h) and derive its
+-- border-box `rect` and `content` box. Wrapped text whose final content width
+-- differs from the width it was measured against reflows once more.
+---@param node table
+---@param x integer  margin-box origin column (0-indexed)
+---@param y integer  margin-box origin row (0-indexed)
+-- Place a container's children inside its content box.
+--
+-- Main axis: non-grow children take their measured size; children with a
+-- `grow` weight split the leftover space flex-basis-0 style (floor shares,
+-- remainder to the last grow child). When nothing grows, `justify` positions
+-- the run: "start" (default) | "center" | "end" | "space-between". In scroll
+-- mode a col's content height equals the measured sum, so leftover is 0 and
+-- both mechanisms are naturally inert.
+--
+-- Cross axis: `align` = "stretch" (default) | "start" | "center" | "end";
+-- stretch hands each child the full cross extent unless the child fixed its
+-- own cross size explicitly (explicit size wins, as in CSS). A child's
+-- `align_self` overrides the container's `align` for that child alone.
+---@param node table
+local function layout_children(node)
+  local props = node.props or {}
+  local children = node.children or {}
+  local gap = props.gap or 0
+  local horizontal = node.kind == "row"
+  local c = node.content
+  local main_avail = horizontal and c.w or c.h
+  local cross_avail = horizontal and c.h or c.w
+  local align = props.align or "stretch"
+
+  -- Leftover main-axis space after gaps and non-grow children.
+  local fixed = gap * math.max(#children - 1, 0)
+  local grow_total = 0
+  local last_grow = nil
+  for i, child in ipairs(children) do
+    local g = (child.props or {}).grow or 0
+    if g > 0 then
+      grow_total = grow_total + g
+      last_grow = i
+    else
+      fixed = fixed + (horizontal and child.size.w or child.size.h)
+    end
+  end
+  local leftover = math.max(main_avail - fixed, 0)
+
+  -- Main-axis run offset and inter-child spacing from justify (only when no
+  -- child grows — grow consumes the leftover instead).
+  local offset, spacing = 0, 0
+  if grow_total == 0 and leftover > 0 then
+    local justify = props.justify or "start"
+    if justify == "center" then
+      offset = math.floor(leftover / 2)
+    elseif justify == "end" then
+      offset = leftover
+    elseif justify == "space-between" and #children > 1 then
+      spacing = leftover / (#children - 1) -- fractional; floored per position
+    end
+  end
+
+  local pos = (horizontal and c.x or c.y) + offset
+  local distributed = 0
+  local acc_spacing = 0
+  for i, child in ipairs(children) do
+    local g = (child.props or {}).grow or 0
+    local main
+    if g > 0 then
+      if i == last_grow then
+        main = leftover - distributed -- remainder closes the gap exactly
+      else
+        main = math.floor(leftover * g / grow_total)
+      end
+      distributed = distributed + main
+    else
+      main = horizontal and child.size.w or child.size.h
+    end
+
+    local child_props = child.props or {}
+    local explicit_cross = horizontal and child_props.height or child_props.width
+    local child_cross = horizontal and child.size.h or child.size.w
+    local child_align = child_props.align_self or align
+    local cross_size, cross_off
+    if child_align == "stretch" and not explicit_cross then
+      cross_size, cross_off = cross_avail, 0
+    elseif child_align == "center" then
+      cross_size = math.min(child_cross, cross_avail)
+      cross_off = math.floor((cross_avail - cross_size) / 2)
+    elseif child_align == "end" then
+      cross_size = math.min(child_cross, cross_avail)
+      cross_off = cross_avail - cross_size
+    else -- "start", or stretch with an explicit cross size
+      cross_size, cross_off = math.min(child_cross, cross_avail), 0
+    end
+
+    if horizontal then
+      layout(child, pos, c.y + cross_off, main, cross_size)
+    else
+      layout(child, c.x + cross_off, pos, cross_size, main)
+    end
+    acc_spacing = acc_spacing + spacing
+    pos = pos + main + gap + math.floor(acc_spacing + 0.5) - math.floor(acc_spacing - spacing + 0.5)
+  end
+end
+
+---@param w integer  assigned margin-box width
+---@param h integer  assigned margin-box height
+function layout(node, x, y, w, h)
+  local r = node.box
+  node.rect = {
+    x = x + r.margin.left,
+    y = y + r.margin.top,
+    w = w - r.margin.left - r.margin.right,
+    h = h - r.margin.top - r.margin.bottom,
+  }
+  node.content = {
+    x = node.rect.x + r.border.sides.left + r.padding.left,
+    y = node.rect.y + r.border.sides.top + r.padding.top,
+    w = node.rect.w - box.h_inner(r),
+    h = node.rect.h - box.v_inner(r),
+  }
+
+  if node.kind == "text" and (node.props or {}).wrap and node.content.w ~= node._wrap_w then
+    node.lines = wrap_text(node.text or "", math.max(node.content.w, 1))
+    node._wrap_w = node.content.w
+  elseif CONTAINERS[node.kind] then
+    layout_children(node)
+  end
+end
+
+---@class ComputeOpts
+---@field width integer    root margin-box width (the viewport width)
+---@field height? integer  fixed root height (app mode); nil = content height (scroll mode)
+
+-- Run both passes over `tree`. The root always fills `opts.width`.
+---@param tree table
+---@param opts ComputeOpts
+---@return table tree  the same tree, annotated
+function M.compute(tree, opts)
+  measure(tree, opts.width)
+  layout(tree, 0, 0, opts.width, opts.height or tree.size.h)
+  return tree
+end
+
+return M
