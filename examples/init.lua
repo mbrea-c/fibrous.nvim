@@ -20,68 +20,69 @@ local examples_dir = vim.fn.fnamemodify(src, ":p:h")
 local root = vim.fn.fnamemodify(examples_dir, ":h")
 
 package.path = table.concat({
-  root .. "/lua/?.lua",
-  root .. "/lua/?/init.lua",
-  root .. "/?.lua",
-  package.path,
+	root .. "/lua/?.lua",
+	root .. "/lua/?/init.lua",
+	root .. "/?.lua",
+	package.path,
 }, ";")
 
 -- name → module. Order is the listing/completion order.
-local ORDER = { "hello", "counter", "form", "sidebar", "panel", "inline_scroll" }
+local ORDER = { "hello", "counter", "form", "sidebar", "panel", "inline_scroll", "inline_fullscreen" }
 local DESCRIPTIONS = {
-  hello = "static floating panel",
-  counter = "use_state + use_effect, keymap-driven",
-  form = "uncontrolled text_input with live mirror",
-  sidebar = "native split mode (mount_as_window_host)",
-  panel = "ACP-shaped flex layout + use_keymap + custom hook",
-  inline_scroll = "NEW inline host: scroll-mode split, clipped input floats (task-4 spike)",
+	hello = "static floating panel",
+	counter = "use_state + use_effect, keymap-driven",
+	form = "uncontrolled text_input with live mirror",
+	sidebar = "native split mode (mount_as_window_host)",
+	panel = "ACP-shaped flex layout + use_keymap + custom hook",
+	inline_scroll = "NEW inline host: scroll-mode split, clipped input floats (task-4 spike)",
+	inline_fullscreen = "NEW inline host: scroll-mode split, clipped input floats (task-4 spike); fullscreen mount",
 }
 
 ---@type table|nil  the currently running example's handle
 local current
 
 local function stop()
-  if current and current.unmount then
-    pcall(current.unmount)
-  end
-  current = nil
+	if current and current.unmount then
+		pcall(current.unmount)
+	end
+	current = nil
 end
 
 local function run(name)
-  name = (name and name ~= "") and name or "hello"
-  if not DESCRIPTIONS[name] then
-    vim.notify("fibrous: unknown example '" .. name .. "'. Try :Examples", vim.log.levels.ERROR)
-    return
-  end
-  stop()
-  current = require("examples." .. name).run()
+	name = (name and name ~= "") and name or "hello"
+	if not DESCRIPTIONS[name] then
+		vim.notify("fibrous: unknown example '" .. name .. "'. Try :Examples", vim.log.levels.ERROR)
+		return
+	end
+	stop()
+	current = require("examples." .. name).run()
 end
 
 vim.api.nvim_create_user_command("Example", function(o)
-  run(o.args)
+	run(o.args)
 end, {
-  nargs = "?",
-  complete = function()
-    return ORDER
-  end,
-  desc = "Run a fibrous example",
+	nargs = "?",
+	complete = function()
+		return ORDER
+	end,
+	desc = "Run a fibrous example",
 })
 
 vim.api.nvim_create_user_command("Examples", function()
-  local lines = { "fibrous examples — run with :Example <name>" }
-  for _, n in ipairs(ORDER) do
-    lines[#lines + 1] = ("  %-9s %s"):format(n, DESCRIPTIONS[n])
-  end
-  vim.notify(table.concat(lines, "\n"))
+	local lines = { "fibrous examples — run with :Example <name>" }
+	for _, n in ipairs(ORDER) do
+		lines[#lines + 1] = ("  %-9s %s"):format(n, DESCRIPTIONS[n])
+	end
+	vim.notify(table.concat(lines, "\n"))
 end, { desc = "List fibrous examples" })
 
 -- If launched as `make example EX=<name>`, run it straight away.
 if vim.g.fibrous_example and vim.g.fibrous_example ~= "" then
-  vim.schedule(function()
-    run(vim.g.fibrous_example)
-  end)
+	vim.schedule(function()
+		run(vim.g.fibrous_example)
+	end)
 else
-  vim.schedule(function()
-    vim.notify("fibrous examples loaded. :Examples to list, :Example <name> to run.")
-  end)
+	vim.schedule(function()
+		vim.notify("fibrous examples loaded. :Examples to list, :Example <name> to run.")
+	end)
 end

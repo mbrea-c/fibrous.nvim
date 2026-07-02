@@ -36,10 +36,10 @@ local M = {}
 ---@param cfg table  nvim_open_win config
 ---@return integer winid
 local function open_root_float(bufnr, cfg)
-  cfg = vim.tbl_extend("keep", cfg, { style = "minimal", zindex = 50, focusable = true })
-  local winid = vim.api.nvim_open_win(bufnr, false, cfg)
-  vim.wo[winid].wrap = false
-  return winid
+	cfg = vim.tbl_extend("keep", cfg, { style = "minimal", zindex = 50, focusable = true })
+	local winid = vim.api.nvim_open_win(bufnr, false, cfg)
+	vim.wo[winid].wrap = false
+	return winid
 end
 
 -- Shared mount plumbing: create the root, wire coalesced resize sync (one
@@ -49,73 +49,73 @@ end
 --   on_teardown() close this target's windows (buffer deletion is the host's)
 ---@return InlineAppHandle handle, fun() teardown
 local function wire(component, props, host, winid, group, attachments, sync, on_teardown)
-  local root = runtime.create_root(component, props, { host = host })
-  root:render()
+	local root = runtime.create_root(component, props, { host = host })
+	root:render()
 
-  local unmounted = false
-  local function teardown()
-    if unmounted then
-      return
-    end
-    unmounted = true
-    pcall(vim.api.nvim_del_augroup_by_id, group)
-    for _, attachment in ipairs(attachments) do
-      attachment.teardown()
-    end
-    if vim.api.nvim_win_is_valid(winid) then
-      pcall(vim.api.nvim_win_close, winid, true)
-    end
-    root:unmount()
-    on_teardown()
-  end
+	local unmounted = false
+	local function teardown()
+		if unmounted then
+			return
+		end
+		unmounted = true
+		pcall(vim.api.nvim_del_augroup_by_id, group)
+		for _, attachment in ipairs(attachments) do
+			attachment.teardown()
+		end
+		if vim.api.nvim_win_is_valid(winid) then
+			pcall(vim.api.nvim_win_close, winid, true)
+		end
+		root:unmount()
+		on_teardown()
+	end
 
-  local relayout_pending = false
-  local function schedule_relayout()
-    if relayout_pending then
-      return
-    end
-    relayout_pending = true
-    vim.schedule(function()
-      relayout_pending = false
-      if not unmounted and vim.api.nvim_win_is_valid(winid) then
-        sync()
-      end
-    end)
-  end
-  vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
-    group = group,
-    callback = schedule_relayout,
-  })
+	local relayout_pending = false
+	local function schedule_relayout()
+		if relayout_pending then
+			return
+		end
+		relayout_pending = true
+		vim.schedule(function()
+			relayout_pending = false
+			if not unmounted and vim.api.nvim_win_is_valid(winid) then
+				sync()
+			end
+		end)
+	end
+	vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, {
+		group = group,
+		callback = schedule_relayout,
+	})
 
-  -- A user :q on the root float kills the app, not just the window.
-  vim.api.nvim_create_autocmd("WinClosed", {
-    group = group,
-    pattern = tostring(winid),
-    callback = function()
-      vim.schedule(teardown)
-    end,
-  })
+	-- A user :q on the root float kills the app, not just the window.
+	vim.api.nvim_create_autocmd("WinClosed", {
+		group = group,
+		pattern = tostring(winid),
+		callback = function()
+			vim.schedule(teardown)
+		end,
+	})
 
-  ---@type InlineAppHandle
-  local handle = {
-    winid = winid,
-    bufnr = host.bufnr,
-    set_props = function(new_props)
-      root:set_props(new_props)
-    end,
-    relayout = function()
-      if not unmounted then
-        sync()
-      end
-    end,
-    focus = function()
-      if vim.api.nvim_win_is_valid(winid) then
-        vim.api.nvim_set_current_win(winid)
-      end
-    end,
-    unmount = teardown,
-  }
-  return handle, teardown
+	---@type InlineAppHandle
+	local handle = {
+		winid = winid,
+		bufnr = host.bufnr,
+		set_props = function(new_props)
+			root:set_props(new_props)
+		end,
+		relayout = function()
+			if not unmounted then
+				sync()
+			end
+		end,
+		focus = function()
+			if vim.api.nvim_win_is_valid(winid) then
+				vim.api.nvim_set_current_win(winid)
+			end
+		end,
+		unmount = teardown,
+	}
+	return handle, teardown
 end
 
 ---@class InlineFloatingOpts
@@ -131,61 +131,61 @@ end
 ---@param opts? InlineFloatingOpts
 ---@return InlineAppHandle
 function M.floating(component, props, opts)
-  opts = opts or {}
-  local scroll = opts.mode == "scroll"
+	opts = opts or {}
+	local scroll = opts.mode == "scroll"
 
-  -- Explicit opts pin the geometry; defaults track the editor size (VimResized
-  -- re-derives them through this same function).
-  local function geom()
-    local width = opts.width or math.floor(vim.o.columns * 0.6)
-    local height = opts.height or math.floor(vim.o.lines * 0.6)
-    return {
-      width = width,
-      height = height,
-      row = opts.row or math.floor((vim.o.lines - height) / 2),
-      col = opts.col or math.floor((vim.o.columns - width) / 2),
-    }
-  end
+	-- Explicit opts pin the geometry; defaults track the editor size (VimResized
+	-- re-derives them through this same function).
+	local function geom()
+		local width = opts.width or math.floor(vim.o.columns * 0.6)
+		local height = opts.height or math.floor(vim.o.lines * 0.6)
+		return {
+			width = width,
+			height = height,
+			row = opts.row or math.floor((vim.o.lines - height) / 2),
+			col = opts.col or math.floor((vim.o.columns - width) / 2),
+		}
+	end
 
-  local g = geom()
-  local manager, interaction -- need the root winid, so attached below
-  local host = inline_host.new({
-    get_size = function()
-      local cur = geom()
-      return { width = cur.width, height = not scroll and cur.height or nil }
-    end,
-    on_flush = function()
-      if manager then
-        manager.sync()
-        interaction.update()
-      end
-    end,
-  })
-  local winid = open_root_float(host.bufnr, {
-    relative = "editor",
-    row = g.row,
-    col = g.col,
-    width = g.width,
-    height = g.height,
-  })
-  manager = subwin.attach(host, winid)
-  interaction = interact.attach(host, winid)
-  local group = vim.api.nvim_create_augroup("FibrousInlineFloat_" .. winid, { clear = true })
+	local g = geom()
+	local manager, interaction -- need the root winid, so attached below
+	local host = inline_host.new({
+		get_size = function()
+			local cur = geom()
+			return { width = cur.width, height = not scroll and cur.height or nil }
+		end,
+		on_flush = function()
+			if manager then
+				manager.sync()
+				interaction.update()
+			end
+		end,
+	})
+	local winid = open_root_float(host.bufnr, {
+		relative = "editor",
+		row = g.row,
+		col = g.col,
+		width = g.width,
+		height = g.height,
+	})
+	manager = subwin.attach(host, winid)
+	interaction = interact.attach(host, winid)
+	local group = vim.api.nvim_create_augroup("FibrousInlineFloat_" .. winid, { clear = true })
 
-  local function sync()
-    local cur = geom()
-    vim.api.nvim_win_set_config(winid, {
-      relative = "editor",
-      row = cur.row,
-      col = cur.col,
-      width = cur.width,
-      height = cur.height,
-    })
-    host.relayout()
-  end
+	local function sync()
+		local cur = geom()
+		vim.api.nvim_win_set_config(winid, {
+			relative = "editor",
+			row = cur.row,
+			col = cur.col,
+			width = cur.width,
+			height = cur.height,
+		})
+		host.relayout()
+	end
 
-  local handle = wire(component, props, host, winid, group, { manager, interaction }, sync, function() end)
-  return handle
+	local handle = wire(component, props, host, winid, group, { manager, interaction }, sync, function() end)
+	return handle
 end
 
 ---@class InlineSplitOpts
@@ -197,24 +197,24 @@ end
 ---@param split SplitOpts
 ---@return integer host_winid
 local function open_host_pane(split)
-  local direction = split.direction or "vertical"
-  local position = split.position or (direction == "vertical" and "left" or "top")
-  local vertical = direction == "vertical"
-  local anchor = (position == "left" or position == "top") and "topleft" or "botright"
-  vim.cmd(anchor .. " " .. (vertical and "vsplit" or "split"))
+	local direction = split.direction or "vertical"
+	local position = split.position or (direction == "vertical" and "left" or "top")
+	local vertical = direction == "vertical"
+	local anchor = (position == "left" or position == "top") and "topleft" or "botright"
+	vim.cmd(anchor .. " " .. (vertical and "vsplit" or "split"))
 
-  local host_winid = vim.api.nvim_get_current_win()
-  local pane_bufnr = vim.api.nvim_create_buf(false, true)
-  vim.bo[pane_bufnr].bufhidden = "wipe"
-  vim.api.nvim_win_set_buf(host_winid, pane_bufnr)
+	local host_winid = vim.api.nvim_get_current_win()
+	local pane_bufnr = vim.api.nvim_create_buf(false, true)
+	vim.bo[pane_bufnr].bufhidden = "wipe"
+	vim.api.nvim_win_set_buf(host_winid, pane_bufnr)
 
-  local size = split.size or 40
-  if vertical then
-    vim.api.nvim_win_set_width(host_winid, size)
-  else
-    vim.api.nvim_win_set_height(host_winid, size)
-  end
-  return host_winid
+	local size = split.size or 40
+	if vertical then
+		vim.api.nvim_win_set_width(host_winid, size)
+	else
+		vim.api.nvim_win_set_height(host_winid, size)
+	end
+	return host_winid
 end
 
 ---@class InlineSplitHandle : InlineAppHandle
@@ -226,82 +226,98 @@ end
 ---@param opts? InlineSplitOpts
 ---@return InlineSplitHandle
 function M.split(component, props, opts)
-  opts = opts or {}
-  local scroll = opts.mode == "scroll"
-  local origin_winid = vim.api.nvim_get_current_win()
-  local host_winid = open_host_pane(opts.split or {})
-  vim.api.nvim_set_current_win(origin_winid)
+	opts = opts or {}
+	local scroll = opts.mode == "scroll"
+	local origin_winid = vim.api.nvim_get_current_win()
+	local host_winid = open_host_pane(opts.split or {})
+	vim.api.nvim_set_current_win(origin_winid)
 
-  local function pane_size()
-    return {
-      width = vim.api.nvim_win_get_width(host_winid),
-      height = vim.api.nvim_win_get_height(host_winid),
-    }
-  end
+	local handle = M.window(component, props, { winid = host_winid, mode = opts.mode })
 
-  local g = pane_size()
-  local manager, interaction -- need the root winid, so attached below
-  local host = inline_host.new({
-    get_size = function()
-      local cur = pane_size()
-      return { width = cur.width, height = not scroll and cur.height or nil }
-    end,
-    on_flush = function()
-      if manager then
-        manager.sync()
-        interaction.update()
-      end
-    end,
-  })
-  local winid = open_root_float(host.bufnr, {
-    relative = "win",
-    win = host_winid,
-    row = 0,
-    col = 0,
-    width = g.width,
-    height = g.height,
-  })
-  manager = subwin.attach(host, winid)
-  interaction = interact.attach(host, winid)
-  local group = vim.api.nvim_create_augroup("FibrousInlineSplit_" .. host_winid, { clear = true })
+	return handle
+end
 
-  local function sync()
-    if not vim.api.nvim_win_is_valid(host_winid) then
-      return
-    end
-    local cur = pane_size()
-    vim.api.nvim_win_set_config(winid, {
-      relative = "win",
-      win = host_winid,
-      row = 0,
-      col = 0,
-      width = cur.width,
-      height = cur.height,
-    })
-    host.relayout()
-  end
+---@class InlineWindowMountOpts
+---@field winid integer which window to mount on
+---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
 
-  local handle, teardown = wire(component, props, host, winid, group, { manager, interaction }, sync, function()
-    if vim.api.nvim_win_is_valid(host_winid) then
-      pcall(vim.api.nvim_win_close, host_winid, true)
-    end
-    if vim.api.nvim_win_is_valid(origin_winid) then
-      pcall(vim.api.nvim_set_current_win, origin_winid)
-    end
-  end)
+-- Mount `component` over a native split pane.
+---@param component Component
+---@param props? table
+---@param opts? InlineWindowMountOpts
+---@return InlineSplitHandle
+function M.window(component, props, opts)
+	opts = opts or {}
+	local scroll = opts.mode == "scroll"
+	local host_winid = opts.winid
 
-  -- Closing the pane (:q, <C-w>q) unmounts the whole app; deferred because
-  -- windows can't be closed from inside WinClosed.
-  vim.api.nvim_create_autocmd("WinClosed", {
-    group = group,
-    pattern = tostring(host_winid),
-    callback = function()
-      vim.schedule(teardown)
-    end,
-  })
+	local function pane_size()
+		return {
+			width = vim.api.nvim_win_get_width(host_winid),
+			height = vim.api.nvim_win_get_height(host_winid),
+		}
+	end
 
-  handle.host_winid = host_winid
-  return handle
+	local g = pane_size()
+	local manager, interaction -- need the root winid, so attached below
+	local host = inline_host.new({
+		get_size = function()
+			local cur = pane_size()
+			return { width = cur.width, height = not scroll and cur.height or nil }
+		end,
+		on_flush = function()
+			if manager then
+				manager.sync()
+				interaction.update()
+			end
+		end,
+	})
+	local winid = open_root_float(host.bufnr, {
+		relative = "win",
+		win = host_winid,
+		row = 0,
+		col = 0,
+		width = g.width,
+		height = g.height,
+	})
+	manager = subwin.attach(host, winid)
+	interaction = interact.attach(host, winid)
+	local group = vim.api.nvim_create_augroup("FibrousInlineSplit_" .. host_winid, { clear = true })
+
+	local function sync()
+		if not vim.api.nvim_win_is_valid(host_winid) then
+			return
+		end
+		local cur = pane_size()
+		vim.api.nvim_win_set_config(winid, {
+			relative = "win",
+			win = host_winid,
+			row = 0,
+			col = 0,
+			width = cur.width,
+			height = cur.height,
+		})
+		host.relayout()
+	end
+
+	local handle, teardown = wire(component, props, host, winid, group, { manager, interaction }, sync, function()
+		if vim.api.nvim_win_is_valid(host_winid) then
+			pcall(vim.api.nvim_win_close, host_winid, true)
+		end
+	end)
+
+	-- Closing the pane (:q, <C-w>q) unmounts the whole app; deferred because
+	-- windows can't be closed from inside WinClosed.
+	vim.api.nvim_create_autocmd("WinClosed", {
+		group = group,
+		pattern = tostring(host_winid),
+		callback = function()
+			vim.schedule(teardown)
+		end,
+	})
+
+	handle.host_winid = host_winid
+	return handle
 end
 
 return M
