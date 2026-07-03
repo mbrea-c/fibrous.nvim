@@ -72,6 +72,11 @@ describe("inline.box border", function()
     assert.equal("+", b.chars.tl)
     assert.equal("MyBorder", b.hl)
   end)
+
+  it("hl = false marks the border transparent (kept distinct from nil)", function()
+    local b = box.border({ left = "[", right = "]", hl = false })
+    assert.is_false(b.hl)
+  end)
 end)
 
 describe("inline.box border title", function()

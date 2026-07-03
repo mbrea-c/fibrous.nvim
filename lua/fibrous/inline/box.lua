@@ -57,7 +57,9 @@ local CORNER_KEYS = { "tl", "tr", "br", "bl" }
 ---@class Border
 ---@field sides Sides          per-side thickness (0 or 1)
 ---@field chars table<string, string>   edge + corner chars for the enabled sides
----@field hl string|nil        highlight group for the border cells
+---@field hl string|false|nil  highlight group for the border cells; false =
+---                            transparent (cells keep the node's background
+---                            fill), nil = the FibrousBorder default
 ---@field title BorderTitle|nil  painted over the pos edge by the renderer
 
 local TITLE_ALIGNS = { left = true, center = true, right = true }
@@ -84,7 +86,7 @@ local function title(spec)
   return { text = spec.text, hl = spec.hl or "FibrousTitle", align = align, pos = pos }
 end
 
----@alias BorderSpec nil|boolean|string|{ [1]?: string, top?: boolean|string, right?: boolean|string, bottom?: boolean|string, left?: boolean|string, corners?: table<string, string>, hl?: string, title?: string|table }
+---@alias BorderSpec nil|boolean|string|{ [1]?: string, top?: boolean|string, right?: boolean|string, bottom?: boolean|string, left?: boolean|string, corners?: table<string, string>, hl?: string|false, title?: string|table }
 
 -- Normalize a border spec: nil/false → none; true → the themed default
 -- preset (theme.border_preset) on all sides, a preset name → that preset. A

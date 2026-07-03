@@ -236,6 +236,13 @@ as a neovim UI host). We need a new UI host that truly feels "neovim-native", sa
   - fibrous-docs (`../fibrous-docs`) already runs on `fibrous.inline.mount`/`mount.window` — nothing to port there (its flake comment still says "with its vendored nui"; harmless, worth touching up on the next site change).
   - Suite after: **116 passed, 0 failed** (full run == per-file sum; first fully green suite).
 - [ ] 10. Follow-up: mouse integration; float-on-focus text inputs if scroll-swim warrants it
+- [x] Bugfix: `mount.window` with `winid = 0` crashed on the first resize
+  after focusing ("floating window cannot be relative to itself") — the raw 0
+  was stored and re-resolved at sync time, when the current window is the
+  root float. Now resolved to a concrete winid at mount time (also fixes the
+  WinClosed teardown pattern and pane-size reads, which read "current
+  window" too). Spec: mount_spec +1. Suite: 178 passed, 0 failed
+  (2026-07-03)
 
 ### Style rework
 
@@ -403,4 +410,29 @@ portions of a paragraph, and border-embedded titles.
     any-node opt-in, unknown-key error), box/render/subwin expectations moved
     to the rounded default. Suite: 170 passed, 0 failed; bench flat
     (re-commit ~6.9ms).
+- [x] S6. De-hardcode the widget glyphs: button brackets become a themed
+  border, checkbox marks become a prop-overridable theme surface (2026-07-03)
+  - Decisions (2026-07-03): the button's `[ ]` move out of the text into
+    `theme.styles.button` as a transparent left/right border
+    (`border = { left = "[", right = "]", hl = false }` + `padding = { x = 1 }`
+    — same 6-cell footprint). New border spec value `hl = false` =
+    TRANSPARENT: render paints those cells with no hl of their own, so they
+    keep the node's background fill (canvas put-with-nil semantics) — brackets
+    take `bg` overrides and the hover overlay exactly like the old baked text.
+    Consequences, both deliberate: an explicit border prop REPLACES the
+    brackets (box keys are atomic — `border = true` on a button now means a
+    real rounded box around the bare label), and `theme = false` drops the
+    brackets entirely (a bare-label starting point for wrapper components).
+    Checkbox marks are CONTENT, not style (closed style key set stays
+    closed): new theme surface `theme.marks.checkbox`
+    (`checked`/`unchecked` mark spans), overridden KEY-WISE per instance by a
+    `marks` prop on the component — the wrapper-component customization path.
+  - Specs: box_spec +1 (`hl = false` passthrough), render_spec +2
+    (transparent border inherits the fill / stays unhighlighted over no
+    fill), theme_spec +2 (chip shape, marks surface), components_spec +2 new
+    (custom bracket chars by border prop, key-wise marks override) and 5
+    updated (root/boxed/opt-out/opt-in button expectations, chip census).
+    Suite: 177 passed, 0 failed; bench flat (re-commit ~6.6ms). Headless
+    smoke: default chip, `( )` chip, bare label, `[x]`/`[ ]`/custom `*` marks
+    all render with the right census.
 - Parked: inline flow layout; `_active` state.

@@ -141,6 +141,24 @@ describe("inline.mount", function()
     assert.equal(wins_before, #vim.api.nvim_list_wins())
   end)
 
+  it("window: winid = 0 resolves to the current window at mount time", function()
+    local origin = vim.api.nvim_get_current_win()
+    local handle = mount.window(Hello, {}, { winid = 0, mode = "scroll" })
+
+    -- the handle and the float anchor carry the CONCRETE id, not 0
+    assert.equal(origin, handle.host_winid)
+    assert.equal(origin, vim.api.nvim_win_get_config(handle.winid).win)
+
+    -- focusing the float makes IT the current window; a later geometry sync
+    -- must still anchor to the origin — a raw 0 would re-resolve to the float
+    -- itself ("floating window cannot be relative to itself")
+    handle.focus()
+    handle.relayout()
+    assert.equal(origin, vim.api.nvim_win_get_config(handle.winid).win)
+
+    handle.unmount()
+  end)
+
   it("set_props re-renders through the mounted root", function()
     local function App(_, props)
       return { comp = text, props = { text = props.msg } }

@@ -249,7 +249,13 @@ end
 function M.window(component, props, opts)
 	opts = opts or {}
 	local scroll = opts.mode == "scroll"
+	-- Resolve winid = 0 ("current window") to a concrete id NOW: it is read
+	-- again long after mount (geometry syncs, WinClosed pattern, validity
+	-- guards), when the current window may be the root float itself.
 	local host_winid = opts.winid
+	if host_winid == 0 or host_winid == nil then
+		host_winid = vim.api.nvim_get_current_win()
+	end
 
 	local function pane_size()
 		return {

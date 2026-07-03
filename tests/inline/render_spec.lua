@@ -42,6 +42,21 @@ describe("inline.render", function()
     assert.same({ { row = 0, start_col = 0, end_col = 3, hl = "FibrousBorder" } }, c:highlights())
   end)
 
+  it("a transparent border (hl = false) inherits the node's background fill", function()
+    local tree = { kind = "text", props = { hl = "Chip", border = { left = "[", right = "]", hl = false } }, text = "ab" }
+    local c = painted(tree, { width = 4 })
+    assert.same({ "[ab]" }, c:lines())
+    -- one uniform span: the bracket cells keep the hl_rect fill
+    assert.same({ { row = 0, start_col = 0, end_col = 4, hl = "Chip" } }, c:highlights())
+  end)
+
+  it("a transparent border over no fill leaves its cells unhighlighted", function()
+    local tree = { kind = "text", props = { border = { left = "[", right = "]", hl = false } }, text = "ab" }
+    local c = painted(tree, { width = 4 })
+    assert.same({ "[ab]" }, c:lines())
+    assert.same({}, c:highlights())
+  end)
+
   it("props.hl fills the node's rect as background; text draws over it", function()
     local tree = { kind = "text", props = { hl = "Visual", padding = { x = 1 } }, text = "ab" }
     local c = painted(tree, { width = 4 })

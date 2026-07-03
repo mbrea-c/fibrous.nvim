@@ -93,7 +93,7 @@ describe("inline.components", function()
     root:unmount()
   end)
 
-  it("button renders [ label ] and forwards its handler and role to the node", function()
+  it("button renders a bracket chip and forwards its handler and role to the node", function()
     local pressed = function() end
     local function App()
       return { comp = ui.button, props = { label = "OK", on_press = pressed } }
@@ -101,7 +101,9 @@ describe("inline.components", function()
     local host = host_of(8)
     local root = runtime.create_root(App, {}, { host = host }):render()
 
-    assert.same({ "[ OK ]  " }, lines_of(host))
+    -- the brackets are the themed BORDER, so a full-width button (a root node
+    -- fills the host) keeps them at its edges
+    assert.same({ "[ OK   ]" }, lines_of(host))
     assert.equal("button", host.tree.props.role)
     assert.rawequal(pressed, host.tree.props.on_press)
     root:unmount()
@@ -178,6 +180,8 @@ describe("inline.components", function()
   end)
 
   it("box props pass through to the underlying node", function()
+    -- an explicit border REPLACES the chip's bracket border (box keys are
+    -- atomic): border = true means a real themed box, not brackets in a box
     local function App()
       return { comp = ui.button, props = { label = "OK", border = true } }
     end
@@ -186,7 +190,7 @@ describe("inline.components", function()
 
     assert.same({
       "╭──────╮",
-      "│[ OK ]│",
+      "│ OK   │",
       "╰──────╯",
     }, lines_of(host))
     root:unmount()
@@ -216,8 +220,23 @@ describe("inline.components", function()
       local App = col_of({ comp = ui.button, props = { label = "OK" } })
       local root = runtime.create_root(App, {}, { host = host }):render()
 
+      -- same 6-cell footprint as ever, one uniform span: the transparent
+      -- bracket border inherits the chip fill
+      assert.same({ "[ OK ]  " }, lines_of(host))
       assert.same({ { 0, 0, 6 } }, marks_with(host.bufnr, "FibrousButton"))
       assert.equal("FibrousButtonHover", host.tree.children[1].style.hover.hl)
+      root:unmount()
+    end)
+
+    it("the brackets are border chars: restyle them with a border prop", function()
+      local host = host_of(8)
+      local App = col_of({
+        comp = ui.button,
+        props = { label = "OK", border = { left = "(", right = ")", hl = false } },
+      })
+      local root = runtime.create_root(App, {}, { host = host }):render()
+
+      assert.same({ "( OK )  " }, lines_of(host))
       root:unmount()
     end)
 
@@ -240,6 +259,9 @@ describe("inline.components", function()
       local root = runtime.create_root(App, {}, { host = host }):render()
 
       assert.same({}, marks_with(host.bufnr, "FibrousButton"))
+      -- the brackets ARE theme (border + padding), so opting out drops them:
+      -- a bare-label starting point for wrapper components
+      assert.same({ "OK      " }, lines_of(host))
       root:unmount()
     end)
 
@@ -261,14 +283,42 @@ describe("inline.components", function()
       root:unmount()
     end)
 
+    it("a marks prop overrides the themed checkbox marks key-wise", function()
+      local checked
+      local function App(ctx)
+        checked = ctx.use_state(true)
+        return {
+          comp = ui.checkbox,
+          props = {
+            label = "Opt",
+            checked = checked.get(),
+            -- override only `checked`; `unchecked` keeps the themed default
+            marks = { checked = { "*", hl = "Accent" } },
+          },
+        }
+      end
+      local host = host_of(8)
+      local root = runtime.create_root(App, {}, { host = host }):render()
+
+      assert.same({ "* Opt   " }, lines_of(host))
+      assert.same({ { 0, 0, 1 } }, marks_with(host.bufnr, "Accent"))
+
+      checked.set(false)
+      assert.same({ "[ ] Opt " }, lines_of(host))
+      assert.same({ { 0, 0, 3 } }, marks_with(host.bufnr, "FibrousDim"))
+      root:unmount()
+    end)
+
     it("any node can opt into a theme key by prop", function()
       local function App()
         return { comp = ui.label, props = { text = "hi", theme = "button" } }
       end
-      local host = host_of(4)
+      local host = host_of(8)
       local root = runtime.create_root(App, {}, { host = host }):render()
 
-      assert.same({ { 0, 0, 4 } }, marks_with(host.bufnr, "FibrousButton"))
+      -- the full chip: bracket border + padding + fill (a root node fills the host)
+      assert.same({ "[ hi   ]" }, lines_of(host))
+      assert.same({ { 0, 0, 8 } }, marks_with(host.bufnr, "FibrousButton"))
       root:unmount()
     end)
 

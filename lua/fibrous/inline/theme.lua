@@ -12,6 +12,8 @@
 --                  opt in (`theme = "button"`) or out (`theme = false`).
 --                  style.normalize seeds these at the LOWEST precedence —
 --                  theme < flat props < props.style, key-wise.
+--   marks          content defaults (mark spans) components splice into
+--                  their text; overridden per instance by a `marks` prop.
 --   border_preset  what `border = true` (and `side = true`) means.
 --
 -- This module must stay dependency-free within fibrous (box/style resolve the
@@ -38,9 +40,27 @@ M.border_preset = "rounded"
 -- Style-shaped defaults per `theme` key. Add your own keys here (or replace
 -- these) before mounting to restyle every instance at once.
 M.styles = {
-  -- a chip: background hugging the shrink-wrapped [ label ], inverting on hover
-  button = { hl = "FibrousButton", _hover = { hl = "FibrousButtonHover" } },
+  -- a chip: the brackets are a transparent left/right BORDER (hl = false =
+  -- inherit the fill), so they restyle per instance via the border prop and
+  -- take the background + hover like any other cell; padding gives the
+  -- breathing space "[ label ]" used to bake in. Same footprint as ever.
+  button = {
+    hl = "FibrousButton",
+    border = { left = "[", right = "]", hl = false },
+    padding = { x = 1 },
+    _hover = { hl = "FibrousButtonHover" },
+  },
   checkbox = { _hover = { hl = "FibrousHover" } },
+}
+
+-- Content defaults: mark spans components splice into their text. Not style
+-- (marks are content, and the style key set stays closed) — per-instance
+-- overrides go through the component's `marks` prop, key-wise.
+M.marks = {
+  checkbox = {
+    checked = { "[x]", hl = "FibrousCheckboxMark" },
+    unchecked = { "[ ]", hl = "FibrousDim" },
+  },
 }
 
 -- Define the groups (without overriding existing definitions) and keep them

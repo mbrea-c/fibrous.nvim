@@ -42,7 +42,17 @@ local function draw_border(c, rect, b, hl_override)
   if s.top + s.right + s.bottom + s.left == 0 then
     return
   end
-  local hl = hl_override or b.hl or "FibrousBorder"
+  -- hl = false is a TRANSPARENT border: cells painted with no hl of their own
+  -- keep the node's background fill (Canvas:put leaves the cell hl in place).
+  local hl = hl_override
+  if hl == nil then
+    hl = b.hl
+  end
+  if hl == nil then
+    hl = "FibrousBorder"
+  elseif hl == false then
+    hl = nil
+  end
   local x0, y0 = rect.x, rect.y
   local x1, y1 = rect.x + rect.w - 1, rect.y + rect.h - 1
 

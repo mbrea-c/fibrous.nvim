@@ -32,6 +32,17 @@ describe("inline.theme", function()
     assert.equal("FibrousHover", theme.styles.checkbox._hover.hl)
   end)
 
+  it("the button chip is a transparent bracket border, not baked text", function()
+    local b = theme.styles.button
+    assert.same({ left = "[", right = "]", hl = false }, b.border)
+    assert.same({ x = 1 }, b.padding)
+  end)
+
+  it("carries the checkbox mark spans (content defaults)", function()
+    assert.same({ "[x]", hl = "FibrousCheckboxMark" }, theme.marks.checkbox.checked)
+    assert.same({ "[ ]", hl = "FibrousDim" }, theme.marks.checkbox.unchecked)
+  end)
+
   -- Last in the file: leaves FibrousDim as an explicit (non-default) link to
   -- its themed value, which no other assertion depends on.
   it("an existing user definition wins over apply", function()

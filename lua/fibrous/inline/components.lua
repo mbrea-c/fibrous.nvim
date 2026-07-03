@@ -13,6 +13,8 @@
 -- node props; the cursor-interaction hit-map (task 6) walks the laid-out tree
 -- and reads exactly those.
 
+local theme = require("fibrous.inline.theme")
+
 local M = {}
 
 -- Host primitives, re-exported so apps only import this module.
@@ -60,13 +62,16 @@ local function theme_key(props, key)
   return props.theme == nil and key or props.theme
 end
 
+-- The button chip's brackets come from its theme.styles border (a transparent
+-- left/right border), NOT from the text — restyle them per instance with a
+-- border prop, or drop them with `theme = false` for a bare label.
 ---@param _ table ctx (unused)
 ---@param props { label: string, on_press?: fun(), hl?: string, bg?: string, theme?: string|false }
 function M.button(_, props)
   return {
     comp = M.text,
     props = node_props(props, {
-      text = "[ " .. (props.label or "") .. " ]",
+      text = props.label or "",
       role = "button",
       theme = theme_key(props, "button"),
       -- Shrink-wrap by default so hover/activation hug the visible widget;
@@ -77,9 +82,14 @@ function M.button(_, props)
 end
 
 ---@param _ table ctx (unused)
----@param props { label: string, checked?: boolean, on_toggle?: fun(checked: boolean), hl?: string, bg?: string, theme?: string|false }
+---@param props { label: string, checked?: boolean, on_toggle?: fun(checked: boolean), marks?: { checked?: string|Span, unchecked?: string|Span }, hl?: string, bg?: string, theme?: string|false }
 function M.checkbox(_, props)
-  local mark = props.checked and { "[x]", hl = "FibrousCheckboxMark" } or { "[ ]", hl = "FibrousDim" }
+  -- Marks are content, so they default from theme.marks (not theme.styles)
+  -- and override key-wise via the `marks` prop — bare strings or spans.
+  local defaults = theme.marks.checkbox
+  local marks = props.marks or {}
+  local mark = props.checked and (marks.checked or defaults.checked)
+    or (marks.unchecked or defaults.unchecked)
   return {
     comp = M.text,
     props = node_props(props, {
