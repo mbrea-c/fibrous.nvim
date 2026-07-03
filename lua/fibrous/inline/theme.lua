@@ -7,7 +7,8 @@
 --                  of the same group always wins. Re-applied on ColorScheme
 --                  (a scheme switch clears unsaved links).
 --   styles         style-shaped defaults (the `props.style` schema, `_hover`
---                  / `_focus` included) keyed by a node's `theme` prop.
+--                  / `_focus` included) keyed by a node's `theme` prop, which
+--                  defaults to the host tag (text_input, text, col, ...).
 --                  Components tag themselves (button, checkbox); any node can
 --                  opt in (`theme = "button"`) or out (`theme = false`).
 --                  style.normalize seeds these at the LOWEST precedence —
@@ -25,7 +26,13 @@ local M = {}
 -- colorscheme defines. Override with a plain `:hi` / nvim_set_hl of the same
 -- name — `apply()` never clobbers an existing definition.
 M.groups = {
-  FibrousBorder = { link = "FloatBorder" },
+  -- LineNr: a subtle gray in dark AND light schemes (FloatBorder usually
+  -- just takes the float's normal fg). Directory for focus: the focused
+  -- state needs an actual accent COLOR — bold-only groups (CursorLineNr in
+  -- the stock scheme) are invisible on box-drawing glyphs, whose fonts
+  -- rarely have bold variants.
+  FibrousBorder = { link = "LineNr" },
+  FibrousBorderFocus = { link = "Directory" },
   FibrousTitle = { link = "FloatTitle" },
   FibrousHover = { link = "CursorLine" },
   FibrousDim = { link = "Comment" },
@@ -51,6 +58,10 @@ M.styles = {
     _hover = { hl = "FibrousButtonHover" },
   },
   checkbox = { _hover = { hl = "FibrousHover" } },
+  -- host primitives default their theme key to their own tag, so this
+  -- applies to every text_input: the border brightens while its float has
+  -- the cursor (subwin.lua drives the focus state)
+  text_input = { _focus = { border_hl = "FibrousBorderFocus" } },
 }
 
 -- Content defaults: mark spans components splice into their text. Not style

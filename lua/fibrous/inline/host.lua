@@ -50,6 +50,11 @@ local function attach_style(node, states)
     if not defaults then
       error("fibrous: unknown theme key '" .. tostring(props.theme) .. "'")
     end
+  elseif props.theme == nil then
+    -- No explicit key: host primitives default to their own tag (text_input,
+    -- text, col, row, raw_buffer), so theme.styles can target a whole node
+    -- kind. A missing entry is simply unthemed; `theme = false` opts out.
+    defaults = theme.styles[node.subwin or node.kind]
   end
   local norm = style.normalize(props, defaults)
   node.style = norm

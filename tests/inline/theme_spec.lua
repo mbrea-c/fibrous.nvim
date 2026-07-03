@@ -13,7 +13,11 @@ end
 describe("inline.theme", function()
   it("apply defines the Fibrous* groups as links", function()
     theme.apply()
-    assert.equal("FloatBorder", link_of("FibrousBorder"))
+    -- LineNr: a subtle gray in dark AND light schemes. Directory: an actual
+    -- accent COLOR everywhere — bold-only groups (CursorLineNr in the stock
+    -- scheme) are invisible on box-drawing glyphs
+    assert.equal("LineNr", link_of("FibrousBorder"))
+    assert.equal("Directory", link_of("FibrousBorderFocus"))
     assert.equal("FloatTitle", link_of("FibrousTitle"))
     assert.equal("CursorLine", link_of("FibrousHover"))
     assert.equal("Comment", link_of("FibrousDim"))
@@ -30,6 +34,10 @@ describe("inline.theme", function()
     assert.equal("FibrousButton", theme.styles.button.hl)
     assert.equal("FibrousButtonHover", theme.styles.button._hover.hl)
     assert.equal("FibrousHover", theme.styles.checkbox._hover.hl)
+  end)
+
+  it("text inputs get a focused-border accent", function()
+    assert.equal("FibrousBorderFocus", theme.styles.text_input._focus.border_hl)
   end)
 
   it("the button chip is a transparent bracket border, not baked text", function()

@@ -435,4 +435,23 @@ portions of a paragraph, and border-embedded titles.
     Suite: 177 passed, 0 failed; bench flat (re-commit ~6.6ms). Headless
     smoke: default chip, `( )` chip, bare label, `[x]`/`[ ]`/custom `*` marks
     all render with the right census.
+- [x] S7. Default-look polish: gray borders + focused text_input accent
+  (2026-07-03)
+  - FibrousBorder relinked FloatBorder → LineNr (a subtle gray in dark AND
+    light schemes; FloatBorder usually just takes the float's normal fg);
+    new FibrousBorderFocus → Directory (first shipped as CursorLineNr, but
+    that is BOLD-ONLY in the stock scheme and bold is invisible on
+    box-drawing glyphs — the focus accent needs an actual color, verified
+    fg=#8cf8f7 after apply). `theme.styles.text_input = { _focus = {
+    border_hl = "FibrousBorderFocus" } }` accents an input's border while
+    its float holds the cursor — rides the existing subwin focus wiring
+    (set_focus guards on `style.focus`, which the theme now provides).
+  - Enabler: a node's theme key now DEFAULTS to its host tag (text_input,
+    text, col, row, raw_buffer) when no `theme` prop is given —
+    theme.styles can target a whole node kind; a missing entry is simply
+    unthemed, explicit unknown keys still error, `theme = false` still opts
+    out. (ui.text_input is a raw primitive, so nothing could tag it.)
+  - Specs: theme_spec +1 and links updated, components_spec +1 (tag
+    fallback), style_state_spec +1 (themed focus accent end-to-end).
+    Suite: 181 passed, 0 failed; bench flat (re-commit ~7.0ms).
 - Parked: inline flow layout; `_active` state.

@@ -309,6 +309,20 @@ describe("inline.components", function()
       root:unmount()
     end)
 
+    it("host primitives default their theme key to their own tag", function()
+      local theme = require("fibrous.inline.theme")
+      theme.styles.text = { text_hl = "ThemedText" }
+      local function App()
+        return { comp = ui.text, props = { text = "hi" } } -- no theme prop
+      end
+      local host = host_of(4)
+      local root = runtime.create_root(App, {}, { host = host }):render()
+
+      assert.same({ { 0, 0, 2 } }, marks_with(host.bufnr, "ThemedText"))
+      root:unmount()
+      theme.styles.text = nil
+    end)
+
     it("any node can opt into a theme key by prop", function()
       local function App()
         return { comp = ui.label, props = { text = "hi", theme = "button" } }

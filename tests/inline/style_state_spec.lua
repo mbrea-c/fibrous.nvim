@@ -127,6 +127,31 @@ describe("inline.style hover states", function()
 end)
 
 describe("inline.style focus state", function()
+  it("a text_input border takes the themed focus accent by default", function()
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "head" } },
+          { comp = ui.text_input, props = { border = true } },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 4 })
+    assert.same({}, marks_with(handle.bufnr, "FibrousBorderFocus"))
+
+    local float = subwin_float()
+    assert.is_not_nil(float)
+    vim.api.nvim_set_current_win(float)
+    assert.is_true(#marks_with(handle.bufnr, "FibrousBorderFocus") > 0)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    assert.same({}, marks_with(handle.bufnr, "FibrousBorderFocus"))
+
+    handle.unmount()
+  end)
+
   it("focusing a text_input float applies _focus; unfocusing clears it", function()
     local function App()
       return {
