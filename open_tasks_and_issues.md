@@ -84,7 +84,8 @@ Incremental build plan (each step has a runnable smoke check under headless
   - **`lib.<system>.mkNvimWasmWeb { initLua, plugins, font = {family,px}, env, extraXdg }`** (pkgs/nvim-wasm-web, `lib.makeOverridable`; `packages.nvim-wasm-web = mkNvimWasmWeb { }`). Plugins/init.lua ship as `config.tar.gz` mounted at `/xdg` (`XDG_CONFIG_HOME=/xdg/config`, `XDG_DATA_HOME=/xdg/data`, plugins under `data/nvim/site/pack/web/start/*`); font+env flow via `config.json`. Writable state stays under `HOME=/work`. Verified end-to-end (node test asserts init.lua text, plugin text, and env marker all render in the grid; Chromium screenshot confirms font px). This IS the Tier-2→Tier-3 artifact interface. README documents it.
   - **No-JSPI browsers no longer lock up**: the page shows what's missing + exact instructions (Firefox 139–151 pref name, versions that work OOTB) and runs only a safe `nvim --version` proof-of-life (the old headless demo busy-spun the tab via the shim's poll_oneoff). Verified by Firefox screenshot without the pref.
   - **Bug found & fixed on the way: the entire uv_fs scandir family was ENOSYS** (stub_ext.c) — `vim.fn.readdir`, `globpath`, and **pack/\*/start plugin discovery silently found nothing**, under wasmtime too. Implemented `uv_fs_scandir/_next`, `uv_fs_opendir/readdir/closedir` for real in pkgs/libuv-wasi/stub.c (wasi-libc readdir(3); state freed via `uv_fs_req_cleanup`). `vim.fs.dir`/plugin loading now work everywhere.
-- [ ] Mouse support in the web client (`nvim_input_mouse`: click/drag/wheel → grid coords) — keyboard-only today.
+- [ ] Mouse support in the web client (`nvim_input_mouse`: click/drag/wheel → grid coords) — keyboard-only today. Spike alongside fibrous' terminal-side mouse integration (NEW UI HOST task 10).
+- [x] `mkNvimWasmWeb`: `extraLuaFiles` / `extraLuaDirs` alongside `initLua` — DONE (2026-07-03). Both ship under `config/nvim/lua/` (the config dir is already on the rtp, so they're plain `require()` modules): `extraLuaFiles = { "site/util.lua" = ./f; }` (keys = paths under `lua/`, values file-or-Lua-string like initLua) → `require("site.util")`; `extraLuaDirs = [ ./lua ]` overlays whole trees. Pinned by new `checks.web-config-rtp` (red-green: untars config.tar.gz, asserts layout, boots nvim.wasm headless with the XDG tree and asserts a module from EACH surface require()s and round-trips through the WASI fs). README updated. Unblocks splitting fibrous-docs' site/init.lua into modules.
 - [ ] Revisit `$VIMRUNTIME`/config tarball size & lazy-loading (works today via DecompressionStream; ~unoptimized).
 
 ### Tier 3 — `fibrous-docs` (static site, `../fibrous-docs`)
@@ -235,7 +236,7 @@ as a neovim UI host). We need a new UI host that truly feels "neovim-native", sa
   - Deleted: `lua/nui/**` (vendored), `lua/fibrous/dom/` (nui_host), `lua/fibrous/mount/` (floating + window_host), `lua/fibrous/components/`, `lua/fibrous/hooks/` (use_keymap — its "bind across subtree leaf buffers" concept has no counterpart in the one-buffer inline host; cursor + hit-map replace it), `tests/{dom,mount,hooks}/` (incl. the 2 pre-existing failures). `fiber.scoped_keymaps` field removed; stale nui references in comments/README/examples cleaned.
   - fibrous-docs (`../fibrous-docs`) already runs on `fibrous.inline.mount`/`mount.window` — nothing to port there (its flake comment still says "with its vendored nui"; harmless, worth touching up on the next site change).
   - Suite after: **116 passed, 0 failed** (full run == per-file sum; first fully green suite).
-- [ ] 10. Follow-up: mouse integration; float-on-focus text inputs if scroll-swim warrants it
+- [ ] 10. Follow-up: mouse integration — SPIKE needed for both terminal (mouse=a: click moves the cursor so hover follows for free; needs click-to-activate + click-into-subwin checks) and web (Tier 2 web-client `nvim_input_mouse` item); float-on-focus text inputs if scroll-swim warrants it
 - [x] Bugfix: `mount.window` with `winid = 0` crashed on the first resize
   after focusing ("floating window cannot be relative to itself") — the raw 0
   was stored and re-resolved at sync time, when the current window is the
@@ -243,6 +244,31 @@ as a neovim UI host). We need a new UI host that truly feels "neovim-native", sa
   WinClosed teardown pattern and pane-size reads, which read "current
   window" too). Spec: mount_spec +1. Suite: 178 passed, 0 failed
   (2026-07-03)
+- [x] Bugfix: the focused-input border accent never showed in real use —
+  entering an input by MOVING THE CURSOR into it goes through the traversal
+  CursorMoved autocmd, which wasn't `nested`, so the WinEnter that applies
+  `_focus` was silently swallowed (the specs all drove nvim_set_current_win
+  from test context, where autocmds fire normally — that's why they were
+  green). Fix: `nested = true` on the traversal autocmd, subwin.lua. Spec:
+  style_state_spec +1, enters via cursor traversal. (2026-07-03)
+- [x] Bugfix: hjkl exits from a bordered input jumped PAST the border —
+  `exit_dir` stepped adjacent to the border box (`r.x - 1` / `r.x + r.w` …)
+  while entry crosses the border one keypress at a time. Exits are now
+  content-box adjacent (`c.x - 1` / `c.x + c.w` …): with a border that IS
+  the border cell — symmetric with entry; borderless inputs are unchanged
+  (content == rect there). Spec: focus_spec +1 (bordered input, all four
+  directions). Gotcha surfaced while writing it: `height` sizes the BORDER
+  box, so `height = 1` + `border = true` is degenerate (both border rows
+  collapse, the float hides). (2026-07-03)
+- [x] `:q` on a subwindow float now closes the WHOLE app (decision: no
+  reopen, no half-open state), exactly like `:q` on the root — a WinClosed
+  watcher in subwin.lua closes the ROOT float (deferred; windows can't be
+  closed from inside WinClosed), which cascades into the mount target's
+  teardown. Our own reconcile/teardown closes set `entry.dead` before
+  closing, so they don't rebound. Spec: subwin_spec +1. Suite: 184 passed,
+  0 failed. Smoke: examples/inline_fullscreen headless — traversal into the
+  input paints 4 FibrousBorderFocus border marks; :q in the input tears the
+  whole app down. (2026-07-03)
 
 ### Style rework
 

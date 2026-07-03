@@ -150,6 +150,24 @@ describe("inline.subwin", function()
     end
   end)
 
+  it(":q on a subwindow float closes the whole UI, like :q on the root", function()
+    local handle = mount.floating(ClippingApp, {}, { width = 6, height = 4, mode = "scroll" })
+    local sub = subwin_of(handle)
+    local sub_buf = vim.api.nvim_win_get_buf(sub)
+
+    vim.api.nvim_set_current_win(sub)
+    vim.cmd("quit")
+
+    -- the cascade is scheduled (windows can't be closed from inside WinClosed)
+    vim.wait(200, function()
+      return not vim.api.nvim_win_is_valid(handle.winid)
+    end)
+    assert.is_false(vim.api.nvim_win_is_valid(handle.winid))
+    assert.is_false(vim.api.nvim_buf_is_valid(handle.bufnr))
+    assert.is_false(vim.api.nvim_buf_is_valid(sub_buf))
+    assert.is_nil(subwin_of(handle))
+  end)
+
   it("removing the component from the tree destroys its float and buffer", function()
     local setter
     local function App(ctx)

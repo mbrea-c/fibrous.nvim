@@ -88,6 +88,58 @@ describe("inline.focus", function()
     handle.unmount()
   end)
 
+  it("exits from a bordered input land ON the border cell, not past it", function()
+    -- Entry crosses the border one keypress at a time (the border rows/cols
+    -- are ordinary root cells), so exits must be symmetric: one step out of
+    -- the content box is the border cell, not the far side of the box.
+    local function App()
+      return {
+        comp = ui.col,
+        props = { padding = { x = 1 } },
+        children = {
+          { comp = ui.label, props = { text = "head" } },
+          -- no explicit height: `height` sizes the BORDER box, and a bordered
+          -- input needs its default single content row
+          { comp = ui.text_input, props = { border = true, value = "abcdef" } },
+        },
+      }
+    end
+    -- rows (0-based): 0 head; 1 top border; 2 " │abcdef  │ "; 3 bottom border
+    -- content box: y=2, x=2..9 (stretched); border cells at x=1 and x=10
+    local handle = mount.floating(App, {}, { width = 12, height = 6 })
+    local sub = subwin_of(handle)
+
+    -- h at col 0 → the LEFT border cell (cell 1 = byte 1)
+    vim.api.nvim_set_current_win(sub)
+    vim.api.nvim_win_set_cursor(sub, { 1, 0 })
+    press("h")
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    assert.same({ 3, 1 }, vim.api.nvim_win_get_cursor(handle.winid))
+
+    -- l past the last char → the RIGHT border cell (cell 10 = byte 12)
+    vim.api.nvim_set_current_win(sub)
+    vim.api.nvim_win_set_cursor(sub, { 1, 5 })
+    press("l")
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    assert.same({ 3, 12 }, vim.api.nvim_win_get_cursor(handle.winid))
+
+    -- k → the TOP border row, keeping the column (cell 2 = byte 4 after ╭)
+    vim.api.nvim_set_current_win(sub)
+    vim.api.nvim_win_set_cursor(sub, { 1, 0 })
+    press("k")
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    assert.same({ 2, 4 }, vim.api.nvim_win_get_cursor(handle.winid))
+
+    -- j → the BOTTOM border row
+    vim.api.nvim_set_current_win(sub)
+    vim.api.nvim_win_set_cursor(sub, { 1, 0 })
+    press("j")
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    assert.same({ 4, 4 }, vim.api.nvim_win_get_cursor(handle.winid))
+
+    handle.unmount()
+  end)
+
   it("non-edge motions stay inside the subwindow", function()
     local function App()
       return {

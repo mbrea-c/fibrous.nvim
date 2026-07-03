@@ -152,6 +152,31 @@ describe("inline.style focus state", function()
     handle.unmount()
   end)
 
+  it("the accent also applies when focus arrives via cursor traversal", function()
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "head" } },
+          { comp = ui.text_input, props = { border = true, value = "abc" } },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 4 })
+    local float = subwin_float()
+
+    -- Enter the input the way a user does: move the root cursor into its
+    -- content box (the traversal CursorMoved switches windows from INSIDE an
+    -- autocmd, so WinEnter must be allowed to nest for _focus to apply).
+    vim.api.nvim_set_current_win(handle.winid)
+    move_cursor(handle, 3, 3) -- content row; byte 3 = first cell after the 3-byte │
+    assert.equal(float, vim.api.nvim_get_current_win())
+    assert.is_true(#marks_with(handle.bufnr, "FibrousBorderFocus") > 0)
+
+    handle.unmount()
+  end)
+
   it("focusing a text_input float applies _focus; unfocusing clears it", function()
     local function App()
       return {

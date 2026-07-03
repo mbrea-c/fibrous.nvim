@@ -153,20 +153,21 @@ function M.attach(host, root_winid)
     end)
   end
 
-  -- Step out of the float in direction `dir`: vertical exits land on the row
-  -- adjacent to the border box keeping the column; horizontal exits land on
-  -- the column adjacent to the border box keeping the row.
+  -- Step out of the float in direction `dir`, one cell past the CONTENT box:
+  -- with a border that is the border cell itself — symmetric with entry, where
+  -- the root cursor crosses the border one keypress at a time. Vertical exits
+  -- keep the column, horizontal exits keep the row.
   local function exit_dir(entry, dir)
     local pos, cell = float_cursor(entry)
-    local r, c = entry.node.rect, entry.node.content
+    local c = entry.node.content
     if dir == "k" then
-      exit_to(r.y - 1, c.x + cell)
+      exit_to(c.y - 1, c.x + cell)
     elseif dir == "j" then
-      exit_to(r.y + r.h, c.x + cell)
+      exit_to(c.y + c.h, c.x + cell)
     elseif dir == "h" then
-      exit_to(c.y + (pos[1] - 1), r.x - 1)
+      exit_to(c.y + (pos[1] - 1), c.x - 1)
     else
-      exit_to(c.y + (pos[1] - 1), r.x + r.w)
+      exit_to(c.y + (pos[1] - 1), c.x + c.w)
     end
   end
 
@@ -376,11 +377,36 @@ function M.attach(host, root_winid)
     callback = sync,
   })
 
+  -- A user :q on a subwindow float kills the whole app, exactly like :q on
+  -- the root — a lone widget window closing has no sensible half-open state.
+  -- Closing the ROOT float cascades into the mount target's teardown; our own
+  -- destroys set entry.dead before closing, so they don't rebound here.
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    callback = function(ev)
+      local closed = tonumber(ev.match)
+      for _, entry in pairs(floats) do
+        if entry.winid == closed and not entry.dead then
+          -- deferred: windows can't be closed from inside WinClosed
+          vim.schedule(function()
+            if vim.api.nvim_win_is_valid(root_winid) then
+              pcall(vim.api.nvim_win_close, root_winid, true)
+            end
+          end)
+          return
+        end
+      end
+    end,
+  })
+
   -- Traversal IN: the root cursor landing inside a subwindow's content box
-  -- focuses its float at that cell.
+  -- focuses its float at that cell. `nested`: the window switch happens from
+  -- inside this autocmd, and the WinEnter it fires is what applies the _focus
+  -- style — without nesting it would be silently swallowed.
   vim.api.nvim_create_autocmd("CursorMoved", {
     group = group,
     buffer = host.bufnr,
+    nested = true,
     callback = function()
       if vim.api.nvim_get_current_win() ~= root_winid then
         return
