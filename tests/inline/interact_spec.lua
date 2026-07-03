@@ -168,6 +168,88 @@ describe("inline.interact", function()
     handle.unmount()
   end)
 
+  -- Mouse interaction (tracker "NEW UI HOST" task 10). Neovim's own
+  -- mouse=nvi handling already moves the cursor on click (so hover follows
+  -- clicks for free); fibrous adds click-to-activate (<LeftRelease>, on by
+  -- default) and an opt-in focus-follows-mouse mode (<MouseMove> moves the
+  -- cursor — hover and focus stay a single, cursor-positional concept).
+  -- The specs drive the maps at the key level (like the <CR> tests above):
+  -- synthesizing real clicks via nvim_input_mouse doesn't work headless —
+  -- without a UI grid, mouse_find_win can't resolve positions to floats, so
+  -- the events never route to the root float. The press→cursor-move half of a
+  -- click is Neovim core (mouse=nvi) anyway; ours is what happens on release.
+  describe("mouse", function()
+    local function ButtonApp(on_press)
+      return function()
+        return {
+          comp = ui.col,
+          props = {},
+          children = {
+            { comp = ui.label, props = { text = "title" } },
+            { comp = ui.button, props = { label = "OK", on_press = on_press } },
+          },
+        }
+      end
+    end
+
+    it("<LeftRelease> activates like <CR>; inert cells do nothing", function()
+      local pressed = 0
+      local handle = mount.floating(ButtonApp(function()
+        pressed = pressed + 1
+      end), {}, { width = 10, height = 4 })
+
+      move_cursor(handle, 2, 2) -- where the click's press parked the cursor
+      press(handle, "<LeftRelease>")
+      assert.equal(1, pressed)
+
+      move_cursor(handle, 1, 2) -- the title row: nothing interactive
+      press(handle, "<LeftRelease>")
+      assert.equal(1, pressed)
+
+      handle.unmount()
+    end)
+
+    it("mouse = false leaves clicks inert", function()
+      local pressed = 0
+      local handle = mount.floating(ButtonApp(function()
+        pressed = pressed + 1
+      end), {}, { width = 10, height = 4, mouse = false })
+
+      move_cursor(handle, 2, 2)
+      press(handle, "<LeftRelease>")
+      assert.equal(0, pressed)
+
+      handle.unmount()
+    end)
+
+    -- Which normal-mode buffer-local maps of `bufnr` mention `needle`?
+    local function has_map(bufnr, needle)
+      for _, m in ipairs(vim.api.nvim_buf_get_keymap(bufnr, "n")) do
+        if m.lhs:lower():find(needle:lower(), 1, true) then
+          return true
+        end
+      end
+      return false
+    end
+
+    it("follow = true maps <MouseMove> and owns mousemoveevent for the app's lifetime", function()
+      assert.is_false(vim.o.mousemoveevent) -- the default we must restore to
+      local handle = mount.floating(ButtonApp(nil), {}, { width = 10, height = 4, mouse = { follow = true } })
+      assert.is_true(vim.o.mousemoveevent)
+      assert.is_true(has_map(handle.bufnr, "MouseMove"))
+
+      handle.unmount()
+      assert.is_false(vim.o.mousemoveevent)
+    end)
+
+    it("by default there is no <MouseMove> map and mousemoveevent is untouched", function()
+      local handle = mount.floating(ButtonApp(nil), {}, { width = 10, height = 4 })
+      assert.is_false(vim.o.mousemoveevent)
+      assert.is_false(has_map(handle.bufnr, "MouseMove"))
+      handle.unmount()
+    end)
+  end)
+
   it("interaction autocmds are cleared on unmount", function()
     local function App()
       return { comp = ui.button, props = { label = "OK" } }

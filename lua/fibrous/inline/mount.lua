@@ -124,6 +124,7 @@ end
 ---@field row? integer      default centered
 ---@field col? integer      default centered
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
 
 -- Mount `component` as a standalone floating application.
 ---@param component Component
@@ -169,7 +170,7 @@ function M.floating(component, props, opts)
 		height = g.height,
 	})
 	manager = subwin.attach(host, winid)
-	interaction = interact.attach(host, winid)
+	interaction = interact.attach(host, winid, opts.mouse)
 	local group = vim.api.nvim_create_augroup("FibrousInlineFloat_" .. winid, { clear = true })
 
 	local function sync()
@@ -191,6 +192,7 @@ end
 ---@class InlineSplitOpts
 ---@field split? SplitOpts   direction/position/size of the host pane; default vertical/left/40
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
 
 -- Open a native split pane and return its winid. The pane holds a throwaway
 -- scratch buffer; the root float over it does the real drawing.
@@ -232,7 +234,7 @@ function M.split(component, props, opts)
 	local host_winid = open_host_pane(opts.split or {})
 	vim.api.nvim_set_current_win(origin_winid)
 
-	local handle = M.window(component, props, { winid = host_winid, mode = opts.mode })
+	local handle = M.window(component, props, { winid = host_winid, mode = opts.mode, mouse = opts.mouse })
 
 	return handle
 end
@@ -240,6 +242,7 @@ end
 ---@class InlineWindowMountOpts
 ---@field winid integer which window to mount on
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
 
 -- Mount `component` over a native split pane.
 ---@param component Component
@@ -287,7 +290,7 @@ function M.window(component, props, opts)
 		height = g.height,
 	})
 	manager = subwin.attach(host, winid)
-	interaction = interact.attach(host, winid)
+	interaction = interact.attach(host, winid, opts.mouse)
 	local group = vim.api.nvim_create_augroup("FibrousInlineSplit_" .. host_winid, { clear = true })
 
 	local function sync()

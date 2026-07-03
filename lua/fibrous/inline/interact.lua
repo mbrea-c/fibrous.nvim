@@ -14,6 +14,17 @@
 --              CursorMoved and after every flush (rects may have moved).
 --   activate   <CR>/<Space>, buffer-local on the host buffer: role "button"
 --              → on_press(); "checkbox" → on_toggle(not checked).
+--   mouse      Neovim's own mouse=nvi handling moves the cursor on click, so
+--              hover already follows clicks with no code here. On top of that
+--              (tracker task 10, `opts.mouse`):
+--                activate (default true)   <LeftRelease> fires the same
+--                  activate path as <CR>. Release, not press: a drag lands in
+--                  visual mode where the normal-mode map doesn't apply, so
+--                  drag-selections never activate.
+--                follow (default false)    focus-follows-mouse: <MouseMove>
+--                  moves the cursor to the pointer, dragging hover along —
+--                  one focus concept, two ways to move it. Opt-in because it
+--                  needs the global 'mousemoveevent' (saved and restored).
 
 local M = {}
 
@@ -52,11 +63,21 @@ end
 ---@field update fun()    re-evaluate hover at the current cursor (called on CursorMoved and post-flush)
 ---@field teardown fun()
 
+---@class InlineMouseOpts
+---@field activate? boolean  click (<LeftRelease>) activates; default true
+---@field follow? boolean    focus-follows-mouse via <MouseMove>; default false
+
 -- Attach cursor interaction to `host` displayed in the root float `root_winid`.
 ---@param host InlineHost
 ---@param root_winid integer
+---@param mouse? InlineMouseOpts|false  false disables all mouse maps
 ---@return InteractHandle
-function M.attach(host, root_winid)
+function M.attach(host, root_winid, mouse)
+  if mouse == false then
+    mouse = { activate = false, follow = false }
+  else
+    mouse = vim.tbl_extend("keep", mouse or {}, { activate = true, follow = false })
+  end
   local bufnr = host.bufnr
   local group = vim.api.nvim_create_augroup("FibrousInlineInteract_" .. root_winid, { clear = true })
 
@@ -189,17 +210,41 @@ function M.attach(host, root_winid)
     buffer = bufnr,
     callback = update,
   })
-  for _, lhs in ipairs({ "<CR>", "<Space>" }) do
+
+  local maps = { "<CR>", "<Space>" }
+  for _, lhs in ipairs(maps) do
     vim.keymap.set("n", lhs, activate, { buffer = bufnr, nowait = true, desc = "fibrous: activate" })
+  end
+  if mouse.activate then
+    maps[#maps + 1] = "<LeftRelease>"
+    vim.keymap.set("n", "<LeftRelease>", activate, { buffer = bufnr, nowait = true, desc = "fibrous: activate (mouse)" })
+  end
+  local saved_mousemoveevent = nil
+  if mouse.follow then
+    saved_mousemoveevent = vim.o.mousemoveevent
+    vim.o.mousemoveevent = true
+    maps[#maps + 1] = "<MouseMove>"
+    vim.keymap.set("n", "<MouseMove>", function()
+      local mp = vim.fn.getmousepos()
+      -- only within the root window: never yank the cursor OUT of a
+      -- subwindow (or another window entirely) just because the pointer moved
+      if mp.winid == root_winid then
+        pcall(vim.api.nvim_win_set_cursor, root_winid, { mp.line, mp.column - 1 })
+        update()
+      end
+    end, { buffer = bufnr, desc = "fibrous: hover (mouse)" })
   end
 
   return {
     update = update,
     teardown = function()
       pcall(vim.api.nvim_del_augroup_by_id, group)
+      if saved_mousemoveevent ~= nil then
+        vim.o.mousemoveevent = saved_mousemoveevent
+      end
       if vim.api.nvim_buf_is_valid(bufnr) then
         vim.api.nvim_buf_clear_namespace(bufnr, ns_hover, 0, -1)
-        for _, lhs in ipairs({ "<CR>", "<Space>" }) do
+        for _, lhs in ipairs(maps) do
           pcall(vim.keymap.del, "n", lhs, { buffer = bufnr })
         end
       end
