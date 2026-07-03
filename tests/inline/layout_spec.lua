@@ -75,6 +75,59 @@ describe("inline.layout text nodes", function()
   end)
 end)
 
+describe("inline.layout rich-text spans", function()
+  it("a span list measures as its concatenation", function()
+    local tree = { kind = "text", text = { "hello ", { "world", hl = "Title" } } }
+    layout.compute(tree, { width = 40 })
+    assert.same({ w = 11, h = 1 }, tree.size)
+    assert.same({ "hello world" }, tree.lines)
+  end)
+
+  it("nowrap span text splits at newlines, runs kept per line", function()
+    local tree = { kind = "text", text = { { "a\nb", hl = "X" } } }
+    layout.compute(tree, { width = 3 })
+    assert.same({ "a", "b" }, tree.lines)
+    assert.same({ { { text = "a", hl = "X" } }, { { text = "b", hl = "X" } } }, tree.line_runs)
+  end)
+
+  it("wrapping carries hl attribution through to per-line runs", function()
+    local tree = { kind = "text", props = { wrap = true }, text = { "aa ", { "bb cc", hl = "Title" } } }
+    layout.compute(tree, { width = 5 })
+    assert.same({ "aa bb", "cc" }, tree.lines)
+    assert.same({
+      { { text = "aa " }, { text = "bb", hl = "Title" } },
+      { { text = "cc", hl = "Title" } },
+    }, tree.line_runs)
+  end)
+end)
+
+describe("inline.layout border titles", function()
+  it("a border title sets a min width: title + left/right border", function()
+    local tree = {
+      kind = "col",
+      props = { align = "start" },
+      children = {
+        { kind = "text", props = { border = { "single", title = "Session" } }, text = "ab" },
+      },
+    }
+    layout.compute(tree, { width = 20 })
+    -- "Session" is 7 cells + 2 border columns = 9, wider than "ab" wants.
+    assert.equal(9, tree.children[1].rect.w)
+  end)
+
+  it("an explicit width wins over the title min width", function()
+    local tree = {
+      kind = "col",
+      props = { align = "start" },
+      children = {
+        { kind = "text", props = { width = 6, border = { "single", title = "Session" } }, text = "ab" },
+      },
+    }
+    layout.compute(tree, { width = 20 })
+    assert.equal(6, tree.children[1].rect.w)
+  end)
+end)
+
 describe("inline.layout containers", function()
   it("col stacks children vertically; children stretch to the col width", function()
     local tree = {

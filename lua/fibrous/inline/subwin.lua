@@ -252,6 +252,41 @@ function M.attach(host, root_winid)
     end)
   end
 
+  -- Focus styling ("Style rework" S2): the float gaining/losing the cursor
+  -- applies the node's `_focus` style override through host state + relayout
+  -- (focus changes are rare — always the structural path, no fast path).
+  local function set_focus(entry, on)
+    local node = entry.node
+    if entry.dead or not node.fiber or not (node.style and node.style.focus) then
+      return
+    end
+    host.set_state(node.fiber, "focus", on)
+    host.relayout()
+  end
+
+  -- WinEnter/WinLeave fire for any window showing the buffer (a raw_buffer's
+  -- may be open elsewhere), so both check that OUR float is the one involved.
+  local function wire_focus(entry)
+    vim.api.nvim_create_autocmd("WinEnter", {
+      group = group,
+      buffer = entry.bufnr,
+      callback = function()
+        if vim.api.nvim_get_current_win() == entry.winid then
+          set_focus(entry, true)
+        end
+      end,
+    })
+    vim.api.nvim_create_autocmd("WinLeave", {
+      group = group,
+      buffer = entry.bufnr,
+      callback = function()
+        if vim.api.nvim_get_current_win() == entry.winid then
+          set_focus(entry, false)
+        end
+      end,
+    })
+  end
+
   local function create(node)
     local props = node.props or {}
     local bufnr, owned
@@ -281,6 +316,7 @@ function M.attach(host, root_winid)
 
     local entry = { bufnr = bufnr, winid = winid, node = node, owned = owned, maps = {} }
     map_motions(entry)
+    wire_focus(entry)
     if node.subwin == "text_input" then
       wire_input(entry)
     end

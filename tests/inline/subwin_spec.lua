@@ -76,8 +76,8 @@ describe("inline.subwin", function()
     assert.is_true(vim.bo[vim.api.nvim_win_get_buf(sub)].modifiable)
     -- the border is painted in the ROOT buffer (inline), not on the float
     local root_lines = lines_of(handle.bufnr)
-    assert.equal("┌────────┐", root_lines[2])
-    assert.equal("└────────┘", root_lines[4])
+    assert.equal("╭────────╮", root_lines[2])
+    assert.equal("╰────────╯", root_lines[4])
 
     handle.unmount()
     assert.is_nil(subwin_of(handle))

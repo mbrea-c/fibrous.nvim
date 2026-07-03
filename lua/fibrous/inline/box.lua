@@ -3,6 +3,8 @@
 -- normalizes the loose prop specs into fully numeric per-side tables — the
 -- layout engine does arithmetic on the result, the renderer draws the chars.
 
+local theme = require("fibrous.inline.theme")
+
 local M = {}
 
 ---@class Sides
@@ -46,16 +48,51 @@ local PRESETS = {
 local SIDE_KEYS = { "top", "right", "bottom", "left" }
 local CORNER_KEYS = { "tl", "tr", "br", "bl" }
 
+---@class BorderTitle
+---@field text string
+---@field hl string            highlight for the title cells (default FibrousTitle)
+---@field align "left"|"center"|"right"
+---@field pos "top"|"bottom"
+
 ---@class Border
 ---@field sides Sides          per-side thickness (0 or 1)
 ---@field chars table<string, string>   edge + corner chars for the enabled sides
 ---@field hl string|nil        highlight group for the border cells
+---@field title BorderTitle|nil  painted over the pos edge by the renderer
 
----@alias BorderSpec nil|boolean|string|{ top?: boolean|string, right?: boolean|string, bottom?: boolean|string, left?: boolean|string, corners?: table<string, string>, hl?: string }
+local TITLE_ALIGNS = { left = true, center = true, right = true }
+local TITLE_POS = { top = true, bottom = true }
 
--- Normalize a border spec: nil/false → none; true or a preset name → that
--- preset on all sides; a table names the sides to enable, each either `true`
--- (preset char) or a custom char, with optional custom `corners` and `hl`.
+-- Normalize a title spec (a bare string is sugar for { text = ... }).
+---@param spec string|{ text: string, hl?: string, align?: string, pos?: string }
+---@return BorderTitle
+local function title(spec)
+  if type(spec) == "string" then
+    spec = { text = spec }
+  end
+  if type(spec.text) ~= "string" then
+    error("fibrous: border title needs a `text` string")
+  end
+  local align = spec.align or "left"
+  if not TITLE_ALIGNS[align] then
+    error("fibrous: invalid border title align '" .. tostring(align) .. "'")
+  end
+  local pos = spec.pos or "top"
+  if not TITLE_POS[pos] then
+    error("fibrous: invalid border title pos '" .. tostring(pos) .. "'")
+  end
+  return { text = spec.text, hl = spec.hl or "FibrousTitle", align = align, pos = pos }
+end
+
+---@alias BorderSpec nil|boolean|string|{ [1]?: string, top?: boolean|string, right?: boolean|string, bottom?: boolean|string, left?: boolean|string, corners?: table<string, string>, hl?: string, title?: string|table }
+
+-- Normalize a border spec: nil/false → none; true → the themed default
+-- preset (theme.border_preset) on all sides, a preset name → that preset. A
+-- table names the sides to enable, each either `true` (preset char) or a
+-- custom char, with optional custom `corners`, `hl` and `title`; naming a
+-- preset as its first array element ({ "rounded", ... }) starts from that
+-- preset on all sides, side keys then opting out (= false) or overriding the
+-- char — without one, side/corner chars come from the themed preset.
 ---@param spec BorderSpec
 ---@return Border
 function M.border(spec)
@@ -65,7 +102,7 @@ function M.border(spec)
   end
 
   if spec == true then
-    spec = "single"
+    spec = theme.border_preset
   end
   if type(spec) == "string" then
     local preset = PRESETS[spec]
@@ -77,9 +114,19 @@ function M.border(spec)
     return border
   end
 
-  local preset = PRESETS.single
+  local preset, default_on = PRESETS[theme.border_preset], false
+  if spec[1] then
+    preset = PRESETS[spec[1]]
+    if not preset then
+      error("fibrous: unknown border preset '" .. tostring(spec[1]) .. "'")
+    end
+    default_on = true
+  end
   for _, side in ipairs(SIDE_KEYS) do
     local v = spec[side]
+    if v == nil then
+      v = default_on
+    end
     if v then
       border.sides[side] = 1
       border.chars[side] = v == true and preset[side] or v
@@ -89,6 +136,7 @@ function M.border(spec)
     border.chars[corner] = (spec.corners and spec.corners[corner]) or preset[corner]
   end
   border.hl = spec.hl
+  border.title = spec.title ~= nil and title(spec.title) or nil
   return border
 end
 

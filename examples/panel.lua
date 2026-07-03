@@ -37,13 +37,12 @@ local function use_plan(ctx, initial)
   }
 end
 
--- A bordered col with a title row — inline borders have no title slot, so the
--- labelled regions carry their caption as their first row.
-local function titled(title, props, children)
-  table.insert(children, 1, { comp = ui.label, props = { text = title, hl = "Title" } })
-  props.border = props.border or "rounded"
-  props.padding = props.padding or { x = 1 }
-  return { comp = ui.col, props = props, children = children }
+-- A themed border captioned via the border-embedded title slot ("Style
+-- rework" S3): the title paints over the top edge, no content row spent on
+-- it. Chars come from the theme's default preset, the title hl from
+-- FibrousTitle — nothing to specify but the text.
+local function titled_border(title)
+  return { nr.theme.border_preset, title = title }
 end
 
 -- The plan list: one checkbox per item. j/k are native cursor motions and
@@ -61,7 +60,11 @@ local function Plan(_, props)
       },
     }
   end
-  return titled("Plan (<Space> toggles)", { grow = 1 }, children)
+  return {
+    comp = ui.col,
+    props = { grow = 1, padding = { x = 1 }, border = titled_border("Plan (<Space> toggles)") },
+    children = children,
+  }
 end
 
 local function Panel(ctx, props)
@@ -92,15 +95,19 @@ local function Panel(ctx, props)
         comp = ui.col,
         props = { grow = 1 },
         children = {
-          titled("Conversation", { grow = 1 }, {
-            { comp = ui.label, props = { text = table.concat(transcript.get(), "\n") } },
-          }),
-          { comp = ui.label, props = { text = status, hl = "Comment" } },
+          {
+            comp = ui.col,
+            props = { grow = 1, padding = { x = 1 }, border = titled_border("Conversation") },
+            children = {
+              { comp = ui.label, props = { text = table.concat(transcript.get(), "\n") } },
+            },
+          },
+          { comp = ui.label, props = { text = status, hl = "FibrousDim" } },
           {
             comp = ui.text_input,
             props = {
               height = 3,
-              border = "rounded",
+              border = true,
               on_change = function(v) draft.set(#v) end,
               on_submit = submit,
             },
@@ -111,11 +118,15 @@ local function Panel(ctx, props)
         comp = ui.col,
         props = { width = 26 },
         children = {
-          titled("Session", { height = 6 }, {
-            { comp = ui.label, props = { text = "model   claude-opus-4-8" } },
-            { comp = ui.label, props = { text = "cwd     ~/src/fibrous" } },
-            { comp = ui.label, props = { text = "status  ● ready" } },
-          }),
+          {
+            comp = ui.col,
+            props = { height = 5, padding = { x = 1 }, border = titled_border("Session") },
+            children = {
+              { comp = ui.label, props = { text = "model   claude-opus-4-8" } },
+              { comp = ui.label, props = { text = "cwd     ~/src/fibrous" } },
+              { comp = ui.label, props = { text = "status  ● ready" } },
+            },
+          },
           {
             comp = Plan,
             props = {

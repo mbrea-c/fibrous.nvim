@@ -20,6 +20,8 @@
 
 local layout = require("fibrous.inline.layout")
 local render = require("fibrous.inline.render")
+local style = require("fibrous.inline.style")
+local theme = require("fibrous.inline.theme")
 
 local M = {}
 
@@ -32,15 +34,40 @@ local LEAVES = { text = true, text_input = true, raw_buffer = true }
 -- One namespace for all inline hosts; each host only ever clears its own buffer.
 local ns = vim.api.nvim_create_namespace("fibrous_inline")
 
+-- Attach the node's normalized style plus its state-applied resolution
+-- ("Style rework"): normalize once per commit, seeding the theme defaults the
+-- node's `theme` prop keys into (components tag themselves; `theme = false`
+-- opts out); when the fiber has active interaction states, apply them so
+-- layout/paint see the overridden style. With no states the base IS the
+-- resolution — shared, no copy.
+---@param node table
+---@param states table<Fiber, table>
+local function attach_style(node, states)
+  local props = node.props or {}
+  local defaults = nil
+  if props.theme then
+    defaults = theme.styles[props.theme]
+    if not defaults then
+      error("fibrous: unknown theme key '" .. tostring(props.theme) .. "'")
+    end
+  end
+  local norm = style.normalize(props, defaults)
+  node.style = norm
+  local active = states[node.fiber]
+  node.style_resolved = active and style.apply(norm, active) or norm.base
+  return node
+end
+
 -- Build the layout-tree node for a fiber, descending through function
 -- components to the host nodes they render. Each node keeps a `fiber` backref
 -- (the hit-map ground truth for cursor interaction, task 6).
 ---@param fiber Fiber
+---@param states table<Fiber, table>  active interaction states, keyed by fiber
 ---@return table|nil node
-local function build_node(fiber)
+local function build_node(fiber, states)
   if type(fiber.type) == "function" then
     local child = fiber.child_fibers and fiber.child_fibers[1]
-    return child and build_node(child) or nil
+    return child and build_node(child, states) or nil
   end
 
   local tag = fiber.type.__host
@@ -48,12 +75,12 @@ local function build_node(fiber)
   if CONTAINERS[tag] then
     local children = {}
     for _, cf in ipairs(fiber.child_fibers or {}) do
-      local node = build_node(cf)
+      local node = build_node(cf, states)
       if node then
         children[#children + 1] = node
       end
     end
-    return { kind = tag, props = props, children = children, fiber = fiber }
+    return attach_style({ kind = tag, props = props, children = children, fiber = fiber }, states)
   end
   if tag == "text_input" or tag == "raw_buffer" then
     -- Subwindow leaves measure as text (one content row unless props size
@@ -69,9 +96,9 @@ local function build_node(fiber)
         or 1
       text = ("\n"):rep(count - 1)
     end
-    return { kind = "text", props = props, text = text, subwin = tag, fiber = fiber }
+    return attach_style({ kind = "text", props = props, text = text, subwin = tag, fiber = fiber }, states)
   end
-  return { kind = "text", props = props, text = props.text or "", fiber = fiber }
+  return attach_style({ kind = "text", props = props, text = props.text or "", fiber = fiber }, states)
 end
 
 -- Collect the laid-out subwindow nodes of `tree` (document order).
@@ -95,16 +122,25 @@ end
 ---@field ns integer      extmark namespace of the highlight spans
 ---@field tree table|nil  the last laid-out tree (rects are buffer coordinates)
 ---@field subwins table[] laid-out subwindow nodes of the last flush (document order)
+---@field set_state fun(fiber: Fiber, name: "hover"|"focus", on: boolean?)  record an interaction state (structural style overrides only)
 
 -- Construct a fresh inline HostConfig around its own scratch buffer.
 ---@param opts InlineHostOpts
 ---@return InlineHost
 function M.new(opts)
+  theme.apply()
   local bufnr = vim.api.nvim_create_buf(false, true)
   vim.bo[bufnr].modifiable = false
 
   ---@type Fiber|nil  the most recently committed root, so relayout can re-flush
   local last_root = nil
+
+  -- Active interaction states per fiber ({ hover?, focus? }), set by the
+  -- interaction layers (interact.lua, subwin.lua) — only for STRUCTURAL
+  -- overrides, which must flow through layout; hl-only overrides paint as
+  -- overlay extmarks and never come through here. Weak keys: unmounted
+  -- fibers drop out on their own.
+  local states = setmetatable({}, { __mode = "k" })
 
   ---@type InlineHost
   local host
@@ -114,7 +150,7 @@ function M.new(opts)
     if not last_root or not vim.api.nvim_buf_is_valid(bufnr) then
       return
     end
-    local tree = build_node(last_root)
+    local tree = build_node(last_root, states)
     local size = opts.get_size()
     local canvas_lines, canvas_hls = {}, {}
     local subwins = {}
@@ -168,6 +204,24 @@ function M.new(opts)
     end,
 
     relayout = flush,
+
+    -- Flip one interaction state for a fiber. The caller decides when a
+    -- relayout is due — set_state only records.
+    set_state = function(fiber, name, on)
+      local s = states[fiber]
+      if on then
+        if not s then
+          s = {}
+          states[fiber] = s
+        end
+        s[name] = true
+      elseif s then
+        s[name] = nil
+        if next(s) == nil then
+          states[fiber] = nil
+        end
+      end
+    end,
 
     teardown = function()
       last_root = nil

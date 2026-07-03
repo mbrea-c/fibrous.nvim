@@ -36,12 +36,13 @@ end
 ---@param c Canvas
 ---@param rect { x: integer, y: integer, w: integer, h: integer }
 ---@param b Border
-local function draw_border(c, rect, b)
+---@param hl_override string|nil  style `border_hl` — recolors without touching the spec
+local function draw_border(c, rect, b, hl_override)
   local s = b.sides
   if s.top + s.right + s.bottom + s.left == 0 then
     return
   end
-  local hl = b.hl or "FloatBorder"
+  local hl = hl_override or b.hl or "FibrousBorder"
   local x0, y0 = rect.x, rect.y
   local x1, y1 = rect.x + rect.w - 1, rect.y + rect.h - 1
 
@@ -85,6 +86,23 @@ local function draw_border(c, rect, b)
   if s.bottom == 1 and s.right == 1 then
     c:put(x1, y1, b.chars.br, hl, char_width(b.chars.br))
   end
+
+  -- Title, painted over its edge (between the corners) after the edge chars.
+  local t = b.title
+  if t and s[t.pos] == 1 then
+    local span_w = rect.w - s.left - s.right
+    local text = crop(t.text, math.max(span_w, 0))
+    if text ~= "" then
+      local x = x0 + s.left
+      local tw = str_width(text)
+      if t.align == "center" then
+        x = x + math.floor((span_w - tw) / 2)
+      elseif t.align == "right" then
+        x = x + span_w - tw
+      end
+      c:text(x, t.pos == "top" and y0 or y1, text, t.hl or hl)
+    end
+  end
 end
 
 ---@param c Canvas
@@ -95,11 +113,15 @@ local function visit(c, node)
     return
   end
   local props = node.props or {}
+  -- Host-built nodes carry a state-resolved style; raw trees style from props.
+  local rs = node.style_resolved
+  local bg = rs and rs.hl or props.hl
+  local text_hl = rs and rs.text_hl or props.text_hl
 
-  if props.hl then
-    c:hl_rect(rect, props.hl)
+  if bg then
+    c:hl_rect(rect, bg)
   end
-  draw_border(c, rect, node.box.border)
+  draw_border(c, rect, node.box.border, rs and rs.border_hl)
 
   if node.kind == "text" then
     local content = node.content
@@ -107,7 +129,24 @@ local function visit(c, node)
       if i > content.h then
         break
       end
-      c:text(content.x, content.y + i - 1, crop(line, content.w), props.text_hl)
+      local y = content.y + i - 1
+      local runs = node.line_runs and node.line_runs[i]
+      if runs then
+        -- Span-list text: paint per attribution run, hl-less runs falling
+        -- back to the node's text_hl.
+        local x, remaining = content.x, content.w
+        for _, run in ipairs(runs) do
+          if remaining <= 0 then
+            break
+          end
+          local chunk = crop(run.text, remaining)
+          c:text(x, y, chunk, run.hl or text_hl)
+          local cw = str_width(chunk)
+          x, remaining = x + cw, remaining - cw
+        end
+      else
+        c:text(content.x, y, crop(line, content.w), text_hl)
+      end
     end
   elseif CONTAINERS[node.kind] then
     for _, child in ipairs(node.children or {}) do

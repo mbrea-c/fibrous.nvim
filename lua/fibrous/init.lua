@@ -23,4 +23,10 @@ M.mount_window = mount.window
 -- the built-in widgets (label, paragraph, button, checkbox).
 M.ui = require("fibrous.inline.components")
 
+-- The default theme: Fibrous* highlight groups (override with :hi / a
+-- colorscheme — they are `default = true` links), style defaults per `theme`
+-- key (theme.styles) and the default border preset. Adjust before mounting to
+-- restyle every instance.
+M.theme = require("fibrous.inline.theme")
+
 return M

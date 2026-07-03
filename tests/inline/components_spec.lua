@@ -75,6 +75,24 @@ describe("inline.components", function()
     root:unmount()
   end)
 
+  it("label accepts a rich-text span list", function()
+    local function App()
+      return { comp = ui.label, props = { text = { "ab ", { "cd", hl = "Title" } } } }
+    end
+    local host = host_of(6)
+    local root = runtime.create_root(App, {}, { host = host }):render()
+
+    assert.same({ "ab cd " }, lines_of(host))
+    local found
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(host.bufnr, -1, 0, -1, { details = true })) do
+      if m[4].hl_group == "Title" then
+        found = { m[2], m[3], m[4].end_col }
+      end
+    end
+    assert.same({ 0, 3, 5 }, found)
+    root:unmount()
+  end)
+
   it("button renders [ label ] and forwards its handler and role to the node", function()
     local pressed = function() end
     local function App()
@@ -167,10 +185,101 @@ describe("inline.components", function()
     local root = runtime.create_root(App, {}, { host = host }):render()
 
     assert.same({
-      "┌──────┐",
+      "╭──────╮",
       "│[ OK ]│",
-      "└──────┘",
+      "╰──────╯",
     }, lines_of(host))
     root:unmount()
+  end)
+
+  describe("themed defaults", function()
+    -- All extmark spans of `hl` as { row, col, end_col } triples.
+    local function marks_with(bufnr, hl)
+      local out = {}
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, -1, 0, -1, { details = true })) do
+        if m[4].hl_group == hl then
+          out[#out + 1] = { m[2], m[3], m[4].end_col }
+        end
+      end
+      return out
+    end
+
+    -- Buttons sit in a col so their shrink-wrap applies (the chip hugs the widget).
+    local function col_of(child)
+      return function()
+        return { comp = ui.col, props = {}, children = { child } }
+      end
+    end
+
+    it("button gets the FibrousButton chip and FibrousButtonHover hover", function()
+      local host = host_of(8)
+      local App = col_of({ comp = ui.button, props = { label = "OK" } })
+      local root = runtime.create_root(App, {}, { host = host }):render()
+
+      assert.same({ { 0, 0, 6 } }, marks_with(host.bufnr, "FibrousButton"))
+      assert.equal("FibrousButtonHover", host.tree.children[1].style.hover.hl)
+      root:unmount()
+    end)
+
+    it("explicit props win over the theme", function()
+      local host = host_of(8)
+      local App = col_of({ comp = ui.button, props = { label = "OK", bg = "Visual", hover_hl = "Search" } })
+      local root = runtime.create_root(App, {}, { host = host }):render()
+
+      assert.same({}, marks_with(host.bufnr, "FibrousButton"))
+      assert.same({ { 0, 0, 6 } }, marks_with(host.bufnr, "Visual"))
+      assert.equal("Search", host.tree.children[1].style.hover.hl)
+      root:unmount()
+    end)
+
+    it("theme = false opts a component out of its defaults", function()
+      local function App()
+        return { comp = ui.button, props = { label = "OK", theme = false } }
+      end
+      local host = host_of(8)
+      local root = runtime.create_root(App, {}, { host = host }):render()
+
+      assert.same({}, marks_with(host.bufnr, "FibrousButton"))
+      root:unmount()
+    end)
+
+    it("checkbox marks render dim when unchecked, accented when checked", function()
+      local checked
+      local function App(ctx)
+        checked = ctx.use_state(false)
+        return { comp = ui.checkbox, props = { label = "Opt", checked = checked.get() } }
+      end
+      local host = host_of(8)
+      local root = runtime.create_root(App, {}, { host = host }):render()
+
+      assert.same({ "[ ] Opt " }, lines_of(host))
+      assert.same({ { 0, 0, 3 } }, marks_with(host.bufnr, "FibrousDim"))
+
+      checked.set(true)
+      assert.same({ "[x] Opt " }, lines_of(host))
+      assert.same({ { 0, 0, 3 } }, marks_with(host.bufnr, "FibrousCheckboxMark"))
+      root:unmount()
+    end)
+
+    it("any node can opt into a theme key by prop", function()
+      local function App()
+        return { comp = ui.label, props = { text = "hi", theme = "button" } }
+      end
+      local host = host_of(4)
+      local root = runtime.create_root(App, {}, { host = host }):render()
+
+      assert.same({ { 0, 0, 4 } }, marks_with(host.bufnr, "FibrousButton"))
+      root:unmount()
+    end)
+
+    it("an unknown theme key errors loudly", function()
+      local function App()
+        return { comp = ui.label, props = { text = "hi", theme = "buttn" } }
+      end
+      local host = host_of(4)
+      assert.has_error(function()
+        runtime.create_root(App, {}, { host = host }):render()
+      end, "buttn")
+    end)
   end)
 end)

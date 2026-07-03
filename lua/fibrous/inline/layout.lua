@@ -15,6 +15,7 @@
 -- height is app mode.
 
 local box = require("fibrous.inline.box")
+local spans = require("fibrous.inline.spans")
 local width = require("fibrous.inline.width")
 
 local M = {}
@@ -30,61 +31,126 @@ local function chars(s)
   return s:gmatch("[%z\1-\127\194-\244][\128-\191]*")
 end
 
--- Emit `word` in display-width chunks of at most `max_w`, returning the final
--- (unemitted) chunk and its width — it becomes the current line, so following
--- words can share it.
----@return string remainder, integer remainder_width
-local function hard_break(word, max_w, out)
-  local chunk, w = "", 0
+-- Emit `word` (starting at source byte `ws`) in display-width chunks of at
+-- most `max_w`, returning the final (unemitted) chunk, its width and its
+-- source offset — it becomes the current line, so following words can share
+-- it. `po` (optional) collects one piece list per emitted line, for span
+-- attribution.
+---@return string remainder, integer remainder_width, integer remainder_src
+local function hard_break(word, ws, max_w, out, po)
+  local chunk, w, cs = "", 0, ws
   for ch in chars(word) do
     local cw = char_width(ch)
     if w + cw > max_w and chunk ~= "" then
       out[#out + 1] = chunk
+      if po then
+        po[#po + 1] = { { s = cs, text = chunk } }
+      end
+      cs = cs + #chunk
       chunk, w = "", 0
     end
     chunk, w = chunk .. ch, w + cw
   end
-  return chunk, w
+  return chunk, w, cs
 end
 
 -- Greedy word-wrap of one logical line into display lines of width <= max_w.
--- Words wider than max_w are hard-broken.
-local function wrap_line(logical, max_w, out)
+-- Words wider than max_w are hard-broken. When `po` is given, every output
+-- line gets a parallel list of source pieces ({ s = byte offset within the
+-- full text, text = chunk }); `base` is the logical line's offset in it. A
+-- join space points at the first byte of the gap it replaced, so it takes
+-- that gap's span hl.
+local function wrap_line(logical, base, max_w, out, po)
   local line, lw = "", 0
+  local pieces = po and {}
   local any = false
-  for word in logical:gmatch("%S+") do
+  for ws, word in logical:gmatch("()(%S+)") do
     any = true
+    local abs = base + ws - 1
     local ww = str_width(word)
     if ww > max_w then
       if line ~= "" then
         out[#out + 1] = line
+        if po then
+          po[#po + 1] = pieces
+        end
       end
-      line, lw = hard_break(word, max_w, out)
+      local cs
+      line, lw, cs = hard_break(word, abs, max_w, out, po)
+      if po then
+        pieces = { { s = cs, text = line } }
+      end
     elseif line == "" then
       line, lw = word, ww
+      if po then
+        pieces = { { s = abs, text = word } }
+      end
     elseif lw + 1 + ww <= max_w then
+      if po then
+        local prev = pieces[#pieces]
+        pieces[#pieces + 1] = { s = prev.s + #prev.text, text = " " }
+        pieces[#pieces + 1] = { s = abs, text = word }
+      end
       line, lw = line .. " " .. word, lw + 1 + ww
     else
       out[#out + 1] = line
+      if po then
+        po[#po + 1] = pieces
+        pieces = { { s = abs, text = word } }
+      end
       line, lw = word, ww
     end
   end
   if any then
     out[#out + 1] = line
+    if po then
+      po[#po + 1] = pieces
+    end
   else
     out[#out + 1] = "" -- blank logical line = paragraph break, preserved
+    if po then
+      po[#po + 1] = {}
+    end
   end
 end
 
+-- Wrap `text`; when `ranges` is given (span-list text), also return the
+-- per-line hl runs attributing the output back to the spans.
 ---@param text string
+---@param ranges SpanRange[]|nil
 ---@param max_w integer
----@return string[]
-local function wrap_text(text, max_w)
+---@return string[] lines, SpanRun[][]|nil line_runs
+local function wrap_text(text, ranges, max_w)
   local out = {}
+  local po = ranges and {}
+  local base = 1
   for _, logical in ipairs(vim.split(text, "\n", { plain = true })) do
-    wrap_line(logical, max_w, out)
+    wrap_line(logical, base, max_w, out, po)
+    base = base + #logical + 1
   end
-  return out
+  if not po then
+    return out, nil
+  end
+  local runs = {}
+  for i, pieces in ipairs(po) do
+    runs[i] = spans.runs(pieces, ranges)
+  end
+  return out, runs
+end
+
+-- Split nowrap `text` at newlines; with `ranges`, attribute each line whole.
+---@return string[] lines, SpanRun[][]|nil line_runs
+local function split_text(text, ranges)
+  local lines = vim.split(text, "\n", { plain = true })
+  if not ranges then
+    return lines, nil
+  end
+  local runs, base = {}, 1
+  for i, l in ipairs(lines) do
+    runs[i] = spans.runs({ { s = base, text = l } }, ranges)
+    base = base + #l + 1
+  end
+  return lines, runs
 end
 
 ---@param lines string[]
@@ -104,16 +170,26 @@ end
 ---@param avail_w integer  available margin-box width
 function measure(node, avail_w)
   local props = node.props or {}
-  node.box = box.resolve(props)
+  -- A host-built node carries its state-resolved style ("Style rework") — its
+  -- box parts already went through box.lua. Raw trees resolve from props.
+  local rs = node.style_resolved
+  node.box = rs and { margin = rs.margin, padding = rs.padding, border = rs.border } or box.resolve(props)
   local r = node.box
   local content_avail = math.max(avail_w - box.h_outer(r), 1)
 
   if node.kind == "text" then
+    -- Span-list text ("Style rework" S4) flattens once; the ranges are
+    -- re-applied to every (re)wrap so node.line_runs tracks node.lines.
+    local text, ranges = node.text or "", nil
+    if type(text) == "table" then
+      text, ranges = spans.flatten(text)
+    end
+    node._text, node._ranges = text, ranges
     if props.wrap then
-      node.lines = wrap_text(node.text or "", content_avail)
+      node.lines, node.line_runs = wrap_text(text, ranges, content_avail)
       node._wrap_w = content_avail
     else
-      node.lines = vim.split(node.text or "", "\n", { plain = true })
+      node.lines, node.line_runs = split_text(text, ranges)
     end
     node.content_size = { w = max_line_width(node.lines), h = #node.lines }
   elseif CONTAINERS[node.kind] then
@@ -152,6 +228,14 @@ function measure(node, avail_w)
     h = props.height and (props.height + r.margin.top + r.margin.bottom)
       or (cs.h + box.v_outer(r)),
   }
+
+  -- A border title floors the intrinsic width so it fits between the corners;
+  -- an explicit width wins (the renderer crops the title instead).
+  local title = r.border.title
+  if title and not props.width then
+    local min_w = str_width(title.text) + r.border.sides.left + r.border.sides.right
+    node.size.w = math.max(node.size.w, min_w + r.margin.left + r.margin.right)
+  end
 end
 
 -- Top-down pass: assign the node's margin-box to (x, y, w, h) and derive its
@@ -275,7 +359,7 @@ function layout(node, x, y, w, h)
   }
 
   if node.kind == "text" and (node.props or {}).wrap and node.content.w ~= node._wrap_w then
-    node.lines = wrap_text(node.text or "", math.max(node.content.w, 1))
+    node.lines, node.line_runs = wrap_text(node._text, node._ranges, math.max(node.content.w, 1))
     node._wrap_w = node.content.w
   elseif CONTAINERS[node.kind] then
     layout_children(node)

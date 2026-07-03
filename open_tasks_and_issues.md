@@ -236,3 +236,171 @@ as a neovim UI host). We need a new UI host that truly feels "neovim-native", sa
   - fibrous-docs (`../fibrous-docs`) already runs on `fibrous.inline.mount`/`mount.window` — nothing to port there (its flake comment still says "with its vendored nui"; harmless, worth touching up on the next site change).
   - Suite after: **116 passed, 0 failed** (full run == per-file sum; first fully green suite).
 - [ ] 10. Follow-up: mouse integration; float-on-focus text inputs if scroll-swim warrants it
+
+### Style rework
+
+A principled approach to styling + state-based style overrides, resolved
+OUTSIDE the render cycle (today's hover overlay, generalized). Also: styling
+portions of a paragraph, and border-embedded titles.
+
+#### Decisions (2026-07-03)
+- **`style` prop on all components.** Base style keys live directly in the
+  table; state overrides are `_`-prefixed sibling keys:
+  ```lua
+  style = {
+    hl = "Normal",                               -- base
+    _hover = { hl = "Visual", border = "double" },
+    _focus = { border_hl = "Title" },
+  }
+  ```
+  Flat `_hover`/`_focus` keys (NOT `states = { hover = ... }` nesting — dev-ex
+  over purity; the key set is closed and unknown keys error loudly).
+- **States: `_hover` and `_focus` only** (hover = cursor inside the hit rect,
+  from interact.lua; focus = subwindow float holds the cursor, from
+  subwin.lua). `_active` is DEFERRED until it means something in a
+  cursor-driven UI (`<CR>` is instantaneous; a timed press-flash is not worth
+  inventing yet).
+- **Combination = fixed precedence + key-wise merge:** `base ← _focus ←
+  _hover`, later wins per key. No compound state keys; nested state tables
+  (`_hover = { _focus = ... }`) are the extension path if a real need appears.
+- **Resolution happens at paint time** from committed props + interaction
+  state — components never re-render (and the reconciler never runs) on a
+  state change. `inline/style.lua` is a pure module (merge, precedence, key
+  classification, validation): unit-testable without Neovim, like box.lua.
+- **Two invalidation tiers**, classified per-key at resolution:
+  1. hl-only delta → extmark overlay in the hover namespace (no relayout, no
+     repaint — today's fast path, kept as the common case);
+  2. anything structural (margin/padding/border sides/chars, width/height) →
+     relayout + repaint (~2.5ms). SUPPORTED, not just tolerated — users will
+     expect it — with a documented caveat: box-metric changes on hover shift
+     layout under the cursor and can un-hover the node (CSS hover-jank).
+- **Naming stays CSS:** `padding` / `margin` (NOT inner/outer_margin — the
+  codebase, specs and everyone's muscle memory already use the CSS names).
+  box.lua's per-side normalization (SidesSpec x/y shorthands, per-side border
+  chars/enables) is reused as-is.
+- **hl groups: three, not four.** `style.hl` (background fill over the border
+  box), `style.text_hl` (foreground), and for the border: the border spec's
+  own `hl` for the base, plus a top-level **`border_hl`** recolor key (wins
+  over the spec's hl). border_hl exists so state overrides stay atomic per
+  key — recoloring a border on focus doesn't deep-merge into the border spec,
+  and it classifies as hl-tier (fast path) while a full `border` override is
+  structural. No separate padding hl — CSS backgrounds cover the padding box
+  too; nest a container if you really want it.
+- **Existing flat props** (`hl`, `bg`, `hover_hl`, `border`, `padding`,
+  `margin`) remain as base-style sugar during migration; `hover_hl` becomes
+  sugar for `style._hover.hl`.
+- **Border titles:** `BorderSpec.title = { text, hl?, align? =
+  "left"|"center"|"right", pos? = "top"|"bottom" }`, painted over the edge by
+  render.draw_border after the edge chars. Min-width rule: a bordered node ≥
+  title width + corners. Replaces the panel example's `titled()` helper.
+- **Rich-text spans ≠ inline flow layout — split.** Committed: `paragraph`
+  (and `label`) accept span lists — `text = { { "plain " }, { "loud", hl =
+  "Title" } }` — with the wrap algorithm carrying hl attribution through to
+  per-line canvas spans. Span-level hit rects (links inside a paragraph) are
+  a later extension of the same data. A full inline flow layout (components
+  wrapping like words: line boxes, baselines) is explicitly PARKED pending a
+  concrete use case spans can't cover.
+
+#### Task breakdown
+- [x] S1. `inline/style.lua` (pure, TDD): style-table normalization, state
+  merge + precedence, structural-vs-hl key classification, unknown-key
+  validation; flat props resolve as base-style sugar (2026-07-03)
+  - `normalize(props)` once per commit: style table over flat sugar (`hl`,
+    `text_hl`, `border`, `padding`, `margin`, `hover_hl` → `_hover.hl`); base
+    box keys fully resolved via box.lua, state partials carry only the keys
+    they mention (each resolved). `apply(norm, states)` at paint time →
+    resolved style + delta tier `nil`/`"hl"`/`"structural"` (tier counts key
+    presence, not value diffs; result shares subtables — treat as immutable).
+    `border_hl` added per the decision above. Spec: `style_spec.lua` (12).
+    Suite: 129 passed, 0 failed.
+- [x] S2. State plumbing: interact (hover) + subwin (focus) feed paint-time
+  resolution; hl-only fast path via overlay extmarks; structural path =
+  relayout + repaint; port `hover_hl` users (2026-07-03)
+  - Host: weak-keyed `states` map + `set_state(fiber, name, on)` (records
+    only — callers decide when to relayout); `build_node` attaches
+    `node.style` (normalized) and `node.style_resolved` (`apply` when states
+    are active, else the shared base — no copy). layout/render read
+    `style_resolved` with a `box.resolve(props)` / `props.hl` fallback so raw
+    trees (unit tests) still work.
+  - interact.lua: hover = `style._hover` (default `{ hl = "CursorLine" }`;
+    `hover_hl` ported via normalize sugar, no call-site changes). hl tier →
+    overlay extmarks (hl/text_hl/border_hl cell-accurate, priority 4200);
+    structural tier → `set_state` + relayout, settle loop (cap 3) re-hits
+    against moved rects, `syncing` flag breaks the on_flush re-entry.
+  - subwin.lua: WinEnter/WinLeave on the float wire `_focus` (always the
+    structural path — rare); guarded on current-win identity and
+    `entry.dead`.
+  - Spec: `style_state_spec.lua` (5: border/hl base via style table, hl-only
+    hover overlay + clear, structural hover border swap + revert, focus
+    border_hl on subwin enter/leave). `style_spec.lua` grew a tier test (13).
+    Suite: 135 passed, 0 failed; bench flat (layout+paint 2.1ms, re-commit
+    7.7ms).
+- [x] S3. Border titles (BorderSpec.title + renderer + min-width rule); port
+  the panel example off `titled()` (2026-07-03)
+  - box.lua: `BorderSpec.title = { text, hl?, align? = "left", pos? = "top" }`
+    (bare string = `{ text = ... }` sugar), validated loudly. The table form
+    also gained a positional preset (`border = { "rounded", title = ... }`) —
+    without it, preset + title needed hand-written corners; side keys still
+    opt out (`= false`) or override chars.
+  - render.draw_border paints the title over its edge between the corners
+    (crop to the span, align offsets), `title.hl or` border hl (so a state's
+    `border_hl` recolors an hl-less title too). layout.measure floors the
+    intrinsic width at title + left/right border; explicit `width` wins and
+    the renderer crops instead.
+  - panel example: `titled()` label-row hack replaced by a `titled_border()`
+    border spec at the three call sites (Session height 6 → 5 — the caption
+    no longer costs a content row). Specs: box_spec +5, render_spec +4,
+    layout_spec +2. Suite: 146 passed, 0 failed.
+- [x] S4. Rich-text spans in paragraph/label: wrap carries per-span hl into
+  canvas spans; hit-map span rects deferred until links are needed
+  (2026-07-03)
+  - `text` may be a span list — bare strings or `{ "chunk", hl = ... }`
+    tables, e.g. `{ "plain ", { "loud", hl = "Title" } }`. New pure
+    `inline/spans.lua`: `flatten` → full text + byte-indexed hl ranges
+    (invalid spans error loudly), `runs` re-attributes an output line's
+    source pieces back to the ranges.
+  - layout threads source offsets through the wrap (a join space takes the
+    hl of the gap it replaced; hard-broken chunks map 1:1); `node.line_runs`
+    parallels `node.lines` and is only built for span text — plain strings
+    take the old path with no extra allocation. render paints per run,
+    hl-less runs falling back to the node's `text_hl`.
+  - Specs: spans_spec (3), layout_spec +3, render_spec +3, components_spec
+    +1. Suite: 156 passed, 0 failed; bench flat (re-commit ~8.2ms vs ~7.9
+    — the wrap loop now carries gmatch position captures).
+- [x] S5. Default theme: one module owning all default styles (hl groups AND
+  box defaults like the border preset), with an out-of-the-box look
+  (2026-07-03)
+  - Decisions (2026-07-03): new `inline/theme.lua` is the single home for
+    defaults — (1) `theme.groups`: namespaced `Fibrous*` hl groups defined
+    with `nvim_set_hl(0, ..., { default = true })` so colorschemes/users
+    override freely, re-applied on ColorScheme, `theme.apply()` invoked from
+    `host.new()`; (2) `theme.styles`: style-shaped default tables (same
+    schema as `props.style`, `_hover`/`_focus` included) keyed by a `theme`
+    node prop — components tag themselves (`theme = "button"`), users can tag
+    any node or opt out with `theme = false`, unknown keys error;
+    `style.normalize(props, defaults)` seeds them at the LOWEST precedence
+    (theme < flat props < `props.style`, key-wise); (3) `theme.border_preset`
+    names what `border = true` (and `side = true`) means — default "rounded".
+    Scattered literals move onto themed groups: render's FloatBorder →
+    FibrousBorder, interact's CursorLine hover → FibrousHover; border titles
+    default to FibrousTitle at normalization (a title no longer inherits the
+    border's hl — standard float-title look; border_hl recolors only the
+    frame).
+  - Concrete defaults: FibrousBorder→FloatBorder, FibrousTitle→FloatTitle,
+    FibrousHover→CursorLine, FibrousDim→Comment, FibrousButton→Pmenu,
+    FibrousButtonHover→PmenuSel, FibrousCheckboxMark→Special. Buttons get a
+    Pmenu chip background + PmenuSel hover; checkbox marks render as spans
+    (`[x]` accent when checked, `[ ]` dim when not); `border = true` is
+    rounded.
+  - Implementation: `theme.lua` exported as `fibrous.theme`; `theme.apply()`
+    from `host.new()` + ColorScheme autocmd. `style.normalize` grew the
+    `defaults` param (theme resolved first via the same closed-key validation
+    — bad theme entries error like bad styles); unknown `theme` keys error at
+    build_node. Panel example leans on the defaults (`border = true` prompt,
+    `FibrousDim` status, title hl dropped from `titled_border`). Specs:
+    theme_spec (4), style_spec +4, components_spec +6 (chip/hover default,
+    prop-over-theme precedence, `theme = false` opt-out, checkbox marks,
+    any-node opt-in, unknown-key error), box/render/subwin expectations moved
+    to the rounded default. Suite: 170 passed, 0 failed; bench flat
+    (re-commit ~6.9ms).
+- Parked: inline flow layout; `_active` state.

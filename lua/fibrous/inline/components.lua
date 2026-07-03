@@ -34,26 +34,41 @@ local function node_props(props, over)
   return out
 end
 
+-- `text` may be a rich-text span list ("Style rework" S4): bare strings or
+-- { "chunk", hl = ... } tables, e.g. { "plain ", { "loud", hl = "Title" } }.
+
 ---@param _ table ctx (unused)
----@param props { text: string, hl?: string, bg?: string }
+---@param props { text: string|Span[], hl?: string, bg?: string }
 function M.label(_, props)
   return { comp = M.text, props = node_props(props, { text = props.text, wrap = false }) }
 end
 
 ---@param _ table ctx (unused)
----@param props { text: string, hl?: string, bg?: string }
+---@param props { text: string|Span[], hl?: string, bg?: string }
 function M.paragraph(_, props)
   return { comp = M.text, props = node_props(props, { text = props.text, wrap = true }) }
 end
 
+-- Interactive components tag themselves with their theme.styles key (S5) —
+-- the host seeds those defaults below the instance's own props; pass
+-- `theme = false` to opt out, or another key to restyle.
+
+---@param props table
+---@param key string
+---@return string|false
+local function theme_key(props, key)
+  return props.theme == nil and key or props.theme
+end
+
 ---@param _ table ctx (unused)
----@param props { label: string, on_press?: fun(), hl?: string, bg?: string }
+---@param props { label: string, on_press?: fun(), hl?: string, bg?: string, theme?: string|false }
 function M.button(_, props)
   return {
     comp = M.text,
     props = node_props(props, {
       text = "[ " .. (props.label or "") .. " ]",
       role = "button",
+      theme = theme_key(props, "button"),
       -- Shrink-wrap by default so hover/activation hug the visible widget;
       -- pass align_self = "stretch" (or a width) for a full-width button.
       align_self = props.align_self or "start",
@@ -62,13 +77,15 @@ function M.button(_, props)
 end
 
 ---@param _ table ctx (unused)
----@param props { label: string, checked?: boolean, on_toggle?: fun(checked: boolean), hl?: string, bg?: string }
+---@param props { label: string, checked?: boolean, on_toggle?: fun(checked: boolean), hl?: string, bg?: string, theme?: string|false }
 function M.checkbox(_, props)
+  local mark = props.checked and { "[x]", hl = "FibrousCheckboxMark" } or { "[ ]", hl = "FibrousDim" }
   return {
     comp = M.text,
     props = node_props(props, {
-      text = (props.checked and "[x] " or "[ ] ") .. (props.label or ""),
+      text = { mark, " " .. (props.label or "") },
       role = "checkbox",
+      theme = theme_key(props, "checkbox"),
       align_self = props.align_self or "start",
     }),
   }
