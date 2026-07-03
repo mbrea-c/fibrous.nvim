@@ -131,6 +131,49 @@ describe("inline.subwin", function()
     handle.unmount()
   end)
 
+  it("a subwindow's own scroll and cursor survive root scrolls", function()
+    -- an editor-style raw_buffer: 12 lines shown through a 3-row window, so
+    -- it has scroll state of its own that clipping must compose with, not own
+    local buf = vim.api.nvim_create_buf(false, true)
+    local buflines = {}
+    for i = 1, 12 do
+      buflines[i] = "b" .. i
+    end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, buflines)
+    local function App()
+      local children = {
+        { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 3 } },
+      }
+      for i = 1, 6 do
+        children[#children + 1] = { comp = text, props = { text = "f" .. i } }
+      end
+      return { comp = col, props = {}, children = children }
+    end
+    local handle = mount.floating(App, {}, { width = 6, height = 4, mode = "scroll" })
+    local sub = subwin_of(handle)
+
+    -- the user scrolled inside the editor: showing lines 4-6, cursor at (5, 1)
+    vim.api.nvim_win_call(sub, function()
+      vim.fn.winrestview({ topline = 4, lnum = 5, col = 1 })
+    end)
+
+    scroll_root(handle, 2) -- clips the editor's top row
+    handle.relayout()
+    -- clip composes with the internal scroll: one MORE row scrolled out
+    assert.equal(5, vim.fn.line("w0", sub))
+    local pos = vim.api.nvim_win_get_cursor(sub)
+    assert.same({ 5, 1 }, pos) -- cursor untouched (still visible)
+
+    scroll_root(handle, 1) -- unclip
+    handle.relayout()
+    -- the user's own view is back, not reset to the top
+    assert.equal(4, vim.fn.line("w0", sub))
+    assert.same({ 5, 1 }, vim.api.nvim_win_get_cursor(sub))
+
+    handle.unmount()
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+
   it("WinScrolled resync is wired on the root float and cleared on unmount", function()
     local handle = mount.floating(ClippingApp, {}, { width = 6, height = 4, mode = "scroll" })
 

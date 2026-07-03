@@ -71,6 +71,20 @@ function M.attach(host, root_winid)
     local y1 = y0 + c.h - 1
     local vis_top, vis_bot = math.max(y0, 0), math.min(y1, view_h - 1)
 
+    -- The widget may have scroll state of its own (an editor taller than its
+    -- window). Capture its view BEFORE the resize below: shrinking a window
+    -- makes nvim re-anchor topline around the cursor, which would pollute
+    -- the reconstruction. `base` is the widget's own scroll = the displayed
+    -- topline minus the clip we last applied (entry.clip).
+    local focused = entry.winid == vim.api.nvim_get_current_win()
+    local v, base
+    if not focused then
+      vim.api.nvim_win_call(entry.winid, function()
+        v = vim.fn.winsaveview()
+      end)
+      base = math.max(v.topline - (entry.clip or 0), 1)
+    end
+
     if vis_bot < vis_top or c.w <= 0 then
       vim.api.nvim_win_set_config(entry.winid, { hide = true })
       return
@@ -86,15 +100,21 @@ function M.attach(host, root_winid)
       hide = false,
     })
     -- Clipped at the top: scroll the float's own viewport so the slice below
-    -- the occlusion edge is what shows. The cursor is dragged along (topline
-    -- must stay visible) — but NEVER while the float is focused: a resync in
-    -- the middle of typing (on_change → re-render → flush → here) would yank
-    -- the cursor to col 0 between keystrokes.
-    if entry.winid ~= vim.api.nvim_get_current_win() then
+    -- the occlusion edge is what shows — the clip COMPOSES with the widget's
+    -- own scroll (base + clipped). The rest of the view (cursor, columns) is
+    -- preserved; the cursor is only dragged as far as keeping topline valid
+    -- requires. NEVER while the float is focused: a resync in the middle of
+    -- typing (on_change → re-render → flush → here) would yank the cursor
+    -- between keystrokes.
+    if not focused then
       local clipped = vis_top - y0
+      local height = vis_bot - vis_top + 1
+      v.topline = base + clipped
+      v.lnum = math.min(math.max(v.lnum, v.topline), v.topline + height - 1)
       vim.api.nvim_win_call(entry.winid, function()
-        vim.fn.winrestview({ topline = clipped + 1, lnum = clipped + 1, col = 0, leftcol = 0 })
+        vim.fn.winrestview(v)
       end)
+      entry.clip = clipped
     end
   end
 
