@@ -1,12 +1,16 @@
--- Inline host spike demo (tracker "NEW UI HOST" tasks 4–6). A website-style
+-- Inline host spike demo (tracker "NEW UI HOST" tasks 4–7). A website-style
 -- scroll-mode UI mounted over a split pane: wrapped paragraphs, buttons and
 -- checkboxes render inline into the ONE root-float buffer, while the text
 -- inputs are real editable floats clipped against the viewport as you scroll.
 --
 -- What to evaluate:
---   * j/k/<C-d>/<C-u>/gg/G — do the input floats "swim" noticeably? WinScrolled
---     fires post-redraw, so they trail the scroll by one frame by design
---     (task 4b verdict decides whether float-on-focus gets promoted).
+--   * Move the cursor INTO an input (j/k straight through it): focus should
+--     follow — the float becomes the current window at the cell you entered.
+--     h/j/k/l at the input's edge step back out into the page; <C-w>-h/j/k/l
+--     exit from anywhere; <C-d>/<C-u> always scroll the page, never the input.
+--   * Type in the first input: the echo label above it live-updates
+--     (on_change); <CR> "submits" it (message). In the multi-line input <CR>
+--     in insert mode is a plain newline (no on_submit there).
 --   * Scroll an input half off the top/bottom edge: it should clip to its
 --     visible rows (top clip also scrolls the input's own viewport).
 --   * Scroll an input fully off: it should vanish, and return on the way back.
@@ -31,6 +35,7 @@ end
 local function App(ctx)
   local clicks = ctx.use_state(0)
   local opts = ctx.use_state({ a = false, b = true })
+  local typed = ctx.use_state("single-line input — edit me")
 
   local function toggle(key)
     return function(v)
@@ -57,8 +62,21 @@ local function App(ctx)
     { comp = ui.checkbox, props = { label = "option b", checked = opts.get().b, on_toggle = toggle("b") } },
     section(2),
     {
+      comp = ui.label,
+      props = { text = ("echo (%d chars): %s"):format(#typed.get(), typed.get()), hl = "Comment" },
+    },
+    {
       comp = ui.text_input,
-      props = { border = "rounded", value = "single-line input — edit me" },
+      props = {
+        border = "rounded",
+        value = "single-line input — edit me",
+        on_change = function(v)
+          typed.set(v)
+        end,
+        on_submit = function(v)
+          vim.notify("submitted: " .. v)
+        end,
+      },
     },
   }
   for i = 3, 5 do

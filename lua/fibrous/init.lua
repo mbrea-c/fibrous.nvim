@@ -1,28 +1,26 @@
--- fibrous public entry point. A React-like reactive UI framework for
--- Neovim. See design.md for the architecture.
+-- fibrous public entry point. A React-like reactive UI framework for Neovim,
+-- rendering component trees inline into one host-owned buffer (text +
+-- extmarks) with real editable floats only where a native buffer is needed
+-- (text_input, raw_buffer). See design.md for the architecture.
 
-local floating = require("fibrous.mount.floating")
-local window_host = require("fibrous.mount.window_host")
+local mount = require("fibrous.inline.mount")
 
 local M = {}
 
--- Mount a component as a standalone floating application (design.md §3A).
--- Returns an imperative handle for external control.
----@type fun(component: Component, props?: table): AppHandle
-M.mount = floating.mount
+-- Mount a component as a standalone floating application.
+---@type fun(component: Component, props?: table, opts?: InlineFloatingOpts): InlineAppHandle
+M.mount = mount.floating
 
--- Mount a component anchored over a native split pane (design.md §3B). Returns
--- an imperative handle (with the host pane's winid) for external control.
----@type fun(component: Component, props?: table, opts?: WindowHostOpts): WindowAppHandle
-M.mount_as_window_host = window_host.mount
+-- Mount a component over a freshly opened native split pane.
+---@type fun(component: Component, props?: table, opts?: InlineSplitOpts): InlineSplitHandle
+M.mount_split = mount.split
 
--- Built-in host primitives (popup, …) for building component trees.
-M.components = require("fibrous.components")
+-- Mount a component over an existing window.
+---@type fun(component: Component, props?: table, opts?: InlineWindowMountOpts): InlineSplitHandle
+M.mount_window = mount.window
 
--- Built-in composite hooks (built atop use_state/use_effect/use_ref). Also the
--- reference pattern for user-defined hooks: a function taking `ctx`.
-M.hooks = {
-  use_keymap = require("fibrous.hooks.use_keymap"),
-}
+-- The component set: host primitives (col/row/text/text_input/raw_buffer) and
+-- the built-in widgets (label, paragraph, button, checkbox).
+M.ui = require("fibrous.inline.components")
 
 return M

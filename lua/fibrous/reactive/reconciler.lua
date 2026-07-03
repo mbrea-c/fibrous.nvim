@@ -5,7 +5,7 @@
 --
 -- Host primitives (VNode `comp` is a `{ __host = <tag> }` descriptor) are the
 -- leaves where the VDOM meets the real UI. The reconciler stays renderer-
--- agnostic: it never touches nui directly, it just drives the injected
+-- agnostic: it never touches the UI directly, it just drives the injected
 -- HostConfig at create/update/destroy time. This keeps the layer pure and lets
 -- tests run reconciliation against a mock host. (Mirrors React's HostConfig.)
 

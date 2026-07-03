@@ -1,6 +1,6 @@
 -- The inline HostConfig (tracker "NEW UI HOST" task 3): the concrete bridge
--- the reconciler drives for the inline UI host. Where nui_host gives every
--- leaf its own window, here the WHOLE committed fiber tree becomes one layout
+-- the reconciler drives for the inline UI host. Rather than giving every
+-- leaf its own window, the WHOLE committed fiber tree becomes one layout
 -- tree (layout.compute), one painted canvas (render.paint), and one flush into
 -- a single host-owned scratch buffer — full lines plus extmark highlight
 -- spans. A mount target (inline/mount.lua) shows that buffer in the root float
@@ -27,7 +27,7 @@ local CONTAINERS = { col = true, row = true }
 -- text_input is a subwindow leaf: laid out (and its border/background painted)
 -- inline like any node, but its content box is covered by a real float that
 -- subwin.lua manages — the node carries `subwin` so the manager can find it.
-local LEAVES = { text = true, text_input = true }
+local LEAVES = { text = true, text_input = true, raw_buffer = true }
 
 -- One namespace for all inline hosts; each host only ever clears its own buffer.
 local ns = vim.api.nvim_create_namespace("fibrous_inline")
@@ -55,11 +55,21 @@ local function build_node(fiber)
     end
     return { kind = tag, props = props, children = children, fiber = fiber }
   end
-  if tag == "text_input" then
-    -- Measures as an empty text leaf (one content row unless props size it);
-    -- the float shows the real content, so nothing is painted in the content
-    -- box — but border/background still render inline in the root buffer.
-    return { kind = "text", props = props, text = "", subwin = tag, fiber = fiber }
+  if tag == "text_input" or tag == "raw_buffer" then
+    -- Subwindow leaves measure as text (one content row unless props size
+    -- them); the float shows the real content, so nothing is painted in the
+    -- content box — but border/background still render inline in the root
+    -- buffer. A raw_buffer without an explicit height sizes itself to its
+    -- buffer's line count: N-1 newlines measure as N empty rows.
+    local text = ""
+    if tag == "raw_buffer" and not props.height then
+      local count = props.bufnr
+          and vim.api.nvim_buf_is_valid(props.bufnr)
+          and vim.api.nvim_buf_line_count(props.bufnr)
+        or 1
+      text = ("\n"):rep(count - 1)
+    end
+    return { kind = "text", props = props, text = text, subwin = tag, fiber = fiber }
   end
   return { kind = "text", props = props, text = props.text or "", fiber = fiber }
 end

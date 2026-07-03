@@ -20,6 +20,7 @@ M.col = { __host = "col" }
 M.row = { __host = "row" }
 M.text = { __host = "text" }
 M.text_input = { __host = "text_input" }
+M.raw_buffer = { __host = "raw_buffer" }
 
 -- Copy `props` and overlay the node-level keys, translating hl/bg.
 ---@param props table

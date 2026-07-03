@@ -10,8 +10,8 @@
 --   make example EX=counter
 --
 -- `--clean` loads no user config/plugins/shada; `-u examples/init.lua` then puts
--- just our `lua/` (which includes the vendored nui) on package.path, matching the
--- fully-isolated environment the test suite uses.
+-- just our `lua/` on package.path, matching the fully-isolated environment the
+-- test suite uses.
 
 -- Resolve the repo root from this file's own location, so it works regardless of
 -- the directory Neovim was started in.
@@ -30,12 +30,12 @@ package.path = table.concat({
 local ORDER = { "hello", "counter", "form", "sidebar", "panel", "inline_scroll", "inline_fullscreen" }
 local DESCRIPTIONS = {
 	hello = "static floating panel",
-	counter = "use_state + use_effect, keymap-driven",
+	counter = "use_state + use_effect; buttons + external keymaps",
 	form = "uncontrolled text_input with live mirror",
-	sidebar = "native split mode (mount_as_window_host)",
-	panel = "ACP-shaped flex layout + use_keymap + custom hook",
-	inline_scroll = "NEW inline host: scroll-mode split, clipped input floats (task-4 spike)",
-	inline_fullscreen = "NEW inline host: scroll-mode split, clipped input floats (task-4 spike); fullscreen mount",
+	sidebar = "split mount (mount_split), cursor-driven selection list",
+	panel = "ACP-shaped flex layout + custom hook + checkbox plan",
+	inline_scroll = "website-style scroll mode: wrapped sections, clipped input floats, focus traversal",
+	inline_fullscreen = "the scroll-mode demo mounted fullscreen over the current window",
 }
 
 ---@type table|nil  the currently running example's handle

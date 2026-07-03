@@ -66,9 +66,8 @@ local function use_state(schedule, initial)
 end
 
 -- A stable mutable container that persists across renders without triggering
--- one when written (React's useRef). For host leaves, the bridge fills
--- `ref.current` with a { bufnr, winid, nui } handle at commit time so effects
--- can drive the real buffer imperatively.
+-- one when written (React's useRef). Hosts may fill `ref.current` on host
+-- leaves at commit time so effects can drive the real UI imperatively.
 ---@param initial? any
 ---@return Ref
 local function use_ref(initial)

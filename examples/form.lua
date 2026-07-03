@@ -1,11 +1,12 @@
--- Uncontrolled text input demo (design.md §5.3). The `text_input` buffer is the
--- source of truth while you type — keystrokes are handled natively by Neovim, no
--- per-keystroke re-render. Each edit fires `on_change`, which we mirror into
--- `use_state` so the label below updates reactively. The mount auto-focuses the
--- input and drops you into insert mode.
+-- Uncontrolled text input demo. The `text_input` float's buffer is the source
+-- of truth while you type — keystrokes are handled natively by Neovim, no
+-- per-keystroke re-render of the input itself. Each edit fires `on_change`,
+-- which we mirror into `use_state` so the panel below updates reactively;
+-- `<CR>` fires `on_submit`. Focus follows the cursor: move onto the input to
+-- edit it, h/j/k/l at its edges step back out into the page.
 
 local nr = require("fibrous")
-local el = require("fibrous.components")
+local ui = nr.ui
 local util = require("examples.util")
 
 local function Form(ctx)
@@ -16,33 +17,27 @@ local function Form(ctx)
   local last = submitted.get()
 
   return {
-    comp = el.col,
-    props = {},
+    comp = ui.col,
+    props = { padding = { x = 1 }, gap = 1 },
     children = {
+      { comp = ui.label, props = { text = "Type something (Enter submits, q quits in normal mode):" } },
       {
-        comp = el.text,
-        props = { size = 1, lines = { " Type something (Enter submits, q quits in normal mode):" } },
-      },
-      {
-        comp = el.text_input,
+        comp = ui.text_input,
         props = {
-          size = 3,
+          height = 3,
           border = "rounded",
           on_change = function(v) typed.set(v) end,
           on_submit = function(v) submitted.set(v) end,
         },
       },
       {
-        comp = el.text,
-        props = {
-          grow = 1,
-          border = "rounded",
-          lines = {
-            "  live length : " .. #value,
-            "  live text   : " .. value,
-            "",
-            "  submitted    : " .. (last and ("[" .. last .. "]") or "(none yet)"),
-          },
+        comp = ui.col,
+        props = { grow = 1, border = "rounded", padding = { x = 1 } },
+        children = {
+          { comp = ui.label, props = { text = "live length : " .. #value } },
+          { comp = ui.label, props = { text = "live text   : " .. value } },
+          { comp = ui.label, props = { text = "" } },
+          { comp = ui.label, props = { text = "submitted   : " .. (last and ("[" .. last .. "]") or "(none yet)") } },
         },
       },
     },
@@ -52,9 +47,11 @@ end
 local M = {}
 
 function M.run()
-  local handle = nr.mount(Form, {}, { size = { width = 56, height = 12 } })
+  local handle = nr.mount(Form, {}, { width = 56, height = 13 })
   handle.focus()
-  vim.cmd("startinsert")
+  -- Land the cursor inside the input's content box: focus-follows-cursor
+  -- moves us straight into the editable float.
+  vim.api.nvim_win_set_cursor(handle.winid, { 4, 3 })
   return util.bind(handle, {
     { "n", "q", function() handle.unmount() end, { desc = "close example" } },
   })

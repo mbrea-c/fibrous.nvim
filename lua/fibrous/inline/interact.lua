@@ -14,26 +14,9 @@
 local M = {}
 
 local width = require("fibrous.inline.width")
-local char_width, str_width = width.char, width.str
+local str_width, cell_to_byte = width.str, width.cell_to_byte
 
 local ns_hover = vim.api.nvim_create_namespace("fibrous_inline_hover")
-
--- Byte offset of display-cell column `cell` in `line` (for extmark cols; the
--- canvas guarantees one char per cell, wide chars head + "" continuation).
----@param line string
----@param cell integer
----@return integer
-local function cell_to_byte(line, cell)
-  local w, b = 0, 0
-  for ch in line:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-    if w >= cell then
-      break
-    end
-    b = b + #ch
-    w = w + char_width(ch)
-  end
-  return b
-end
 
 -- The deepest node at cell (x, y) carrying a role. Later children paint over
 -- earlier ones, so they are tried in reverse; a role-less subtree falls

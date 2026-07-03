@@ -128,6 +128,19 @@ describe("inline.mount", function()
     assert.equal(0, #inline_autocmds("WinResized"))
   end)
 
+  it("split: :q on the root float tears down the app AND its pane", function()
+    local wins_before = #vim.api.nvim_list_wins()
+    local handle = mount.split(Hello, {}, {})
+
+    vim.api.nvim_win_close(handle.winid, true) -- what :q on the float does
+    vim.wait(500, function()
+      return not vim.api.nvim_buf_is_valid(handle.bufnr)
+    end, 10)
+
+    assert.is_false(vim.api.nvim_win_is_valid(handle.host_winid))
+    assert.equal(wins_before, #vim.api.nvim_list_wins())
+  end)
+
   it("set_props re-renders through the mounted root", function()
     local function App(_, props)
       return { comp = text, props = { text = props.msg } }

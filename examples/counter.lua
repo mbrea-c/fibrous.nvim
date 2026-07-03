@@ -1,11 +1,13 @@
 -- Reactivity demo: `use_state` drives the rendered count, and `use_effect` logs
--- each change as a side effect. External keymaps mutate the state through an
--- imperative actions table the component publishes (via a prop) once at mount —
--- the state handle closes over a stable hook slot, so the captured inc/dec/reset
--- stay live across every re-render.
+-- each change as a side effect. State is mutated two ways:
+--   * cursor interaction — hover a button and press <CR>/<Space>;
+--   * external keymaps (+/-/r) driving an imperative actions table the
+--     component publishes (via a prop) once at mount — the state handle closes
+--     over a stable hook slot, so the captured inc/dec/reset stay live across
+--     every re-render.
 
 local nr = require("fibrous")
-local el = require("fibrous.components")
+local ui = nr.ui
 local util = require("examples.util")
 
 local function Counter(ctx, props)
@@ -29,22 +31,20 @@ local function Counter(ctx, props)
   end, { n })
 
   return {
-    comp = el.col,
-    props = {},
+    comp = ui.col,
+    props = { border = "rounded", padding = { x = 2, y = 1 }, gap = 1 },
     children = {
+      { comp = ui.label, props = { text = "Count: " .. n, hl = "Title" } },
       {
-        comp = el.text,
-        props = {
-          border = "rounded",
-          lines = {
-            "",
-            "        Count: " .. n,
-            "",
-            "   +  increment     -  decrement",
-            "   r  reset          q  quit",
-          },
+        comp = ui.row,
+        props = { gap = 2 },
+        children = {
+          { comp = ui.button, props = { label = "+1", on_press = function() count.set(count.get() + 1) end } },
+          { comp = ui.button, props = { label = "-1", on_press = function() count.set(count.get() - 1) end } },
+          { comp = ui.button, props = { label = "reset", on_press = function() count.set(0) end } },
         },
       },
+      { comp = ui.label, props = { text = "<CR>/<Space> press · or +/-/r · q quits", hl = "Comment" } },
     },
   }
 end
@@ -53,7 +53,8 @@ local M = {}
 
 function M.run()
   local actions = { current = {} }
-  local handle = nr.mount(Counter, { actions = actions }, { size = { width = 42, height = 8 } })
+  local handle = nr.mount(Counter, { actions = actions }, { width = 44, height = 7 })
+  handle.focus()
   return util.bind(handle, {
     { "n", "+", function() actions.current.inc() end, { desc = "increment" } },
     { "n", "-", function() actions.current.dec() end, { desc = "decrement" } },

@@ -36,4 +36,21 @@ function M.str(s)
   return api_strwidth(s)
 end
 
+-- Byte offset of display-cell column `cell` in `line` (extmark cols, cursor
+-- cols). Shared by the hit-map (interact) and subwindow focus traversal.
+---@param line string
+---@param cell integer
+---@return integer
+function M.cell_to_byte(line, cell)
+  local w, b = 0, 0
+  for ch in line:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+    if w >= cell then
+      break
+    end
+    b = b + #ch
+    w = w + M.char(ch)
+  end
+  return b
+end
+
 return M

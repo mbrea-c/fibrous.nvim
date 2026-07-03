@@ -1,31 +1,21 @@
 -- The smallest possible app: a static floating panel. Demonstrates a function
--- component returning a `col` container with a single bordered `text` leaf, and
--- the floating mount target (design.md §3A).
+-- component returning a bordered `col` of labels, and the floating mount
+-- target.
 
 local nr = require("fibrous")
-local el = require("fibrous.components")
+local ui = nr.ui
 local util = require("examples.util")
 
 local function Hello()
   return {
-    comp = el.col,
-    props = {},
+    comp = ui.col,
+    props = { border = "rounded", padding = { x = 3, y = 1 } },
     children = {
-      {
-        comp = el.text,
-        props = {
-          border = "rounded",
-          lines = {
-            "",
-            "   Hello from fibrous! ",
-            "",
-            "   A React-like reactive UI",
-            "   framework for Neovim.",
-            "",
-            "   Press  q  to close.",
-          },
-        },
-      },
+      { comp = ui.label, props = { text = "Hello from fibrous!", hl = "Title" } },
+      { comp = ui.label, props = { text = "" } },
+      { comp = ui.paragraph, props = { text = "A React-like reactive UI framework for Neovim." } },
+      { comp = ui.label, props = { text = "" } },
+      { comp = ui.label, props = { text = "Press  q  to close.", hl = "Comment" } },
     },
   }
 end
@@ -33,7 +23,8 @@ end
 local M = {}
 
 function M.run()
-  local handle = nr.mount(Hello, {}, { size = { width = 40, height = 10 } })
+  local handle = nr.mount(Hello, {}, { width = 40, height = 9 })
+  handle.focus()
   return util.bind(handle, {
     { "n", "q", function() handle.unmount() end, { desc = "close example" } },
   })

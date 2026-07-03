@@ -1,57 +1,56 @@
--- Native split mode demo (design.md §3B). The app is anchored over a real
--- vertical split pane via `mount_as_window_host`: it renders as floating overlays
--- bound `relative="win"` to the pane, the geometry-sync engine keeps them aligned
--- when you resize with `<C-w>>` / `<C-w><`, the <C-w> shims keep focus from
--- stranding inside an overlay, and closing the pane (`:q`) auto-unmounts the app.
+-- Native split mode demo. The app mounts over a real vertical split pane via
+-- `mount_split`: the inline canvas covers the pane edge to edge, resizing with
+-- `<C-w>>` / `<C-w><` rewraps and re-anchors, and closing the pane (`:q`)
+-- auto-unmounts the app.
+--
+-- Selection is cursor-driven, the inline-host way: j/k are plain cursor
+-- motions, the hover bar tracks the row you are on, and <CR> selects it (each
+-- row is an interactive node with a role + on_press).
 
 local nr = require("fibrous")
-local el = require("fibrous.components")
+local ui = nr.ui
 local util = require("examples.util")
 
 local function Sidebar(ctx, props)
   local selected = ctx.use_state(1)
-
-  ctx.use_effect(function()
-    props.actions.current = {
-      next = function() selected.set(math.min(selected.get() + 1, #props.items)) end,
-      prev = function() selected.set(math.max(selected.get() - 1, 1)) end,
-    }
-  end, {})
-
   local cur = selected.get()
-  local lines = { "", "  Project Explorer", "  ─────────────────" }
+
+  local children = {
+    { comp = ui.label, props = { text = "Project Explorer", hl = "Title" } },
+    { comp = ui.label, props = { text = "" } },
+  }
   for i, item in ipairs(props.items) do
-    lines[#lines + 1] = (i == cur and "  ▸ " or "    ") .. item
+    children[#children + 1] = {
+      comp = ui.label,
+      props = {
+        text = (i == cur and "▸ " or "  ") .. item,
+        hl = i == cur and "Directory" or nil,
+        -- a plain label made interactive: the hit-map only needs a role
+        role = "button",
+        on_press = function() selected.set(i) end,
+        hover_hl = "Visual",
+        align_self = "start",
+      },
+    }
   end
-  vim.list_extend(lines, {
-    "",
-    "  ─────────────────",
-    "  j/k  move   q  close",
-    "  <C-w>> / <C-w><  resize",
+  vim.list_extend(children, {
+    { comp = ui.label, props = { text = "" } },
+    { comp = ui.label, props = { text = "j/k move · <CR> select · q close", hl = "Comment" } },
+    { comp = ui.label, props = { text = "<C-w>> / <C-w><  resize", hl = "Comment" } },
   })
 
-  return {
-    comp = el.col,
-    props = {},
-    children = {
-      { comp = el.text, props = { lines = lines } },
-    },
-  }
+  return { comp = ui.col, props = { padding = { x = 1, y = 1 } }, children = children }
 end
 
 local M = {}
 
 function M.run()
-  local items = { "init.lua", "reconciler.lua", "nui_host.lua", "floating.lua", "window_host.lua" }
-  local actions = { current = {} }
-  local handle = nr.mount_as_window_host(Sidebar, { items = items, actions = actions }, {
+  local items = { "init.lua", "reconciler.lua", "layout.lua", "canvas.lua", "subwin.lua" }
+  local handle = nr.mount_split(Sidebar, { items = items }, {
     split = { direction = "vertical", position = "left", size = 36 },
-    behavior = { intercept_wincmd = true, auto_unmount = true },
   })
   handle.focus()
   return util.bind(handle, {
-    { "n", "j", function() actions.current.next() end, { desc = "next item" } },
-    { "n", "k", function() actions.current.prev() end, { desc = "prev item" } },
     { "n", "q", function() handle.unmount() end, { desc = "close example" } },
   })
 end

@@ -1,9 +1,19 @@
-# Nui-Reactive: A React-like UI Framework for Neovim
+# fibrous: A React-like UI Framework for Neovim
 
-A declarative, component-based, component-scoped UI framework built on top of
-`nui.nvim`. It brings the mental model of React (VDOM, Hooks, Subtree
-Reconciliation, Top-Down Data Flow) to Neovim plugin development, abstracting
-away manual buffer manipulation, layout calculations, and window lifecycles.
+> **Status (2026-07-03):** this is the ORIGINAL design document. The reactive
+> layer (§1, §2: fibers, hooks, reconciliation) is accurate and shipped as
+> described. The host layer it describes (nui.nvim popups, one window per
+> leaf) has since been **replaced by the inline host** — component trees now
+> render as text + extmarks into one unmodifiable buffer with a CSS-like box
+> model, cursor-driven interaction, and editable floats only for text inputs /
+> raw buffers (`lua/fibrous/inline/`). The vendored nui and the nui host are
+> deleted. See the "NEW UI HOST" section of `open_tasks_and_issues.md` for the
+> inline host's design decisions until this document is rewritten.
+
+A declarative, component-based, component-scoped UI framework. It brings the
+mental model of React (VDOM, Hooks, Subtree Reconciliation, Top-Down Data
+Flow) to Neovim plugin development, abstracting away manual buffer
+manipulation, layout calculations, and window lifecycles.
 
 ______________________________________________________________________
 

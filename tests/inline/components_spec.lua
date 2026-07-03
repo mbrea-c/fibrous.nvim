@@ -33,6 +33,7 @@ describe("inline.components", function()
     assert.equal("row", ui.row.__host)
     assert.equal("text", ui.text.__host)
     assert.equal("text_input", ui.text_input.__host)
+    assert.equal("raw_buffer", ui.raw_buffer.__host)
   end)
 
   it("label renders its text without wrapping; hl is the foreground", function()

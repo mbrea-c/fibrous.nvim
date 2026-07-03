@@ -1,8 +1,10 @@
 # fibrous.nvim
 
-A declarative, component-based, React-like UI framework for Neovim plugins,
-built on top of [`nui.nvim`](https://github.com/MunifTanjim/nui.nvim). It brings
-a VDOM, hooks, and subtree reconciliation to Neovim UI development. See
+A declarative, component-based, React-like UI framework for Neovim plugins. It
+brings a VDOM, hooks, and subtree reconciliation to Neovim UI development, and
+renders component trees inline: text + extmarks in one unmodifiable buffer,
+with a CSS-like box model, cursor-driven hover/activation, and real editable
+floats only where a native buffer is needed (text inputs, raw buffers). See
 [`design.md`](design.md) for the architecture.
 
 ## Examples

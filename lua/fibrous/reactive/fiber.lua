@@ -24,7 +24,6 @@
 ---@field children_specs? VNode[]    child VNode specs (host primitives) to reconcile
 ---@field child_fibers? Fiber[]      reconciled child fibers, indexed positionally
 ---@field instance? any              backing host instance (host fibers only)
----@field scoped_keymaps? table[]    keymap records (use_keymap) the host binds across this fiber's subtree
 local Fiber = {}
 Fiber.__index = Fiber
 

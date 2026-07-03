@@ -1,5 +1,5 @@
 -- The inline HostConfig (tracker "NEW UI HOST" task 3): the bridge the
--- reconciler drives. Unlike nui_host (one window per leaf), the whole committed
+-- reconciler drives. Rather than a window per leaf, the whole committed
 -- fiber tree is laid out (layout.compute), painted (render.paint) and flushed
 -- into ONE host-owned scratch buffer as full lines + extmark highlight spans.
 -- The buffer is unmodifiable; a mount target shows it in the root float.
