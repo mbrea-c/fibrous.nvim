@@ -14,6 +14,11 @@
 --                            commit pipeline (build + layout + paint + write) —
 --                            the damage-tracking target
 --   * scroll tick            WinScrolled → subwin manager resync only
+--   * animation              CPU consumed by ONE live ui.animation embedded
+--                            in the page over a real second of event loop —
+--                            measured against the idle-loop baseline, once
+--                            with a moving frame (every tick commits) and
+--                            once with a static one (every tick diff-skips)
 --
 -- N counts SECTIONS; each section is col{ label, row{ button, checkbox },
 -- paragraph }, i.e. ~6 nodes — so N=100 is a ~600-node tree.
@@ -180,6 +185,60 @@ do
 		setter.set(i)
 	end)
 	root:unmount()
+end
+
+---------------------------------------------------------------------------
+-- Animation: CPU per wall-clock second of one live ui.animation in the page.
+-- Async by nature (a uv timer drives it), so instead of ms/op this measures
+-- os.clock() CPU over vim.wait(1000) and counts the buffer commits. The
+-- moving frame is the bouncing-dot demo (dot crosses cells faster than the
+-- tick rate, so ~every tick commits a one-row splice); the static frame
+-- exercises the diff-skip (value() + deep_equal per tick, zero commits).
+---------------------------------------------------------------------------
+
+do
+	local WIDTH = 30
+	local function bouncing(progress)
+		local t = progress < 0.5 and progress * 2 or 2 - progress * 2
+		local pos = math.floor(t * (WIDTH - 1) + 0.5)
+		return { string.rep(".", pos), { "o", hl = "Title" }, string.rep(".", WIDTH - 1 - pos) }
+	end
+	local function static()
+		return { string.rep(".", WIDTH - 1), { "o", hl = "Title" } }
+	end
+
+	local function cpu_second(fn)
+		collectgarbage("collect")
+		local t0 = os.clock()
+		vim.wait(1000, fn or function()
+			return false
+		end, 50)
+		return (os.clock() - t0) * 1000
+	end
+
+	local function measure(label, value)
+		local host = fixed_host(60)
+		local function App()
+			local children = {}
+			for i = 1, N do
+				children[i] = section(i)
+			end
+			children[#children + 1] = { comp = ui.animation, props = { duration = 1.3, value = value } }
+			return { comp = ui.col, props = { gap = 1 }, children = children }
+		end
+		local root = runtime.create_root(App, {}, { host = host })
+		root:render()
+		local tick0 = vim.api.nvim_buf_get_changedtick(host.bufnr)
+		local cpu = cpu_second()
+		local commits = vim.api.nvim_buf_get_changedtick(host.bufnr) - tick0
+		root:unmount()
+		io.write(("%-52s %10.3f ms CPU/s (%d commits)\n"):format(label, cpu, commits))
+	end
+
+	local idle = cpu_second()
+	io.write(("%-52s %10.3f ms CPU/s\n"):format("idle event loop (animation baseline)", idle))
+	measure("animation 30fps, moving frame (bouncing dot)", bouncing)
+	measure("animation 30fps, static frame (diff-skipped)", static)
 end
 
 ---------------------------------------------------------------------------

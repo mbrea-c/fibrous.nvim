@@ -467,10 +467,28 @@ Incremental build plan (each step has a runnable smoke check under headless
     against a one-char sentinel (so backspace always has something to delete)
     and forwarded as nvim_input text (`<` → `<lt>`, newlines → `<CR>`). On
     coarse-pointer devices focus (= keyboard visibility) follows the guest
-    mode via a renderer.onMode hook: insert/cmdline/replace/terminal summon
-    it, normal dismisses it. Viewport meta `interactive-widget=resizes-content`
-    \+ `100dvh` sizing means the keyboard shrinks the viewport and the grid
-    re-fits above it through the normal resize path.
+    mode via a renderer.onMode hook. Viewport meta
+    `interactive-widget=resizes-content` \+ `100dvh` sizing means the keyboard
+    shrinks the viewport and the grid re-fits above it through the normal
+    resize path.
+  - **Android OSK fix** (2026-07-04, real-device bug report): the original
+    mode-following was broken two ways. (1) Its summon regex included
+    `replace`, but nvim's ui_flush fakes `mode_change("replace")` whenever the
+    cursor sits behind a higher-zindex float (the same artifact cursorshim.lua
+    counters in fibrous-docs) — scrolling the float-heavy fibrous UI emitted
+    replace/normal bursts, and since Android only raises the OSK on focus
+    within the transient-activation window after a touch, the keyboard
+    appeared erratically mid-scroll and flickered. (2) Chicken-and-egg: taps
+    leave the guest in normal mode and you can't press `i` without a keyboard,
+    so the OSK never came up on purpose. Fix: focus policy extracted into
+    DOM-free `web/keyboard.js` (node-tested, 9 specs, in
+    checks.web-mouse-unit) — only `insert|cmdline|terminal` summon, only
+    `normal|visual|operator` dismiss (debounced 200ms), everything else
+    (crucially `replace`) is NEUTRAL; a visible ⌨ button (`#kbdbtn`,
+    coarse-pointer only) summons inside a real tap gesture and PINS the
+    keyboard through normal-mode navigation until tapped again; canvas taps
+    re-summon when the guest is in an insert-ish mode (recovers from
+    back-button dismissal). Still needs a real-device pass.
   - **Momentum/fling scrolling**: in the DOM-free mouse adapter (TDD'd, 13/13
     node tests): touchmove samples a smoothed velocity; releasing above 0.25
     px/ms keeps scrolling with v(t) = v₀·e^(−t/325ms) integrated in closed
@@ -1444,3 +1462,11 @@ shrinking to nothing on narrow (mobile) viewports.
   (duration 1.3s triangle wave) + a slow fps=4 percentage readout; prose
   explains the frame-diff + scoped-commit economics. home_spec TITLES updated;
   docs suite 7/7.
+- [x] L3. Bench scenario "animation": async by nature, so instead of ms/op it
+  measures os.clock() CPU over vim.wait(1000) with ONE live animation in the
+  N=100 page, against an idle-loop baseline. Native numbers: idle loop ~0.5
+  ms CPU/s; bouncing dot at 30fps ~21 ms CPU/s at 29 commits/s (~0.7 ms per
+  committed frame — span flatten + run attribution + scoped commit + timer
+  dispatch, vs 0.12 ms for the bare label-text scoped update); static frame
+  ~2.5 ms CPU/s at 0 commits — the diff-skip saves ~18 ms/s, leaving only
+  30×(value() + deep_equal + dispatch).
