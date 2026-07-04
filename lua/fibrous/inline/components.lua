@@ -49,6 +49,73 @@ function M.paragraph(_, props)
   return { comp = M.text, props = node_props(props, { text = props.text, wrap = true }) }
 end
 
+-- Time-driven text. `value(progress)` maps progress in [0, 1) — elapsed time
+-- modulo `duration`, i.e. an implicit loop — onto the text/spans to show
+-- (bounce = a triangle wave inside value). A uv timer ticks at `fps` and the
+-- frame commits ONLY when the rendered value changed, so buffer writes scale
+-- with visible motion, not the frame rate — and each commit re-renders just
+-- this leaf, the memoized fast path. Frame 0 renders synchronously at mount.
+-- `play = false` freezes at the current frame; changing duration/fps/play
+-- re-arms the timer (progress restarts at 0). The latest `value` closure is
+-- kept in a ref, so defining it inline never re-arms anything.
+---@param ctx table
+---@param props { duration: number, value: fun(progress: number): string|Span[], fps?: number, play?: boolean, style?: table, theme?: string|false }
+function M.animation(ctx, props)
+  if type(props.duration) ~= "number" or props.duration <= 0 then
+    error("fibrous: animation needs a positive `duration` (seconds)")
+  end
+  if type(props.value) ~= "function" then
+    error("fibrous: animation needs a `value(progress)` function")
+  end
+  local frame = ctx.use_state(nil)
+  local vf = ctx.use_ref()
+  vf.current = props.value
+
+  ctx.use_effect(function()
+    if props.play == false then
+      return
+    end
+    local duration = props.duration
+    local interval = math.max(math.floor(1000 / (props.fps or 30)), 1)
+    local start = vim.uv.now()
+    local timer = vim.uv.new_timer()
+    local stopped = false
+    timer:start(
+      interval,
+      interval,
+      vim.schedule_wrap(function()
+        -- a fire can be in flight when the cleanup runs: never touch the
+        -- closed timer or set state on the unmounted fiber
+        if stopped then
+          return
+        end
+        local progress = ((vim.uv.now() - start) / 1000 % duration) / duration
+        local ok, next_frame = pcall(vf.current, progress)
+        if not ok then
+          stopped = true
+          timer:stop()
+          vim.notify("fibrous: animation value() failed: " .. tostring(next_frame), vim.log.levels.ERROR)
+          return
+        end
+        if not vim.deep_equal(next_frame, frame.get()) then
+          frame.set(next_frame)
+        end
+      end)
+    )
+    return function()
+      stopped = true
+      timer:stop()
+      timer:close()
+    end
+  end, { props.duration, props.fps or 30, props.play ~= false })
+
+  local current = frame.get()
+  if current == nil then
+    current = props.value(0)
+  end
+  return { comp = M.text, props = node_props(props, { text = current, wrap = false }) }
+end
+
 -- Interactive components tag themselves with their theme.styles key (S5) —
 -- the host seeds those defaults below the instance's own props; pass
 -- `theme = false` to opt out, or another key to restyle.

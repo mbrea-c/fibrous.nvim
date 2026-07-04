@@ -1417,3 +1417,30 @@ shrinking to nothing on narrow (mobile) viewports.
     modules + the playground demo code strings + the "boxes" demo prose (the
     demos now TEACH the style vocabulary). Docs suite 7/7; homepage bench
     unchanged (relayout 0.05ms — memo intact).
+
+### ui.animation component (2026-07-05)
+
+- [x] L1. **`ui.animation`** (user-proposed API, kept as designed):
+  `{ duration, value = fun(progress): string|Span[], fps? = 30, play? }`.
+  progress lives in [0, 1) — elapsed time modulo duration, an implicit loop
+  (bounce = a triangle wave inside value). Design points:
+  - Component, not hook: every frame is a subtree-scoped leaf update — the
+    memoized fast path (~0.1ms native), instead of re-rendering the consumer.
+  - Frame 0 renders synchronously at mount (deterministic, no timer needed).
+  - The uv timer calls value() each tick but commits ONLY when the returned
+    spans differ (vim.deep_equal) — buffer writes scale with visible motion,
+    not fps; a dot sitting between cell boundaries costs nothing.
+  - The latest value closure lives in a use_ref, so inline closures don't
+    re-arm the timer; deps (duration, fps normalized, play) do re-arm it.
+  - Cleanup stops+closes the timer with a `stopped` guard (a scheduled fire
+    can be in flight at unmount); value() errors inside the timer stop it and
+    vim.notify once instead of spamming at 30fps (mount-time errors propagate
+    normally, so error boundaries catch them).
+  - TDD: tests/inline/animation_spec.lua, 7 specs (sync frame 0, advance +
+    loop wrap, same-value ticks commit nothing via changedtick, unmount stops
+    the timer, play = false freezes, style passthrough, arg validation).
+    Suite 254/0.
+- [x] L2. Docs playground section "Animations": the bouncing-dot bar
+  (duration 1.3s triangle wave) + a slow fps=4 percentage readout; prose
+  explains the frame-diff + scoped-commit economics. home_spec TITLES updated;
+  docs suite 7/7.
