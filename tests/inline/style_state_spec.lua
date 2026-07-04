@@ -134,7 +134,7 @@ describe("inline.style focus state", function()
         props = {},
         children = {
           { comp = ui.label, props = { text = "head" } },
-          { comp = ui.text_input, props = { border = true } },
+          { comp = ui.text_input, props = { style = { border = true } } },
         },
       }
     end
@@ -161,7 +161,7 @@ describe("inline.style focus state", function()
         props = {},
         children = {
           { comp = ui.label, props = { text = "head" } },
-          { comp = ui.raw_buffer, props = { bufnr = buf, border = true } },
+          { comp = ui.raw_buffer, props = { bufnr = buf, style = { border = true } } },
         },
       }
     end
@@ -187,7 +187,7 @@ describe("inline.style focus state", function()
         props = {},
         children = {
           { comp = ui.label, props = { text = "head" } },
-          { comp = ui.text_input, props = { border = true, value = "abc" } },
+          { comp = ui.text_input, props = { style = { border = true }, value = "abc" } },
         },
       }
     end

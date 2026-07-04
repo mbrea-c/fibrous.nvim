@@ -52,13 +52,13 @@ local function Policies(ctx)
       comp = ui.col,
       props = { grow = 1, gap = 1 },
       children = {
-        { comp = ui.label, props = { text = label, hl = "Title" } },
+        { comp = ui.label, props = { text = label, style = { text_hl = "Title" } } },
         {
           -- wrap is the raw_buffer default — the long first line shows the
           -- mirror reproducing the float's line wrapping. The border takes
           -- the themed focus accent while the widget is being edited.
           comp = ui.raw_buffer,
-          props = { bufnr = bufnr, border = true, render = render, height = #LINES + 3 },
+          props = { bufnr = bufnr, style = { border = true }, render = render, height = #LINES + 3 },
         },
       },
     }
@@ -66,14 +66,14 @@ local function Policies(ctx)
 
   return {
     comp = ui.col,
-    props = { padding = { x = 1 }, gap = 1 },
+    props = { style = { padding = { x = 1 } }, gap = 1 },
     children = {
       {
         comp = ui.paragraph,
         props = {
           text = "hjkl glides over both editors. <CR> or i enters one; "
             .. "hjkl at its edges steps back out. q quits.",
-          hl = "Comment",
+          style = { text_hl = "Comment" },
         },
       },
       {

@@ -1,10 +1,10 @@
 -- The inline component primitives (tracker "NEW UI HOST" task 5): thin
 -- function components over the `text` host leaf, so the reconciler and host
--- stay unchanged. Public prop surface: `hl` is the FOREGROUND (mapped to the
--- node's text_hl), `bg` the background fill (mapped to the node's hl); box and
--- layout props pass straight through. Interactive components forward their
--- handlers and a `role` onto the node props — that is what the task-6 hit-map
--- reads off the laid-out tree.
+-- stay unchanged. ALL styling lives in props.style (node vocabulary:
+-- `text_hl` = foreground, `hl` = fill; the removed pre-style-table aliases
+-- error loudly). Layout props pass straight through. Interactive components
+-- forward their handlers and a `role` onto the node props — that is what the
+-- task-6 hit-map reads off the laid-out tree.
 --
 --   label     nowrap text
 --   paragraph wrapped text
@@ -36,9 +36,9 @@ describe("inline.components", function()
     assert.equal("raw_buffer", ui.raw_buffer.__host)
   end)
 
-  it("label renders its text without wrapping; hl is the foreground", function()
+  it("label renders its text without wrapping; style.text_hl is the foreground", function()
     local function App()
-      return { comp = ui.label, props = { text = "Name:", hl = "Title" } }
+      return { comp = ui.label, props = { text = "Name:", style = { text_hl = "Title" } } }
     end
     local host = host_of(8)
     local root = runtime.create_root(App, {}, { host = host }):render()
@@ -51,9 +51,9 @@ describe("inline.components", function()
     root:unmount()
   end)
 
-  it("label bg fills the whole rect as background", function()
+  it("label style.hl fills the whole rect as background", function()
     local function App()
-      return { comp = ui.label, props = { text = "hi", bg = "Visual" } }
+      return { comp = ui.label, props = { text = "hi", style = { hl = "Visual" } } }
     end
     local host = host_of(6)
     local root = runtime.create_root(App, {}, { host = host }):render()
@@ -62,6 +62,22 @@ describe("inline.components", function()
     assert.equal("Visual", mark[4].hl_group)
     assert.equal(6, mark[4].end_col)
     root:unmount()
+  end)
+
+  it("the removed flat color props error loudly on components too", function()
+    for _, props in ipairs({
+      { text = "x", hl = "Title" },
+      { text = "x", bg = "Visual" },
+      { text = "x", hover_hl = "Search" },
+    }) do
+      local function App()
+        return { comp = ui.label, props = props }
+      end
+      local host = host_of(4)
+      assert.has_error(function()
+        runtime.create_root(App, {}, { host = host }):render()
+      end, "removed")
+    end
   end)
 
   it("paragraph wraps to the available width", function()
@@ -183,7 +199,7 @@ describe("inline.components", function()
     -- an explicit border REPLACES the chip's bracket border (box keys are
     -- atomic): border = true means a real themed box, not brackets in a box
     local function App()
-      return { comp = ui.button, props = { label = "OK", border = true } }
+      return { comp = ui.button, props = { label = "OK", style = { border = true } } }
     end
     local host = host_of(8)
     local root = runtime.create_root(App, {}, { host = host }):render()
@@ -232,7 +248,7 @@ describe("inline.components", function()
       local host = host_of(8)
       local App = col_of({
         comp = ui.button,
-        props = { label = "OK", border = { left = "(", right = ")", hl = false } },
+        props = { label = "OK", style = { border = { left = "(", right = ")", hl = false } } },
       })
       local root = runtime.create_root(App, {}, { host = host }):render()
 
@@ -242,7 +258,8 @@ describe("inline.components", function()
 
     it("explicit props win over the theme", function()
       local host = host_of(8)
-      local App = col_of({ comp = ui.button, props = { label = "OK", bg = "Visual", hover_hl = "Search" } })
+      local App =
+        col_of({ comp = ui.button, props = { label = "OK", style = { hl = "Visual", _hover = { hl = "Search" } } } })
       local root = runtime.create_root(App, {}, { host = host }):render()
 
       assert.same({}, marks_with(host.bufnr, "FibrousButton"))

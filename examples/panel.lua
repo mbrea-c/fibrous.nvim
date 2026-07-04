@@ -62,7 +62,7 @@ local function Plan(_, props)
   end
   return {
     comp = ui.col,
-    props = { grow = 1, padding = { x = 1 }, border = titled_border("Plan (<Space> toggles)") },
+    props = { grow = 1, style = { padding = { x = 1 }, border = titled_border("Plan (<Space> toggles)") } },
     children = children,
   }
 end
@@ -97,17 +97,17 @@ local function Panel(ctx, props)
         children = {
           {
             comp = ui.col,
-            props = { grow = 1, padding = { x = 1 }, border = titled_border("Conversation") },
+            props = { grow = 1, style = { padding = { x = 1 }, border = titled_border("Conversation") } },
             children = {
               { comp = ui.label, props = { text = table.concat(transcript.get(), "\n") } },
             },
           },
-          { comp = ui.label, props = { text = status, hl = "FibrousDim" } },
+          { comp = ui.label, props = { text = status, style = { text_hl = "FibrousDim" } } },
           {
             comp = ui.text_input,
             props = {
               height = 3,
-              border = true,
+              style = { border = true },
               on_change = function(v) draft.set(#v) end,
               on_submit = submit,
             },
@@ -120,7 +120,7 @@ local function Panel(ctx, props)
         children = {
           {
             comp = ui.col,
-            props = { height = 5, padding = { x = 1 }, border = titled_border("Session") },
+            props = { height = 5, style = { padding = { x = 1 }, border = titled_border("Session") } },
             children = {
               { comp = ui.label, props = { text = "model   claude-opus-4-8" } },
               { comp = ui.label, props = { text = "cwd     ~/src/fibrous" } },

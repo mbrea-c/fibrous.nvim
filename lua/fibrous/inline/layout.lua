@@ -184,7 +184,13 @@ function measure(node, avail_w)
 	local rs = node.style_resolved
 	node.box = rs and { margin = rs.margin, padding = rs.padding, border = rs.border } or box.resolve(props)
 	local r = node.box
-	local content_avail = math.max(avail_w - box.h_outer(r), 1)
+	-- min/max_width/height are border-box bounds, like width/height. max_width
+	-- also tightens the measuring constraint, so wrapping text reflows under it.
+	local eff_avail = avail_w
+	if props.max_width then
+		eff_avail = math.min(eff_avail, props.max_width + r.margin.left + r.margin.right)
+	end
+	local content_avail = math.max(eff_avail - box.h_outer(r), 1)
 
 	if node.kind == "text" then
 		-- Span-list text ("Style rework" S4) flattens once; the ranges are
@@ -243,6 +249,22 @@ function measure(node, avail_w)
 		local min_w = str_width(title.text) + r.border.sides.left + r.border.sides.right
 		node.size.w = math.max(node.size.w, min_w + r.margin.left + r.margin.right)
 	end
+
+	-- Clamp the measured size to the min/max bounds (min wins, as in CSS).
+	local mh = r.margin.left + r.margin.right
+	local mv = r.margin.top + r.margin.bottom
+	if props.max_width then
+		node.size.w = math.min(node.size.w, props.max_width + mh)
+	end
+	if props.min_width then
+		node.size.w = math.max(node.size.w, props.min_width + mh)
+	end
+	if props.max_height then
+		node.size.h = math.min(node.size.h, props.max_height + mv)
+	end
+	if props.min_height then
+		node.size.h = math.max(node.size.h, props.min_height + mv)
+	end
 	node._mw = avail_w
 end
 
@@ -265,6 +287,21 @@ end
 -- stretch hands each child the full cross extent unless the child fixed its
 -- own cross size explicitly (explicit size wins, as in CSS). A child's
 -- `align_self` overrides the container's `align` for that child alone.
+-- A grow child's min/max main-axis bound, as a margin-box size (the props are
+-- border-box, like width/height).
+---@param child table
+---@param key "min_width"|"max_width"|"min_height"|"max_height"
+---@param horizontal boolean
+---@return integer|nil
+local function main_bound(child, key, horizontal)
+	local v = (child.props or {})[key]
+	if not v then
+		return nil
+	end
+	local m = child.box.margin
+	return v + (horizontal and (m.left + m.right) or (m.top + m.bottom))
+end
+
 ---@param node table
 local function layout_children(node)
 	local props = node.props or {}
@@ -279,17 +316,79 @@ local function layout_children(node)
 	-- Leftover main-axis space after gaps and non-grow children.
 	local fixed = gap * math.max(#children - 1, 0)
 	local grow_total = 0
-	local last_grow = nil
-	for i, child in ipairs(children) do
+	for _, child in ipairs(children) do
 		local g = (child.props or {}).grow or 0
 		if g > 0 then
 			grow_total = grow_total + g
-			last_grow = i
 		else
 			fixed = fixed + (horizontal and child.size.w or child.size.h)
 		end
 	end
 	local leftover = math.max(main_avail - fixed, 0)
+
+	-- Resolve the grow children's main sizes, flexbox-style: split the pool by
+	-- weight (floor shares, remainder to the last), clamp violations to their
+	-- min/max bound and FREEZE them — their space leaves the pool and the rest
+	-- re-shares. When space is short only min floors freeze (a capped sibling
+	-- can still absorb the re-share); when long only max caps do.
+	local grow_main
+	if grow_total > 0 then
+		grow_main = {}
+		local min_key = horizontal and "min_width" or "min_height"
+		local max_key = horizontal and "max_width" or "max_height"
+		local frozen = {}
+		local pool, weight = leftover, grow_total
+		repeat
+			local last
+			for i, child in ipairs(children) do
+				local g = (child.props or {}).grow or 0
+				if g > 0 and not frozen[i] then
+					last = i
+				end
+			end
+			if not last then
+				break
+			end
+			local shares, clamped = {}, {}
+			local dist, violation = 0, 0
+			for i, child in ipairs(children) do
+				local g = (child.props or {}).grow or 0
+				if g > 0 and not frozen[i] then
+					local share = i == last and pool - dist or math.floor(pool * g / weight)
+					dist = dist + share
+					local v = math.max(share, 0)
+					local mx = main_bound(child, max_key, horizontal)
+					if mx and v > mx then
+						v = mx
+					end
+					local mn = main_bound(child, min_key, horizontal)
+					if mn and v < mn then
+						v = mn
+					end
+					shares[i], clamped[i] = share, v
+					violation = violation + (v - share)
+				end
+			end
+			local changed = false
+			for i, share in pairs(shares) do
+				local freeze = (violation > 0 and clamped[i] > share)
+					or (violation < 0 and clamped[i] < share)
+					or (violation == 0 and clamped[i] ~= share)
+				if freeze then
+					frozen[i] = true
+					grow_main[i] = clamped[i]
+					pool = pool - clamped[i]
+					weight = weight - ((children[i].props or {}).grow or 0)
+					changed = true
+				end
+			end
+			if not changed then
+				for i in pairs(shares) do
+					grow_main[i] = clamped[i]
+				end
+			end
+		until not changed
+	end
 
 	-- Main-axis run offset and inter-child spacing from justify (only when no
 	-- child grows — grow consumes the leftover instead).
@@ -306,18 +405,12 @@ local function layout_children(node)
 	end
 
 	local pos = (horizontal and c.x or c.y) + offset
-	local distributed = 0
 	local acc_spacing = 0
 	for i, child in ipairs(children) do
 		local g = (child.props or {}).grow or 0
 		local main
 		if g > 0 then
-			if i == last_grow then
-				main = leftover - distributed -- remainder closes the gap exactly
-			else
-				main = math.floor(leftover * g / grow_total)
-			end
-			distributed = distributed + main
+			main = grow_main[i]
 		else
 			main = horizontal and child.size.w or child.size.h
 		end
@@ -328,7 +421,14 @@ local function layout_children(node)
 		local child_align = child_props.align_self or align
 		local cross_size, cross_off
 		if child_align == "stretch" and not explicit_cross then
-			cross_size, cross_off = cross_avail, 0
+			-- max_width/height cap the stretch (min needs no handling here: the
+			-- measure clamp already floored child.size, and stretch only widens).
+			local mx = child_props[horizontal and "max_height" or "max_width"]
+			if mx then
+				local m = child.box.margin
+				mx = mx + (horizontal and (m.top + m.bottom) or (m.left + m.right))
+			end
+			cross_size, cross_off = math.min(cross_avail, mx or cross_avail), 0
 		elseif child_align == "center" then
 			cross_size = math.min(child_cross, cross_avail)
 			cross_off = math.floor((cross_avail - cross_size) / 2)

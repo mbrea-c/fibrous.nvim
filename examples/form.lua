@@ -19,21 +19,21 @@ local function Form(ctx)
 
   return {
     comp = ui.col,
-    props = { padding = { x = 1 }, gap = 1 },
+    props = { style = { padding = { x = 1 } }, gap = 1 },
     children = {
       { comp = ui.label, props = { text = "Type something (Enter submits, q quits in normal mode):" } },
       {
         comp = ui.text_input,
         props = {
           height = 3,
-          border = "rounded",
+          style = { border = "rounded" },
           on_change = function(v) typed.set(v) end,
           on_submit = function(v) submitted.set(v) end,
         },
       },
       {
         comp = ui.col,
-        props = { grow = 1, border = "rounded", padding = { x = 1 } },
+        props = { grow = 1, style = { border = "rounded", padding = { x = 1 } } },
         children = {
           { comp = ui.label, props = { text = "live length : " .. #value } },
           { comp = ui.label, props = { text = "live text   : " .. value } },

@@ -3,11 +3,12 @@
 -- reconciler and host know nothing new, and each component is just a props
 -- mapping (unmodifiable inline content by construction; the host buffer is).
 --
--- Public prop surface, mapped onto the node props render.lua understands:
---   hl  →  text_hl  (foreground of the text)
---   bg  →  hl       (background fill of the whole rect)
---   box/layout props (border, margin, padding, width, height, grow, align,
---   justify, gap) pass through untouched.
+-- Styling lives in `props.style`, in the ONE node-level vocabulary:
+-- `text_hl` = foreground, `hl` = background fill of the whole rect, plus
+-- border/padding/margin and the `_hover`/`_focus` state overrides ("Style
+-- rework"). Layout props (width, height, grow, align, justify, gap,
+-- align_self) pass through untouched. The pre-style-table aliases (`hl` as
+-- foreground, `bg`, `hover_hl`) are GONE — style.normalize errors on them.
 --
 -- Interactive components forward their handlers plus a `role` marker onto the
 -- node props; the cursor-interaction hit-map (task 6) walks the laid-out tree
@@ -24,16 +25,13 @@ M.text = { __host = "text" }
 M.text_input = { __host = "text_input" }
 M.raw_buffer = { __host = "raw_buffer" }
 
--- Copy `props` and overlay the node-level keys, translating hl/bg.
+-- Copy `props` and overlay the node-level keys (text, role, theme, …).
+-- Styling passes through untouched as props.style.
 ---@param props table
 ---@param over table
 ---@return table
 local function node_props(props, over)
-  local out = vim.tbl_extend("force", {}, props, over)
-  out.text_hl = props.hl
-  out.hl = props.bg
-  out.bg = nil
-  return out
+  return vim.tbl_extend("force", {}, props, over)
 end
 
 -- `text` may be a rich-text span list ("Style rework" S4): bare strings or

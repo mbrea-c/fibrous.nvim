@@ -1,7 +1,7 @@
 -- Cursor interaction for the inline host (tracker "NEW UI HOST" task 6). The
 -- vim cursor drives hover and activation: a hit-map lookup walks the laid-out
 -- tree (host.tree, fiber-backed nodes) for the deepest node under the cursor
--- carrying a `role`. Hover paints the node's rect with its hover_hl (own
+-- carrying a `role`. Hover paints the node's rect with its hover style (own
 -- extmark namespace, re-evaluated on CursorMoved and after every flush);
 -- <CR>/<Space> (buffer-local, normal mode) activate: button → on_press(),
 -- checkbox → on_toggle(not checked).
@@ -44,7 +44,7 @@ describe("inline.interact", function()
         props = {},
         children = {
           { comp = ui.label, props = { text = "title" } },
-          { comp = ui.button, props = { label = "OK", hover_hl = "Search" } },
+          { comp = ui.button, props = { label = "OK", style = { _hover = { hl = "Search" } } } },
         },
       }
     end
@@ -105,7 +105,7 @@ describe("inline.interact", function()
             props = {
               label = "Opt",
               checked = checked.get(),
-              hover_hl = "Search",
+              style = { _hover = { hl = "Search" } },
               on_toggle = function(v)
                 checked.set(v)
               end,

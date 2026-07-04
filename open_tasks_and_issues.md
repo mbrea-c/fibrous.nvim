@@ -458,17 +458,50 @@ Incremental build plan (each step has a runnable smoke check under headless
 - [x] Gestural scroll — DONE (2026-07-03), same place: `touchmove` deltas
   accumulate into wheel up/down ticks per cell height at the current finger
   cell; >8px movement disqualifies the tap.
-- [ ] Mobile follow-ups from the touch spike: virtual keyboard (canvas is not a
-  text field — needs a hidden input/contenteditable relay to summon the IME and
-  feed `nvim_input`; the big one), momentum/fling scrolling, pinch-zoom (font px
-  rescale + `nvim_ui_try_resize`)
-- [ ] Loading indicator: DOM/CSS progress UI for the multi-MB engine download
-  (bounce mitigation)
+- [x] Mobile follow-ups from the touch spike — DONE (2026-07-04), all in Tier
+  2's `web/` (ships to the site via the fibrous-docs flake pin):
+  - **Virtual keyboard**: `#kbd`, a visually-hidden textarea IME relay.
+    Physical keys are handled document-level via keyToNvim (preventDefault
+    also stops the textarea mutating — nothing delivers twice); soft keyboards
+    bypass keydown (keyCode 229) and speak input/composition events, decoded
+    against a one-char sentinel (so backspace always has something to delete)
+    and forwarded as nvim_input text (`<` → `<lt>`, newlines → `<CR>`). On
+    coarse-pointer devices focus (= keyboard visibility) follows the guest
+    mode via a renderer.onMode hook: insert/cmdline/replace/terminal summon
+    it, normal dismisses it. Viewport meta `interactive-widget=resizes-content`
+    \+ `100dvh` sizing means the keyboard shrinks the viewport and the grid
+    re-fits above it through the normal resize path.
+  - **Momentum/fling scrolling**: in the DOM-free mouse adapter (TDD'd, 13/13
+    node tests): touchmove samples a smoothed velocity; releasing above 0.25
+    px/ms keeps scrolling with v(t) = v₀·e^(−t/325ms) integrated in closed
+    form per animation frame (frame pacing can't change the distance),
+    draining px into wheel ticks at the release cell. A finger during a fling
+    stops it and is consumed (no accidental click); touchcancel (pinch start)
+    abandons the gesture. `now`/`schedule` are injectable — the unit tests
+    drive a fake clock.
+  - **Pinch-zoom**: two fingers rescale the font px (clamped 8–40, live) via
+    the new renderer.setFontPx (re-measures cells, resizes + redraws the
+    canvas), mutates the adapter's cell metrics in place, and debounce-fires
+    `nvim_ui_try_resize` so the grid re-fits the viewport at the new density.
+- [x] Loading indicator — DONE (2026-07-04): `#loader` overlay (logo, gradient
+  progress bar, status line); nvim.wasm + tarball downloads stream through a
+  counting TransformStream (Content-Length-aware — determinate bar when known,
+  shimmer + byte count when not), compile/unpack phases shimmer; hidden when
+  the editor goes live.
 - [ ] Keyboard-theft mitigation: design navigation around Vim primitives
   (leader, arrows, buffer-local hotkeys) — avoid browser-reserved
   `Ctrl+W`/`Ctrl+N`
-- [ ] Viewport stabilization CSS: `touch-action: none`, `user-select: none` on
-  the nvim container
+- [x] Viewport stabilization CSS — DONE (2026-07-04): `touch-action: none`,
+  `user-select: none` (+ webkit variants), `overscroll-behavior: none`,
+  tap-highlight suppression on html/body/#gridwrap/#grid;
+  `maximum-scale=1, user-scalable=no` in the viewport meta (the guest owns
+  pinch now).
+- [x] Unsupported-browser UX — DONE (2026-07-04): the JSPI printout replaced
+  by a styled `#nosupport` card: Chrome/Edge/Chromium 137+ or Firefox 152+
+  work out of the box, Firefox 139–151 needs
+  `javascript.options.wasm_js_promise_integration` in about:config + full
+  restart, Safari unsupported; the headless `nvim --version` proof-of-life
+  streams into the card.
 
 ### IMPORTANT: NEW UI HOST
 
@@ -1319,3 +1352,68 @@ suspected).
   since themes are session-static.
 - Suite: **241 passed, 0 failed** (237 + 3 paint oracles + 1 wrapper regression
   spec); docs 5/5; `nix flake check` green.
+
+### Layout min/max clamps + docs responsive playground (2026-07-04, late night)
+
+User-reported docs issues: separators not full length; the component preview
+shrinking to nothing on narrow (mobile) viewports.
+
+- [x] J1. **Layout feature: `min_width` / `max_width` / `min_height` /
+  `max_height` props** (border-box, like width/height; min wins, CSS-style).
+  Three attachment points in layout.lua, all TDD'd (6 specs):
+  - measure: final size clamped; `max_width` also tightens the measuring
+    constraint so wrapping text reflows under it;
+  - grow distribution: flexbox-style freeze loop — ideal weighted shares,
+    violators clamp to their bound and freeze (their space leaves the pool),
+    re-share; when space is short only min floors freeze first, so a capped
+    sibling can still absorb the re-share (the naive clamp-everything would
+    overflow);
+  - cross-axis stretch: capped by max (min needs nothing — measure floors it).
+  Bench: pure layout+paint 1.63 → ~1.70ms (+4%) on the everything-fresh path
+  only; memoized frames skip layout entirely. Suite 247/0.
+- [x] J2. **Docs: full-width separators** — the hardcoded `string.rep("─", 100)`
+  label replaced by an empty col with only a top border: stretches to the page
+  width (default cross-axis align), border chars draw the rule at any size.
+- [x] J3. **Docs: responsive editor/preview row** — editor col
+  `grow = 3, max_width = 80` (raw_buffer drops its fixed width and stretches),
+  preview `grow = 1, min_width = 30`: on wide screens identical to before
+  (editor 80, preview takes the rest); when narrow the editor is what shrinks.
+  Both fixes red-green'd at the docs level (2 home_spec specs, verified red
+  against the old site code via stash).
+- Parked: stacking editor above preview on very narrow viewports (below ~36
+  content cols the editor gets crushed; vertical stacking needs either a
+  width-aware component re-render on resize or a layout-level wrap).
+
+### Bundled web font + flat-style-prop removal (2026-07-05, small hours)
+
+- [x] K1. **Bundled fonts for the wasm site** (user: JuliaMono, appearance must
+  not depend on system fonts; flake-configurable). `mkNvimWasmWeb` grew
+  `font.faces = [ { file, weight?, style? } ]`: faces copy into the webroot's
+  `fonts/` and land in config.json; `web/main.js` FontFace-loads them BEFORE
+  the renderer exists (cell metrics come from measureText — measuring against
+  a fallback font would bake the wrong cell size into the session). A failed
+  face falls back to the monospace stack. fibrous-docs sets JuliaMono px 17:
+  raw TTFs are ~3.3 MB PER FACE, so a `webfont` derivation pyftsubsets each
+  face (Latin, punctuation, arrows, math, box drawing/blocks/shapes,
+  powerline) into woff2 — Regular+Bold+Italic total ~280 KB (verified: 1073
+  glyphs/face, all site codepoints present). Swap `pkgs.julia-mono` for e.g.
+  iosevka-bin in the docs flake to change the face.
+- [x] K2. **Flat style props REMOVED** (user: "no users yet — just rip it
+  out", upgrading the planned deprecation sweep). props.style is now the one
+  styling vocabulary: `hl` = fill, `text_hl` = foreground, `border_hl`,
+  border/padding/margin, `_hover`/`_focus`. The removed flat props (`hl`,
+  `text_hl`, `bg`, `border`, `padding`, `margin`, `hover_hl`) ERROR loudly in
+  style.normalize rather than silently doing nothing — component `hl` used to
+  mean FOREGROUND while node/style `hl` meant FILL, and a silently-ignored
+  leftover would be that trap again. components.lua no longer remaps anything
+  (node_props is a plain copy). Raw layout trees are untouched: box.resolve
+  still reads border/padding/margin off props (the engine's input format, not
+  the component API), and render.lua still reads raw-tree props.hl/text_hl.
+  - TDD: removal-error specs in style_spec + components_spec (originally
+    written red as warn-once-shim specs; the user then chose removal);
+    flat-sugar specs rewritten in style-table form.
+  - Migrated: every host-path spec (the error made stragglers test failures —
+    34 red → 247/0 green), bench/run.lua, all examples/, fibrous-docs webapp
+    modules + the playground demo code strings + the "boxes" demo prose (the
+    demos now TEACH the style vocabulary). Docs suite 7/7; homepage bench
+    unchanged (relayout 0.05ms — memo intact).

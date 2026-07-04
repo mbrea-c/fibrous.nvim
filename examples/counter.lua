@@ -32,9 +32,9 @@ local function Counter(ctx, props)
 
   return {
     comp = ui.col,
-    props = { border = "rounded", padding = { x = 2, y = 1 }, gap = 1 },
+    props = { style = { border = "rounded", padding = { x = 2, y = 1 } }, gap = 1 },
     children = {
-      { comp = ui.label, props = { text = "Count: " .. n, hl = "Title" } },
+      { comp = ui.label, props = { text = "Count: " .. n, style = { text_hl = "Title" } } },
       {
         comp = ui.row,
         props = { gap = 2 },
@@ -44,7 +44,7 @@ local function Counter(ctx, props)
           { comp = ui.button, props = { label = "reset", on_press = function() count.set(0) end } },
         },
       },
-      { comp = ui.label, props = { text = "<CR>/<Space> press · or +/-/r · q quits", hl = "Comment" } },
+      { comp = ui.label, props = { text = "<CR>/<Space> press · or +/-/r · q quits", style = { text_hl = "Comment" } } },
     },
   }
 end

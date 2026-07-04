@@ -5,7 +5,9 @@
 --
 -- Two phases:
 --   normalize(props, defaults)  once per commit, per node (defaults = the
---                               node's theme.styles entry, lowest precedence)
+--                               node's theme.styles entry, lowest precedence;
+--                               all styling lives in props.style — the old
+--                               flat props error, see REMOVED below)
 --   apply(norm, states)         at paint time, per interaction-state change
 --
 -- The style key set is closed (unknown keys error): `hl` (background fill of
@@ -27,6 +29,17 @@ local BOX_KEYS = { border = true, padding = true, margin = true }
 
 -- style-table state key → field on the normalized result
 local STATE_KEYS = { _hover = "hover", _focus = "focus" }
+
+-- The flat style props (`hl`, `text_hl`, `border`, `padding`, `margin`,
+-- `hover_hl`, plus the component-era `bg`) were migration sugar ("Style
+-- rework": "remain during migration") and are REMOVED: props.style is the one
+-- styling vocabulary (hl = background fill, text_hl = foreground, _hover/
+-- _focus for states). They error loudly rather than silently doing nothing —
+-- `hl` used to mean FOREGROUND on components but FILL everywhere else, and a
+-- silently-ignored leftover would be that trap all over again. (Raw layout
+-- trees are untouched: box.resolve still reads border/padding/margin off
+-- props — that is the layout engine's input format, not the component API.)
+local REMOVED = { "hl", "text_hl", "bg", "border", "padding", "margin", "hover_hl" }
 
 ---@class StylePartial
 ---@field hl string|nil
@@ -77,9 +90,9 @@ local function resolve_style(spec, norm, where)
 end
 
 -- Normalize a node's style, precedence lowest → highest: the theme defaults
--- (style-shaped, from theme.styles via the node's `theme` prop), the
--- flat-prop sugar (hl, text_hl, border, padding, margin, hover_hl), then
+-- (style-shaped, from theme.styles via the node's `theme` prop), then
 -- props.style (base + `_hover`/`_focus` overrides). Key-wise throughout.
+-- The removed flat props error loudly (see REMOVED above).
 ---@param props table  node props (non-style keys are ignored)
 ---@param defaults table|nil  theme defaults to seed below everything
 ---@return NormalizedStyle
@@ -90,31 +103,21 @@ function M.normalize(props, defaults)
     resolve_style(defaults, norm, "theme")
   end
 
-  for _, k in ipairs({ "hl", "text_hl" }) do
+  for _, k in ipairs(REMOVED) do
     if props[k] ~= nil then
-      base[k] = props[k]
+      error(
+        ("fibrous: the flat `%s` prop was removed; use props.style (hl = fill, text_hl = foreground, _hover/_focus for states)"):format(
+          k
+        )
+      )
     end
   end
-  if props.border ~= nil then
-    base.border = box.border(props.border)
-  end
-  if props.padding ~= nil then
-    base.padding = box.sides(props.padding)
-  end
-  if props.margin ~= nil then
-    base.margin = box.sides(props.margin)
-  end
+
   -- Box keys are always fully populated — layout does arithmetic on them
   -- without nil checks.
   base.border = base.border or box.border(nil)
   base.padding = base.padding or box.sides(nil)
   base.margin = base.margin or box.sides(nil)
-
-  if props.hover_hl then
-    local part = norm.hover or {}
-    part.hl = props.hover_hl
-    norm.hover = part
-  end
 
   local spec = props.style
   if spec ~= nil then

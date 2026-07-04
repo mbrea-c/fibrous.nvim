@@ -9,13 +9,13 @@ local util = require("examples.util")
 local function Hello()
   return {
     comp = ui.col,
-    props = { border = "rounded", padding = { x = 3, y = 1 } },
+    props = { style = { border = "rounded", padding = { x = 3, y = 1 } } },
     children = {
-      { comp = ui.label, props = { text = "Hello from fibrous!", hl = "Title" } },
+      { comp = ui.label, props = { text = "Hello from fibrous!", style = { text_hl = "Title" } } },
       { comp = ui.label, props = { text = "" } },
       { comp = ui.paragraph, props = { text = "A React-like reactive UI framework for Neovim." } },
       { comp = ui.label, props = { text = "" } },
-      { comp = ui.label, props = { text = "Press  q  to close.", hl = "Comment" } },
+      { comp = ui.label, props = { text = "Press  q  to close.", style = { text_hl = "Comment" } } },
     },
   }
 end

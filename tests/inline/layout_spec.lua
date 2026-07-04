@@ -299,6 +299,82 @@ describe("inline.layout containers", function()
     assert.same({ 0, 7 }, { y1, y2 })
   end)
 
+  it("max_width caps a grow child; the freed space goes to its siblings", function()
+    local tree = {
+      kind = "row",
+      children = {
+        { kind = "col", props = { grow = 1, max_width = 6 } },
+        { kind = "col", props = { grow = 1 } },
+      },
+    }
+    layout.compute(tree, { width = 20 })
+    assert.same({ x = 0, y = 0, w = 6, h = 0 }, tree.children[1].rect)
+    assert.same({ x = 6, y = 0, w = 14, h = 0 }, tree.children[2].rect)
+  end)
+
+  it("min_width floors a grow child; the deficit comes out of its siblings", function()
+    local tree = {
+      kind = "row",
+      children = {
+        { kind = "col", props = { grow = 3 } },
+        { kind = "col", props = { grow = 1, min_width = 8 } },
+      },
+    }
+    layout.compute(tree, { width = 20 })
+    -- unclamped shares would be 15/5; the floor wins and the rest shrinks
+    assert.same({ x = 0, y = 0, w = 12, h = 0 }, tree.children[1].rect)
+    assert.same({ x = 12, y = 0, w = 8, h = 0 }, tree.children[2].rect)
+  end)
+
+  it("a min floor re-opens headroom under a sibling's max (freeze order)", function()
+    local tree = {
+      kind = "row",
+      children = {
+        { kind = "col", props = { grow = 3, max_width = 15 } },
+        { kind = "col", props = { grow = 1, min_width = 8 } },
+      },
+    }
+    layout.compute(tree, { width = 20 })
+    -- clamping both bounds against the 15/5 shares would overflow (15 + 8);
+    -- freezing the min violation first re-shares 12 to the capped child
+    assert.same({ x = 0, y = 0, w = 12, h = 0 }, tree.children[1].rect)
+    assert.same({ x = 12, y = 0, w = 8, h = 0 }, tree.children[2].rect)
+  end)
+
+  it("min/max height clamp grow on the col main axis (app mode)", function()
+    local tree = {
+      kind = "col",
+      children = {
+        { kind = "col", props = { grow = 1, max_height = 3 } },
+        { kind = "col", props = { grow = 1 } },
+      },
+    }
+    layout.compute(tree, { width = 5, height = 10 })
+    assert.same({ x = 0, y = 0, w = 5, h = 3 }, tree.children[1].rect)
+    assert.same({ x = 0, y = 3, w = 5, h = 7 }, tree.children[2].rect)
+  end)
+
+  it("max_width caps cross-axis stretch and constrains the wrap width", function()
+    local text = { kind = "text", props = { wrap = true, max_width = 5 }, text = "aa bb cc" }
+    local tree = { kind = "col", children = { text } } -- default align = stretch
+    layout.compute(tree, { width = 10 })
+    assert.same({ "aa bb", "cc" }, text.lines)
+    assert.same({ x = 0, y = 0, w = 5, h = 2 }, text.rect)
+  end)
+
+  it("min_width floors the measured size of a non-grow child", function()
+    local tree = {
+      kind = "row",
+      children = {
+        { kind = "text", text = "hi", props = { min_width = 6 } },
+        { kind = "text", text = "b" },
+      },
+    }
+    layout.compute(tree, { width = 20 })
+    assert.same(6, tree.children[1].rect.w)
+    assert.same(6, tree.children[2].rect.x)
+  end)
+
   it("explicit width/height are border-box sizes and win over stretch", function()
     local fixed = { kind = "col", props = { width = 5, height = 3, border = true } }
     local tree = { kind = "col", children = { fixed } } -- default align = stretch

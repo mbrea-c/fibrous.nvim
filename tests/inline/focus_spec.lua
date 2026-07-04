@@ -32,7 +32,7 @@ end
 local function PaddedApp()
   return {
     comp = ui.col,
-    props = { padding = { x = 1 } },
+    props = { style = { padding = { x = 1 } } },
     children = {
       { comp = ui.label, props = { text = "head" } },
       { comp = ui.text_input, props = { value = "abcdef", height = 1 } },
@@ -115,10 +115,10 @@ describe("inline.focus", function()
     local function App()
       return {
         comp = ui.col,
-        props = { padding = { x = 1 } },
+        props = { style = { padding = { x = 1 } } },
         children = {
           { comp = ui.label, props = { text = "head" } },
-          { comp = ui.text_input, props = { border = true, value = "abcdef" } },
+          { comp = ui.text_input, props = { style = { border = true }, value = "abcdef" } },
         },
       }
     end
@@ -192,12 +192,12 @@ describe("inline.focus", function()
     local function App()
       return {
         comp = ui.col,
-        props = { padding = { x = 1 } },
+        props = { style = { padding = { x = 1 } } },
         children = {
           { comp = ui.label, props = { text = "head" } },
           -- no explicit height: `height` sizes the BORDER box, and a bordered
           -- input needs its default single content row
-          { comp = ui.text_input, props = { border = true, value = "abcdef" } },
+          { comp = ui.text_input, props = { style = { border = true }, value = "abcdef" } },
         },
       }
     end

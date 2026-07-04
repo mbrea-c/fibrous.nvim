@@ -48,14 +48,14 @@ local function make_app(box, initial, render_count)
 	local function Counter(ctx)
 		local s = ctx.use_state(initial or 0)
 		box.set = s.set
-		return { comp = text, props = { text = render_count(s.get()), text_hl = "Constant" } }
+		return { comp = text, props = { text = render_count(s.get()), style = { text_hl = "Constant" } } }
 	end
 	local function Static()
 		return {
 			comp = col,
 			props = {},
 			children = {
-				{ comp = text, props = { text = "static", text_hl = "Title" } },
+				{ comp = text, props = { text = "static", style = { text_hl = "Title" } } },
 			},
 		}
 	end
@@ -66,7 +66,7 @@ local function make_app(box, initial, render_count)
 			children = {
 				{ comp = Static },
 				{ comp = Counter },
-				{ comp = text, props = { text = "below", text_hl = "Comment" } },
+				{ comp = text, props = { text = "below", style = { text_hl = "Comment" } } },
 			},
 		}
 	end
@@ -241,9 +241,9 @@ describe("inline.host subtree memoization", function()
 			setter = s
 			return {
 				comp = col,
-				props = { hl = "Visual", padding = { x = 1 } },
+				props = { style = { hl = "Visual", padding = { x = 1 } } },
 				children = {
-					{ comp = text, props = { text = "n " .. s.get(), text_hl = "Constant" } },
+					{ comp = text, props = { text = "n " .. s.get(), style = { text_hl = "Constant" } } },
 				},
 			}
 		end
@@ -259,9 +259,9 @@ describe("inline.host subtree memoization", function()
 		local function Fresh()
 			return {
 				comp = col,
-				props = { hl = "Visual", padding = { x = 1 } },
+				props = { style = { hl = "Visual", padding = { x = 1 } } },
 				children = {
-					{ comp = text, props = { text = "n 1", text_hl = "Constant" } },
+					{ comp = text, props = { text = "n 1", style = { text_hl = "Constant" } } },
 				},
 			}
 		end
@@ -288,11 +288,11 @@ describe("inline.host subtree memoization", function()
 			if s.get() then
 				children[#children + 1] = {
 					comp = col,
-					props = { border = "single", hl = "Visual" },
+					props = { style = { border = "single", hl = "Visual" } },
 					children = { { comp = text, props = { text = "boxed" } } },
 				}
 			end
-			children[#children + 1] = { comp = text, props = { text = "tail", text_hl = "Comment" } }
+			children[#children + 1] = { comp = text, props = { text = "tail", style = { text_hl = "Comment" } } }
 			return { comp = col, props = {}, children = children }
 		end
 		local host = inline_host.new({
@@ -310,7 +310,7 @@ describe("inline.host subtree memoization", function()
 				props = {},
 				children = {
 					{ comp = text, props = { text = "head" } },
-					{ comp = text, props = { text = "tail", text_hl = "Comment" } },
+					{ comp = text, props = { text = "tail", style = { text_hl = "Comment" } } },
 				},
 			}
 		end

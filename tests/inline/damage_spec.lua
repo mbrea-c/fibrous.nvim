@@ -65,7 +65,7 @@ describe("inline.host damage tracking", function()
 				comp = col,
 				props = {},
 				children = {
-					{ comp = text, props = { text = "aa", text_hl = "Title" } },
+					{ comp = text, props = { text = "aa", style = { text_hl = "Title" } } },
 					{ comp = text, props = { text = "bb" } },
 				},
 			}
@@ -95,9 +95,9 @@ describe("inline.host damage tracking", function()
 				comp = col,
 				props = {},
 				children = {
-					{ comp = text, props = { text = "head", text_hl = "Title" } },
-					{ comp = text, props = { text = "n " .. s.get(), text_hl = "Constant" } },
-					{ comp = text, props = { text = "tail", text_hl = "Comment" } },
+					{ comp = text, props = { text = "head", style = { text_hl = "Title" } } },
+					{ comp = text, props = { text = "n " .. s.get(), style = { text_hl = "Constant" } } },
+					{ comp = text, props = { text = "tail", style = { text_hl = "Comment" } } },
 				},
 			}
 		end
@@ -136,12 +136,12 @@ describe("inline.host damage tracking", function()
 			local s = ctx.use_state(false)
 			setter = s
 			local children = {
-				{ comp = text, props = { text = "head", text_hl = "Title" } },
+				{ comp = text, props = { text = "head", style = { text_hl = "Title" } } },
 			}
 			if s.get() then
 				children[#children + 1] = { comp = text, props = { text = "mid" } }
 			end
-			children[#children + 1] = { comp = text, props = { text = "tail", text_hl = "Comment" } }
+			children[#children + 1] = { comp = text, props = { text = "tail", style = { text_hl = "Comment" } } }
 			return { comp = col, props = {}, children = children }
 		end
 		local host = inline_host.new({

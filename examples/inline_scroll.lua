@@ -28,7 +28,7 @@ local LOREM = "The quick brown fox jumps over the lazy dog while the five boxing
 local function section(i)
   return {
     comp = ui.paragraph,
-    props = { text = ("Section %d\n\n%s"):format(i, LOREM), border = "single", padding = { x = 1 } },
+    props = { text = ("Section %d\n\n%s"):format(i, LOREM), style = { border = "single", padding = { x = 1 } } },
   }
 end
 
@@ -46,8 +46,8 @@ local function App(ctx)
   end
 
   local children = {
-    { comp = ui.label, props = { text = "Inline host — interactive scroll spike", hl = "Title" } },
-    { comp = ui.label, props = { text = "j/k <C-d>/<C-u> scroll · <CR>/<Space> activate · q closes", hl = "Comment" } },
+    { comp = ui.label, props = { text = "Inline host — interactive scroll spike", style = { text_hl = "Title" } } },
+    { comp = ui.label, props = { text = "j/k <C-d>/<C-u> scroll · <CR>/<Space> activate · q closes", style = { text_hl = "Comment" } } },
     section(1),
     {
       comp = ui.button,
@@ -63,12 +63,12 @@ local function App(ctx)
     section(2),
     {
       comp = ui.label,
-      props = { text = ("echo (%d chars): %s"):format(#typed.get(), typed.get()), hl = "Comment" },
+      props = { text = ("echo (%d chars): %s"):format(#typed.get(), typed.get()), style = { text_hl = "Comment" } },
     },
     {
       comp = ui.text_input,
       props = {
-        border = "rounded",
+        style = { border = "rounded" },
         value = "single-line input — edit me",
         on_change = function(v)
           typed.set(v)
@@ -84,12 +84,12 @@ local function App(ctx)
   end
   children[#children + 1] = {
     comp = ui.text_input,
-    props = { border = "double", height = 5, value = "multi\nline\ninput" },
+    props = { style = { border = "double" }, height = 5, value = "multi\nline\ninput" },
   }
   for i = 6, 8 do
     children[#children + 1] = section(i)
   end
-  return { comp = ui.col, props = { gap = 1, padding = 1 }, children = children }
+  return { comp = ui.col, props = { gap = 1, style = { padding = 1 } }, children = children }
 end
 
 local M = {}

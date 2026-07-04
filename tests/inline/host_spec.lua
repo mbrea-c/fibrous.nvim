@@ -79,7 +79,7 @@ describe("inline.host", function()
 
   it("highlight spans land as extmarks", function()
     local function App()
-      return { comp = text, props = { text = "hi", text_hl = "Title" } }
+      return { comp = text, props = { text = "hi", style = { text_hl = "Title" } } }
     end
     local host = inline_host.new({
       get_size = function()
@@ -98,7 +98,7 @@ describe("inline.host", function()
     local function App(ctx)
       local s = ctx.use_state("aa")
       setter = s
-      return { comp = text, props = { text = s.get(), text_hl = "Title" } }
+      return { comp = text, props = { text = s.get(), style = { text_hl = "Title" } } }
     end
     local host = inline_host.new({
       get_size = function()

@@ -16,7 +16,7 @@ local function Sidebar(ctx, props)
   local cur = selected.get()
 
   local children = {
-    { comp = ui.label, props = { text = "Project Explorer", hl = "Title" } },
+    { comp = ui.label, props = { text = "Project Explorer", style = { text_hl = "Title" } } },
     { comp = ui.label, props = { text = "" } },
   }
   for i, item in ipairs(props.items) do
@@ -28,18 +28,18 @@ local function Sidebar(ctx, props)
         -- a plain label made interactive: the hit-map only needs a role
         role = "button",
         on_press = function() selected.set(i) end,
-        hover_hl = "Visual",
+        style = { _hover = { hl = "Visual" } },
         align_self = "start",
       },
     }
   end
   vim.list_extend(children, {
     { comp = ui.label, props = { text = "" } },
-    { comp = ui.label, props = { text = "j/k move · <CR> select · q close", hl = "Comment" } },
-    { comp = ui.label, props = { text = "<C-w>> / <C-w><  resize", hl = "Comment" } },
+    { comp = ui.label, props = { text = "j/k move · <CR> select · q close", style = { text_hl = "Comment" } } },
+    { comp = ui.label, props = { text = "<C-w>> / <C-w><  resize", style = { text_hl = "Comment" } } },
   })
 
-  return { comp = ui.col, props = { padding = { x = 1, y = 1 } }, children = children }
+  return { comp = ui.col, props = { style = { padding = { x = 1, y = 1 } } }, children = children }
 end
 
 local M = {}

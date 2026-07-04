@@ -61,7 +61,7 @@ describe("inline.subwin", function()
         props = {},
         children = {
           { comp = text, props = { text = "above" } },
-          { comp = text_input, props = { border = true, render = "always" } },
+          { comp = text_input, props = { style = { border = true }, render = "always" } },
         },
       }
     end
@@ -450,7 +450,7 @@ describe("inline.subwin", function()
           comp = col,
           props = {},
           children = {
-            { comp = text_input, props = { border = true, value = "hi" } },
+            { comp = text_input, props = { style = { border = true }, value = "hi" } },
           },
         }
       end, {}, { width = 8, height = 4 })

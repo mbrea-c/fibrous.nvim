@@ -54,9 +54,9 @@ local LOREM = "the quick brown fox jumps over the lazy dog and packs boxes"
 local function section(i)
 	return {
 		comp = ui.col,
-		props = { border = "single", padding = { x = 1 } },
+		props = { style = { border = "single", padding = { x = 1 } } },
 		children = {
-			{ comp = ui.label, props = { text = "Section " .. i, hl = "Title" } },
+			{ comp = ui.label, props = { text = "Section " .. i, style = { text_hl = "Title" } } },
 			{
 				comp = ui.row,
 				props = { gap = 2 },
@@ -192,7 +192,7 @@ do
 		for i = 1, N do
 			children[#children + 1] = { comp = ui.label, props = { text = "row " .. i } }
 			if i % (math.floor(N / 4) + 1) == 0 then
-				children[#children + 1] = { comp = ui.text_input, props = { border = "single" } }
+				children[#children + 1] = { comp = ui.text_input, props = { style = { border = "single" } } }
 			end
 		end
 		return { comp = ui.col, props = {}, children = children }
