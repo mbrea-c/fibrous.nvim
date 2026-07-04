@@ -42,6 +42,31 @@ local function open_root_float(bufnr, cfg)
 	return winid
 end
 
+-- A fixed-mode root has nothing to scroll to (the canvas IS the viewport),
+-- but nvim happily scrolls any window until its last line hits the top: pin
+-- the view. Wired BEFORE subwin.attach — autocmds run in definition order,
+-- so the manager's own WinScrolled resync sees the restored view and the
+-- floats never swim.
+---@param winid integer  the root float
+---@param group integer
+local function pin_view(winid, group)
+	vim.api.nvim_create_autocmd("WinScrolled", {
+		group = group,
+		pattern = tostring(winid),
+		callback = function()
+			if not vim.api.nvim_win_is_valid(winid) then
+				return
+			end
+			vim.api.nvim_win_call(winid, function()
+				local v = vim.fn.winsaveview()
+				if v.topline ~= 1 or (v.leftcol or 0) ~= 0 then
+					vim.fn.winrestview({ topline = 1, leftcol = 0 })
+				end
+			end)
+		end,
+	})
+end
+
 -- Shared mount plumbing: create the root, wire coalesced resize sync (one
 -- relayout per event-loop tick, as in mount/window_host.lua) plus lifecycle
 -- autocmds, and build the handle. Callers supply the geometry logic:
@@ -176,9 +201,12 @@ function M.floating(component, props, opts)
 		width = g.width,
 		height = g.height,
 	})
+	local group = vim.api.nvim_create_augroup("FibrousInlineFloat_" .. winid, { clear = true })
+	if not scroll then
+		pin_view(winid, group)
+	end
 	manager = subwin.attach(host, winid, { mouse = opts.mouse })
 	interaction = interact.attach(host, winid, opts.mouse, manager)
-	local group = vim.api.nvim_create_augroup("FibrousInlineFloat_" .. winid, { clear = true })
 
 	local function sync()
 		local cur = geom()
@@ -303,9 +331,24 @@ function M.window(component, props, opts)
 		width = g.width,
 		height = g.height,
 	})
+	local group = vim.api.nvim_create_augroup("FibrousInlineSplit_" .. host_winid, { clear = true })
+	if not scroll then
+		pin_view(winid, group)
+	end
 	manager = subwin.attach(host, winid, { mouse = opts.mouse })
 	interaction = interact.attach(host, winid, opts.mouse, manager)
-	local group = vim.api.nvim_create_augroup("FibrousInlineSplit_" .. host_winid, { clear = true })
+
+	-- The pane is reachable by <C-w>-navigation (floats are not part of the
+	-- window layout), but it is a blank scratch buffer behind the float:
+	-- forward any focus it receives into the app.
+	vim.api.nvim_create_autocmd("WinEnter", {
+		group = group,
+		callback = function()
+			if vim.api.nvim_get_current_win() == host_winid and vim.api.nvim_win_is_valid(winid) then
+				vim.api.nvim_set_current_win(winid)
+			end
+		end,
+	})
 
 	local function sync()
 		if not vim.api.nvim_win_is_valid(host_winid) then

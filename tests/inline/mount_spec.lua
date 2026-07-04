@@ -141,6 +141,55 @@ describe("inline.mount", function()
     assert.equal(wins_before, #vim.api.nvim_list_wins())
   end)
 
+  it("split: entering the pane behind the float forwards focus to the app", function()
+    local handle = mount.split(Hello, {}, {})
+
+    -- <C-w>-navigation only sees layout windows, so it lands on the blank
+    -- scratch pane the float covers — the mount forwards focus to the float
+    vim.api.nvim_set_current_win(handle.host_winid)
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+
+    handle.unmount()
+  end)
+
+  it("fixed mode pins the root view: a scroll snaps back; scroll mode scrolls", function()
+    local function view_of(winid)
+      local v
+      vim.api.nvim_win_call(winid, function()
+        v = vim.fn.winsaveview()
+      end)
+      return v
+    end
+
+    -- WinScrolled is a redraw-time check that never fires in headless -l:
+    -- scroll, then deliver the event by hand (as the redraw would)
+    local function scroll(winid)
+      vim.api.nvim_win_call(winid, function()
+        vim.fn.winrestview({ topline = 2, lnum = 2, col = 0 })
+      end)
+      vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(winid) })
+    end
+
+    local fixed = mount.floating(Hello, {}, { width = 10, height = 3 })
+    scroll(fixed.winid)
+    assert.equal(1, view_of(fixed.winid).topline)
+
+    -- scroll mode: the window is a real viewport, scrolling must survive
+    local function Tall()
+      local children = {}
+      for i = 1, 6 do
+        children[i] = { comp = text, props = { text = "line " .. i } }
+      end
+      return { comp = col, props = {}, children = children }
+    end
+    local scroller = mount.floating(Tall, {}, { width = 8, height = 3, mode = "scroll" })
+    scroll(scroller.winid)
+    assert.equal(2, view_of(scroller.winid).topline)
+
+    fixed.unmount()
+    scroller.unmount()
+  end)
+
   it("window: winid = 0 resolves to the current window at mount time", function()
     local origin = vim.api.nvim_get_current_win()
     local handle = mount.window(Hello, {}, { winid = 0, mode = "scroll" })

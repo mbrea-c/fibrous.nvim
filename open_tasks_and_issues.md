@@ -1641,6 +1641,27 @@ same-size mid-replace over memo'd entry components.
     container-in-container, conditional removal (buffer retired, boundary
     restored), scrolled reposition of nested floats, teardown. Suite 298/0.
 
+- [x] **Mount shell fixes from panel dogfooding (2026-07-04, user bug
+  reports).** Two "the background is reachable" holes in the split/window
+  mounts, both fixed in mount.lua:
+  - **Pane focus forwarding:** `<C-w>`-navigation only sees layout windows, so
+    `<C-w>l` into the app landed on the blank scratch PANE behind the root
+    float. A WinEnter autocmd forwards any focus the pane receives into the
+    float (guarded on float validity, so teardown races are no-ops).
+  - **Fixed-mode view pinning:** nvim scrolls any window until its last line
+    hits the top even when the buffer fits, so the fixed-mode root canvas
+    (which IS the viewport) could be scrolled into blank space. `pin_view`
+    snaps topline/leftcol back on WinScrolled, wired BEFORE subwin.attach so
+    the manager's resync (definition order) sees the restored view — no float
+    swim. Scroll-mode mounts are untouched (the window is a real viewport).
+  - Also pinned by spec while chasing a clanker cursor-jump report: a splice
+    under a window cursor does NOT move it (fold-toggle pattern spec in
+    container_spec — fibrous was already correct; the jump was clanker's
+    follow-mode autoscroll firing on visibility-only store mutations).
+  - Specs: mount_spec +2 (pane forwarding; fixed pins/scroll survives — NB
+    WinScrolled never fires in headless -l, the spec delivers it via
+    nvim_exec_autocmds), container_spec +1. Suite 301/0.
+
 ### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
 
 - Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not

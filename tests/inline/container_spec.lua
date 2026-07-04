@@ -400,6 +400,40 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
+  it("a repaint under the cursor keeps the cursor in place (fold-toggle pattern)", function()
+    local function App(_, props)
+      local children = {
+        { comp = ui.label, props = { text = props.open and "[-] tool" or "[+] tool" } },
+      }
+      if props.open then
+        children[2] = { comp = ui.label, props = { text = "meta 1" } }
+        children[3] = { comp = ui.label, props = { text = "meta 2" } }
+      end
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.container, props = { height = 4 }, children = children },
+        },
+      }
+    end
+    local handle = mount.floating(App, { open = false }, { width = 10, height = 4 })
+    local csub = subwin_of(handle.winid)
+
+    -- cursor on the header row, inside the container float — the toggle
+    -- rewrites that row (marker flips) and appends the metadata below it
+    vim.api.nvim_set_current_win(csub)
+    vim.api.nvim_win_set_cursor(csub, { 1, 0 })
+    handle.set_props({ open = true })
+
+    assert.same({ "[-] tool", "meta 1", "meta 2" }, trimmed(vim.api.nvim_win_get_buf(csub)))
+    -- nvim parks a cursor caught inside a replaced range at the end of the
+    -- new text; a flush is a repaint, not an edit — the cursor must not move
+    assert.same({ 1, 0 }, vim.api.nvim_win_get_cursor(csub))
+
+    handle.unmount()
+  end)
+
   it("unmount tears everything down, innermost first", function()
     local function App()
       return {
