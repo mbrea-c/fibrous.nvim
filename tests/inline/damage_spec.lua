@@ -244,6 +244,34 @@ describe("inline.subwin damage tracking", function()
 		vim.api.nvim_buf_delete(buf, { force = true })
 	end)
 
+	it("a no-change relayout through the mount leaves widgets fully alone", function()
+		-- Regression: the mount's on_flush wrapper must map damage nil → sync(false).
+		-- (`x == nil and false or x` can never yield false — it silently forced a
+		-- full re-extraction of every widget on every clean frame.)
+		local buf = make_buf()
+		local function App()
+			return {
+				comp = col,
+				props = {},
+				children = {
+					{ comp = text, props = { text = "top" } },
+					{ comp = raw_buffer, props = { bufnr = buf, height = 1, wrap = false } },
+				},
+			}
+		end
+		local handle = mount.floating(App, {}, { width = 10, height = 4 })
+		local tick = vim.api.nvim_buf_get_changedtick(handle.bufnr)
+
+		handle.relayout()
+		handle.relayout()
+
+		-- no mirror rewrite, no transcription: not one buffer write
+		assert.equal(tick, vim.api.nvim_buf_get_changedtick(handle.bufnr))
+
+		handle.unmount()
+		vim.api.nvim_buf_delete(buf, { force = true })
+	end)
+
 	it("a flush that damages the widget's rows re-extracts the mirror over the splice", function()
 		local buf = make_buf()
 		local setter

@@ -13,17 +13,27 @@
 -- the current size from the last committed tree without re-rendering any
 -- component — the mount target's resize-sync entry point.
 --
--- Per the perf posture (tracker Decisions): a commit is a full function of
--- (fiber tree, size) — full measure + repaint every time. Instances are
--- therefore just tag markers; the tree is rebuilt from the committed fibers at
--- flush time. The BUFFER write, however, is damage-tracked: the host retains
--- the previous frame's canvas and applies the minimal splice (one ranged
--- set_lines, marks cleared BEFORE the write while they are still where they
--- were put, and only the spliced rows' marks re-set). `on_flush` receives the
--- damage — nil when the canvas didn't change, else { top, bot } 0-based
--- inclusive rows of the new frame (bot < top: pure deletion at `top`) — so the
--- subwin manager can leave untouched widgets' mirrors alone.
+-- Perf posture (tracker Decisions, revised): a commit is still a pure
+-- function of (fiber tree, size) — but every stage is memoized on what
+-- actually changed:
+--   * build     untouched fiber subtrees (dirtiness ticks, fiber.lua) keep
+--               their node OBJECTS (fiber._node);
+--   * layout    reused nodes skip measure under the same constraint and skip
+--               positioning under the same box (layout.compute `_memo`);
+--   * paint     a persistent canvas repaints only changed subtrees
+--               (render.update) while the size holds;
+--   * write     the buffer gets the minimal splice against the previous
+--               frame's lines/spans (marks cleared BEFORE the write, while
+--               they are still where they were put), and a fully clean frame
+--               at the same size skips the flush outright.
+-- Every path falls back to the full rebuild/paint when its precondition
+-- breaks, so the result is always byte-identical to a fresh paint (the
+-- memo_spec fresh-mount oracles pin that). `on_flush` receives the damage —
+-- nil when the canvas didn't change, else { top, bot } 0-based inclusive rows
+-- of the new frame (bot < top: pure deletion at `top`) — so the subwin
+-- manager can leave untouched widgets' mirrors alone.
 
+local Fiber = require("fibrous.reactive.fiber")
 local layout = require("fibrous.inline.layout")
 local render = require("fibrous.inline.render")
 local style = require("fibrous.inline.style")
@@ -69,31 +79,81 @@ local function attach_style(node, states)
 	return node
 end
 
+-- The live line count an auto-sized raw_buffer measures from.
+---@param props table
+---@return integer
+local function rb_count(props)
+	return props.bufnr and vim.api.nvim_buf_is_valid(props.bufnr) and vim.api.nvim_buf_line_count(props.bufnr) or 1
+end
+
+-- Nodes accumulate ~20 hash fields over build + measure + layout + paint;
+-- pre-sizing the hash part keeps LuaJIT from rehashing the table three times
+-- on the way (a measurable share of full-rebuild flushes).
+local has_tnew, table_new = pcall(require, "table.new")
+if not has_tnew then
+	table_new = nil
+end
+---@param kind string
+---@param props table
+---@param fiber Fiber
+---@return table
+local function new_node(kind, props, fiber)
+	local node = table_new and table_new(0, 16) or {}
+	node.kind = kind
+	node.props = props
+	node.fiber = fiber
+	return node
+end
+
+---@class BuildCtx
+---@field states table<Fiber, table>  active interaction states, keyed by fiber
+---@field last_tick integer           tick of the previous flush (reuse cutoff)
+
 -- Build the layout-tree node for a fiber, descending through function
 -- components to the host nodes they render. Each node keeps a `fiber` backref
--- (the hit-map ground truth for cursor interaction, task 6).
+-- (the hit-map ground truth for cursor interaction, task 6), and each host
+-- fiber keeps its node (`fiber._node`) — the memo.
+--
+-- Subtree memoization: a fiber whose subtree hasn't changed since the last
+-- flush (tree_tick — renders and set_state flips both bump it) gets its
+-- previous node OBJECT back, styles, sizes and rects intact. `_memo` marks it
+-- for layout.compute's skips. Anything rebuilt is a fresh table (no _memo),
+-- and every ancestor of a change is rebuilt too (Fiber.touch guarantees the
+-- path is dirty), so fresh nodes always get measured and positioned.
 ---@param fiber Fiber
----@param states table<Fiber, table>  active interaction states, keyed by fiber
+---@param ctx BuildCtx
 ---@return table|nil node
-local function build_node(fiber, states)
+local function build_node(fiber, ctx)
 	if type(fiber.type) == "function" then
 		local child = fiber.child_fibers and fiber.child_fibers[1]
-		return child and build_node(child, states) or nil
+		return child and build_node(child, ctx) or nil
 	end
 
 	local tag = fiber.type.__host
 	local props = fiber.props or {}
+	local prev = fiber._node
+	if
+		prev
+		and (fiber.tree_tick or 0) <= ctx.last_tick
+		-- an auto-sized raw_buffer measures LIVE buffer state, which can
+		-- change without any fiber rendering — recheck its line count
+		and not (prev.subwin == "raw_buffer" and not props.height and rb_count(props) ~= prev._rb_count)
+	then
+		prev._memo = true
+		return prev
+	end
+
+	local node = new_node(tag, props, fiber)
 	if CONTAINERS[tag] then
 		local children = {}
 		for _, cf in ipairs(fiber.child_fibers or {}) do
-			local node = build_node(cf, states)
-			if node then
-				children[#children + 1] = node
+			local child = build_node(cf, ctx)
+			if child then
+				children[#children + 1] = child
 			end
 		end
-		return attach_style({ kind = tag, props = props, children = children, fiber = fiber }, states)
-	end
-	if tag == "text_input" or tag == "raw_buffer" then
+		node.children = children
+	elseif tag == "text_input" or tag == "raw_buffer" then
 		-- Subwindow leaves measure as text (one content row unless props size
 		-- them); the float shows the real content, so nothing is painted in the
 		-- content box at layout time — but border/background still render inline
@@ -103,17 +163,31 @@ local function build_node(fiber, states)
 		-- as N empty rows. props.render = "focus" (default) | "always" picks the
 		-- float policy: hidden until focused with the mirror (plus transcribed
 		-- highlights) standing in, or always shown.
-		local text = ""
+		node.kind = "text"
+		node.subwin = tag
+		node.text = ""
 		if tag == "raw_buffer" and not props.height then
-			local count = props.bufnr
-					and vim.api.nvim_buf_is_valid(props.bufnr)
-					and vim.api.nvim_buf_line_count(props.bufnr)
-				or 1
-			text = ("\n"):rep(count - 1)
+			local count = rb_count(props)
+			node.text = ("\n"):rep(count - 1)
+			node._rb_count = count
 		end
-		return attach_style({ kind = "text", props = props, text = text, subwin = tag, fiber = fiber }, states)
+	else
+		node.kind = "text"
+		node.text = props.text or ""
 	end
-	return attach_style({ kind = "text", props = props, text = props.text or "", fiber = fiber }, states)
+	attach_style(node, ctx.states)
+	-- Tier B (incremental paint) bookkeeping, stored only off the fast path:
+	-- `_keep` marks a node rebuilt ONLY because a descendant changed (its own
+	-- visual is intact — the paint can descend instead of repainting it), and
+	-- `_old_rect` remembers where its previous incarnation sat.
+	if prev then
+		if (fiber.self_tick or 0) <= ctx.last_tick then
+			node._keep = true
+		end
+		node._old_rect = prev.rect
+	end
+	fiber._node = node
+	return node
 end
 
 -- Collect the laid-out subwindow nodes of `tree` (document order).
@@ -169,6 +243,11 @@ function M.new(opts)
 	local prev_lines = nil
 	---@type table[][]
 	local prev_hl_rows = {}
+	-- The persistent cell grid the previous frame was painted on. While the
+	-- size holds, flushes repaint only changed subtrees onto it
+	-- (render.update); a size change starts over with a fresh full paint.
+	---@type Canvas|nil
+	local canvas = nil
 
 	---@param spans { row: integer, start_col: integer, end_col: integer, hl: string }[]
 	---@param nrows integer
@@ -202,25 +281,86 @@ function M.new(opts)
 		return true
 	end
 
+	-- Subtree memoization state: the tick the last flush saw (fiber._node holds
+	-- each fiber's memoized node) and the size it flushed at.
+	local last_flush_tick = 0
+	---@type { width: integer, height: integer|nil }|nil
+	local last_size = nil
+
+	-- Can the whole flush be skipped? Only when nothing in the fiber tree
+	-- changed (root tree_tick — renders and set_state flips both bubble to
+	-- it), the size is the same, and no auto-sized raw_buffer's LIVE line
+	-- count drifted (buffers change without any fiber rendering).
+	---@param size { width: integer, height: integer|nil }
+	---@return boolean
+	local function clean_frame(size)
+		if not (prev_lines and host.tree and last_size) then
+			return false
+		end
+		if (last_root.tree_tick or 0) > last_flush_tick then
+			return false
+		end
+		if size.width ~= last_size.width or size.height ~= last_size.height then
+			return false
+		end
+		for _, node in ipairs(host.subwins) do
+			if node._rb_count and rb_count(node.props or {}) ~= node._rb_count then
+				return false
+			end
+		end
+		return true
+	end
+
 	-- Rebuild, lay out, paint and write the committed tree at the current size.
 	local function flush()
 		if not last_root or not vim.api.nvim_buf_is_valid(bufnr) then
 			return
 		end
-		local tree = build_node(last_root, states)
 		local size = opts.get_size()
-		local canvas_lines, canvas_hls = {}, {}
+		if clean_frame(size) then
+			-- identical tree at the identical size: the canvas cannot differ.
+			-- on_flush still runs — subwin float geometry is window state, not
+			-- canvas state (and damage nil tells it nothing changed underneath).
+			if opts.on_flush then
+				opts.on_flush(nil)
+			end
+			return
+		end
+
+		local ctx = { states = states, last_tick = last_flush_tick }
+		local tree = build_node(last_root, ctx)
+		local canvas_lines, hl_rows = {}, {}
 		local subwins = {}
 		if tree then
 			layout.compute(tree, { width = size.width, height = size.height })
-			local canvas = render.paint(tree, size.width, size.height or tree.size.h)
-			canvas_lines, canvas_hls = canvas:lines(), canvas:highlights()
+			local w, h = size.width, size.height or tree.size.h
+			if canvas and canvas.w == w and canvas.h == h and prev_lines then
+				-- Incremental frame: repaint only changed subtrees on the
+				-- persistent canvas, then patch the retained line/span arrays for
+				-- the touched rows. Clean rows keep their very string/table
+				-- objects, so the splice diff below equates them by identity.
+				local dirty = render.update(canvas, tree)
+				for i = 1, h do
+					canvas_lines[i], hl_rows[i] = prev_lines[i], prev_hl_rows[i]
+				end
+				for _, y in ipairs(dirty) do
+					canvas_lines[y + 1] = canvas:line(y + 1)
+					hl_rows[y + 1] = canvas:row_spans(y + 1)
+				end
+			else
+				-- Size changed (or first paint): fresh canvas, full paint.
+				canvas = render.paint(tree, w, h)
+				canvas_lines = canvas:lines()
+				hl_rows = group_by_row(canvas:highlights(), h)
+			end
 			collect_subwins(tree, subwins)
+		else
+			canvas = nil
 		end
 		host.tree = tree
 		host.subwins = subwins
-
-		local hl_rows = group_by_row(canvas_hls, #canvas_lines)
+		last_flush_tick = Fiber.current_tick()
+		last_size = { width = size.width, height = size.height }
 
 		-- Minimal splice against the previous frame: equal head + equal tail
 		-- bracket the one range that gets written. Marks in the range are cleared
@@ -235,11 +375,13 @@ function M.new(opts)
 			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, canvas_lines)
 			vim.bo[bufnr].modifiable = false
 			vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
-			for _, s in ipairs(canvas_hls) do
-				vim.api.nvim_buf_set_extmark(bufnr, ns, s.row, s.start_col, {
-					end_col = s.end_col,
-					hl_group = s.hl,
-				})
+			for _, row in ipairs(hl_rows) do
+				for _, s in ipairs(row) do
+					vim.api.nvim_buf_set_extmark(bufnr, ns, s.row, s.start_col, {
+						end_col = s.end_col,
+						hl_group = s.hl,
+					})
+				end
 			end
 		else
 			local old_n, new_n = #prev_lines, #canvas_lines
@@ -311,8 +453,13 @@ function M.new(opts)
 		relayout = flush,
 
 		-- Flip one interaction state for a fiber. The caller decides when a
-		-- relayout is due — set_state only records.
+		-- relayout is due — set_state only records. The tick stamp keeps the
+		-- memo honest: the fiber didn't render, but its resolved style did
+		-- change, so its node (and the path above it) must rebuild.
 		set_state = function(fiber, name, on)
+			local t = Fiber.next_tick()
+			fiber.self_tick = t
+			Fiber.touch(fiber, t)
 			local s = states[fiber]
 			if on then
 				if not s then

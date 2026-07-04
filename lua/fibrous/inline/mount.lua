@@ -158,8 +158,13 @@ function M.floating(component, props, opts)
 		on_flush = function(damage)
 			if manager then
 				-- nil damage = the canvas didn't change: nothing under the floats
-				-- to re-extract (sync(nil) would force everything)
-				manager.sync(damage == nil and false or damage)
+				-- to re-extract. Explicit if, NOT `damage == nil and false or
+				-- damage` — that expression can never yield false, and silently
+				-- forced a full re-extraction of every widget per clean frame.
+				if damage == nil then
+					damage = false
+				end
+				manager.sync(damage)
 				interaction.update()
 			end
 		end,
@@ -279,8 +284,13 @@ function M.window(component, props, opts)
 		on_flush = function(damage)
 			if manager then
 				-- nil damage = the canvas didn't change: nothing under the floats
-				-- to re-extract (sync(nil) would force everything)
-				manager.sync(damage == nil and false or damage)
+				-- to re-extract. Explicit if, NOT `damage == nil and false or
+				-- damage` — that expression can never yield false, and silently
+				-- forced a full re-extraction of every widget per clean frame.
+				if damage == nil then
+					damage = false
+				end
+				manager.sync(damage)
 				interaction.update()
 			end
 		end,

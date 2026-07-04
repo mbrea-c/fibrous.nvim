@@ -42,10 +42,10 @@ local M = {}
 ---@param comp Component|HostDescriptor
 ---@return string|nil
 local function host_tag(comp)
-  if type(comp) == "table" then
-    return comp.__host
-  end
-  return nil
+	if type(comp) == "table" then
+		return comp.__host
+	end
+	return nil
 end
 
 -- Tear down a fiber, depth-first: unmount children, run this fiber's own effect
@@ -53,22 +53,22 @@ end
 ---@param fiber Fiber
 ---@param env Env
 function M.unmount_fiber(fiber, env)
-  if fiber.child_fibers then
-    for _, child in ipairs(fiber.child_fibers) do
-      M.unmount_fiber(child, env)
-    end
-    fiber.child_fibers = nil
-  end
-  for _, slot in ipairs(fiber.hooks) do
-    if slot.cleanup then
-      slot.cleanup()
-      slot.cleanup = nil
-    end
-  end
-  if fiber.instance and env.host then
-    env.host.destroy_instance(fiber.instance)
-    fiber.instance = nil
-  end
+	if fiber.child_fibers then
+		for _, child in ipairs(fiber.child_fibers) do
+			M.unmount_fiber(child, env)
+		end
+		fiber.child_fibers = nil
+	end
+	for _, slot in ipairs(fiber.hooks) do
+		if slot.cleanup then
+			slot.cleanup()
+			slot.cleanup = nil
+		end
+	end
+	if fiber.instance and env.host then
+		env.host.destroy_instance(fiber.instance)
+		fiber.instance = nil
+	end
 end
 
 -- Instantiate a fiber for a child VNode spec: wire up its hook context and, if
@@ -77,14 +77,14 @@ end
 ---@param env Env
 ---@return Fiber
 function M.create_fiber(spec, env)
-  local fiber = Fiber.new(spec.comp, spec.props)
-  fiber.children_specs = spec.children or {}
-  fiber.ctx = hooks.make_ctx(env.schedule)
-  local tag = host_tag(spec.comp)
-  if tag and env.host then
-    fiber.instance = env.host.create_instance(tag, fiber.props)
-  end
-  return fiber
+	local fiber = Fiber.new(spec.comp, spec.props)
+	fiber.children_specs = spec.children or {}
+	fiber.ctx = hooks.make_ctx(env.schedule)
+	local tag = host_tag(spec.comp)
+	if tag and env.host then
+		fiber.instance = env.host.create_instance(tag, fiber.props)
+	end
+	return fiber
 end
 
 -- Reconcile a parent's existing child fibers against fresh child VNode specs.
@@ -98,32 +98,34 @@ end
 ---@param specs VNode[]
 ---@param env Env
 function M.reconcile_children(parent, specs, env)
-  local old = parent.child_fibers or {}
-  local next_children = {}
-  for i, spec in ipairs(specs) do
-    local existing = old[i]
-    if existing and existing.type == spec.comp then
-      local prev_props = existing.props
-      existing.props = spec.props or {}
-      existing.children_specs = spec.children or {}
-      if existing.instance and env.host then
-        env.host.update_instance(existing.instance, prev_props, existing.props)
-      end
-      M.render_fiber(existing, env)
-      next_children[i] = existing
-    else
-      if existing then
-        M.unmount_fiber(existing, env)
-      end
-      local fiber = M.create_fiber(spec, env)
-      M.render_fiber(fiber, env)
-      next_children[i] = fiber
-    end
-  end
-  for i = #specs + 1, #old do
-    M.unmount_fiber(old[i], env)
-  end
-  parent.child_fibers = next_children
+	local old = parent.child_fibers or {}
+	local next_children = {}
+	for i, spec in ipairs(specs) do
+		local existing = old[i]
+		if existing and existing.type == spec.comp then
+			local prev_props = existing.props
+			existing.props = spec.props or {}
+			existing.children_specs = spec.children or {}
+			existing.parent = parent
+			if existing.instance and env.host then
+				env.host.update_instance(existing.instance, prev_props, existing.props)
+			end
+			M.render_fiber(existing, env)
+			next_children[i] = existing
+		else
+			if existing then
+				M.unmount_fiber(existing, env)
+			end
+			local fiber = M.create_fiber(spec, env)
+			fiber.parent = parent
+			M.render_fiber(fiber, env)
+			next_children[i] = fiber
+		end
+	end
+	for i = #specs + 1, #old do
+		M.unmount_fiber(old[i], env)
+	end
+	parent.child_fibers = next_children
 end
 
 -- Render a single fiber and reconcile its subtree.
@@ -141,24 +143,31 @@ end
 ---@param env Env
 ---@return VNode|nil rendered
 function M.render_fiber(fiber, env)
-  local child_specs
-  if type(fiber.type) == "function" then
-    fiber.hook_index = 0
-    fiber.rendered = context.with_current(fiber, function()
-      return fiber.type(fiber.ctx, fiber.props)
-    end)
-    child_specs = fiber.rendered and { fiber.rendered } or {}
-  else
-    child_specs = fiber.children_specs or {}
-  end
-  M.reconcile_children(fiber, child_specs, env)
-  for _, slot in ipairs(fiber.hooks) do
-    if slot.pending then
-      env.effect_queue[#env.effect_queue + 1] = fiber
-      break
-    end
-  end
-  return fiber.rendered
+	-- Everything under the pass's entry fiber re-renders, so every visited
+	-- fiber is (possibly) changed as of this pass's tick; the runtime bubbles
+	-- the tick up the parent path from the entry (Fiber.touch).
+	if env.tick then
+		fiber.self_tick = env.tick
+		fiber.tree_tick = env.tick
+	end
+	local child_specs
+	if type(fiber.type) == "function" then
+		fiber.hook_index = 0
+		fiber.rendered = context.with_current(fiber, function()
+			return fiber.type(fiber.ctx, fiber.props)
+		end)
+		child_specs = fiber.rendered and { fiber.rendered } or {}
+	else
+		child_specs = fiber.children_specs or {}
+	end
+	M.reconcile_children(fiber, child_specs, env)
+	for _, slot in ipairs(fiber.hooks) do
+		if slot.pending then
+			env.effect_queue[#env.effect_queue + 1] = fiber
+			break
+		end
+	end
+	return fiber.rendered
 end
 
 return M

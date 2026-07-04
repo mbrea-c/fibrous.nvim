@@ -28,7 +28,7 @@ local measure, layout -- forward declarations (containers recurse)
 
 -- Iterate the UTF-8 characters of `s`.
 local function chars(s)
-  return s:gmatch("[%z\1-\127\194-\244][\128-\191]*")
+	return s:gmatch("[%z\1-\127\194-\244][\128-\191]*")
 end
 
 -- Emit `word` (starting at source byte `ws`) in display-width chunks of at
@@ -38,20 +38,20 @@ end
 -- attribution.
 ---@return string remainder, integer remainder_width, integer remainder_src
 local function hard_break(word, ws, max_w, out, po)
-  local chunk, w, cs = "", 0, ws
-  for ch in chars(word) do
-    local cw = char_width(ch)
-    if w + cw > max_w and chunk ~= "" then
-      out[#out + 1] = chunk
-      if po then
-        po[#po + 1] = { { s = cs, text = chunk } }
-      end
-      cs = cs + #chunk
-      chunk, w = "", 0
-    end
-    chunk, w = chunk .. ch, w + cw
-  end
-  return chunk, w, cs
+	local chunk, w, cs = "", 0, ws
+	for ch in chars(word) do
+		local cw = char_width(ch)
+		if w + cw > max_w and chunk ~= "" then
+			out[#out + 1] = chunk
+			if po then
+				po[#po + 1] = { { s = cs, text = chunk } }
+			end
+			cs = cs + #chunk
+			chunk, w = "", 0
+		end
+		chunk, w = chunk .. ch, w + cw
+	end
+	return chunk, w, cs
 end
 
 -- Greedy word-wrap of one logical line into display lines of width <= max_w.
@@ -61,57 +61,57 @@ end
 -- join space points at the first byte of the gap it replaced, so it takes
 -- that gap's span hl.
 local function wrap_line(logical, base, max_w, out, po)
-  local line, lw = "", 0
-  local pieces = po and {}
-  local any = false
-  for ws, word in logical:gmatch("()(%S+)") do
-    any = true
-    local abs = base + ws - 1
-    local ww = str_width(word)
-    if ww > max_w then
-      if line ~= "" then
-        out[#out + 1] = line
-        if po then
-          po[#po + 1] = pieces
-        end
-      end
-      local cs
-      line, lw, cs = hard_break(word, abs, max_w, out, po)
-      if po then
-        pieces = { { s = cs, text = line } }
-      end
-    elseif line == "" then
-      line, lw = word, ww
-      if po then
-        pieces = { { s = abs, text = word } }
-      end
-    elseif lw + 1 + ww <= max_w then
-      if po then
-        local prev = pieces[#pieces]
-        pieces[#pieces + 1] = { s = prev.s + #prev.text, text = " " }
-        pieces[#pieces + 1] = { s = abs, text = word }
-      end
-      line, lw = line .. " " .. word, lw + 1 + ww
-    else
-      out[#out + 1] = line
-      if po then
-        po[#po + 1] = pieces
-        pieces = { { s = abs, text = word } }
-      end
-      line, lw = word, ww
-    end
-  end
-  if any then
-    out[#out + 1] = line
-    if po then
-      po[#po + 1] = pieces
-    end
-  else
-    out[#out + 1] = "" -- blank logical line = paragraph break, preserved
-    if po then
-      po[#po + 1] = {}
-    end
-  end
+	local line, lw = "", 0
+	local pieces = po and {}
+	local any = false
+	for ws, word in logical:gmatch("()(%S+)") do
+		any = true
+		local abs = base + ws - 1
+		local ww = str_width(word)
+		if ww > max_w then
+			if line ~= "" then
+				out[#out + 1] = line
+				if po then
+					po[#po + 1] = pieces
+				end
+			end
+			local cs
+			line, lw, cs = hard_break(word, abs, max_w, out, po)
+			if po then
+				pieces = { { s = cs, text = line } }
+			end
+		elseif line == "" then
+			line, lw = word, ww
+			if po then
+				pieces = { { s = abs, text = word } }
+			end
+		elseif lw + 1 + ww <= max_w then
+			if po then
+				local prev = pieces[#pieces]
+				pieces[#pieces + 1] = { s = prev.s + #prev.text, text = " " }
+				pieces[#pieces + 1] = { s = abs, text = word }
+			end
+			line, lw = line .. " " .. word, lw + 1 + ww
+		else
+			out[#out + 1] = line
+			if po then
+				po[#po + 1] = pieces
+				pieces = { { s = abs, text = word } }
+			end
+			line, lw = word, ww
+		end
+	end
+	if any then
+		out[#out + 1] = line
+		if po then
+			po[#po + 1] = pieces
+		end
+	else
+		out[#out + 1] = "" -- blank logical line = paragraph break, preserved
+		if po then
+			po[#po + 1] = {}
+		end
+	end
 end
 
 -- Wrap `text`; when `ranges` is given (span-list text), also return the
@@ -121,121 +121,129 @@ end
 ---@param max_w integer
 ---@return string[] lines, SpanRun[][]|nil line_runs
 local function wrap_text(text, ranges, max_w)
-  local out = {}
-  local po = ranges and {}
-  local base = 1
-  for _, logical in ipairs(vim.split(text, "\n", { plain = true })) do
-    wrap_line(logical, base, max_w, out, po)
-    base = base + #logical + 1
-  end
-  if not po then
-    return out, nil
-  end
-  local runs = {}
-  for i, pieces in ipairs(po) do
-    runs[i] = spans.runs(pieces, ranges)
-  end
-  return out, runs
+	local out = {}
+	local po = ranges and {}
+	local base = 1
+	for _, logical in ipairs(vim.split(text, "\n", { plain = true })) do
+		wrap_line(logical, base, max_w, out, po)
+		base = base + #logical + 1
+	end
+	if not po then
+		return out, nil
+	end
+	local runs = {}
+	for i, pieces in ipairs(po) do
+		runs[i] = spans.runs(pieces, ranges)
+	end
+	return out, runs
 end
 
 -- Split nowrap `text` at newlines; with `ranges`, attribute each line whole.
 ---@return string[] lines, SpanRun[][]|nil line_runs
 local function split_text(text, ranges)
-  local lines = vim.split(text, "\n", { plain = true })
-  if not ranges then
-    return lines, nil
-  end
-  local runs, base = {}, 1
-  for i, l in ipairs(lines) do
-    runs[i] = spans.runs({ { s = base, text = l } }, ranges)
-    base = base + #l + 1
-  end
-  return lines, runs
+	local lines = vim.split(text, "\n", { plain = true })
+	if not ranges then
+		return lines, nil
+	end
+	local runs, base = {}, 1
+	for i, l in ipairs(lines) do
+		runs[i] = spans.runs({ { s = base, text = l } }, ranges)
+		base = base + #l + 1
+	end
+	return lines, runs
 end
 
 ---@param lines string[]
 ---@return integer
 local function max_line_width(lines)
-  local w = 0
-  for _, l in ipairs(lines) do
-    w = math.max(w, str_width(l))
-  end
-  return w
+	local w = 0
+	for _, l in ipairs(lines) do
+		w = math.max(w, str_width(l))
+	end
+	return w
 end
 
 -- Bottom-up pass: resolve the box model and compute node.size — the intrinsic
 -- margin-box size under an available-width constraint. Wrapping text reflows
 -- here, so heights already reflect the constrained width.
+--
+-- Memoization (`node._memo`, opt-in, set by the inline host on nodes REUSED
+-- from the previous flush): a reused node is byte-identical input — same
+-- props, text, style, children objects — so under the same constraint its
+-- whole subtree's sizes (and wrapped lines) are already right. Raw trees
+-- never carry the flag and always compute.
 ---@param node table
 ---@param avail_w integer  available margin-box width
 function measure(node, avail_w)
-  local props = node.props or {}
-  -- A host-built node carries its state-resolved style ("Style rework") — its
-  -- box parts already went through box.lua. Raw trees resolve from props.
-  local rs = node.style_resolved
-  node.box = rs and { margin = rs.margin, padding = rs.padding, border = rs.border } or box.resolve(props)
-  local r = node.box
-  local content_avail = math.max(avail_w - box.h_outer(r), 1)
+	if node._memo and node._mw == avail_w then
+		return
+	end
+	local props = node.props or {}
+	-- A host-built node carries its state-resolved style ("Style rework") — its
+	-- box parts already went through box.lua. Raw trees resolve from props.
+	local rs = node.style_resolved
+	node.box = rs and { margin = rs.margin, padding = rs.padding, border = rs.border } or box.resolve(props)
+	local r = node.box
+	local content_avail = math.max(avail_w - box.h_outer(r), 1)
 
-  if node.kind == "text" then
-    -- Span-list text ("Style rework" S4) flattens once; the ranges are
-    -- re-applied to every (re)wrap so node.line_runs tracks node.lines.
-    local text, ranges = node.text or "", nil
-    if type(text) == "table" then
-      text, ranges = spans.flatten(text)
-    end
-    node._text, node._ranges = text, ranges
-    if props.wrap then
-      node.lines, node.line_runs = wrap_text(text, ranges, content_avail)
-      node._wrap_w = content_avail
-    else
-      node.lines, node.line_runs = split_text(text, ranges)
-    end
-    node.content_size = { w = max_line_width(node.lines), h = #node.lines }
-  elseif CONTAINERS[node.kind] then
-    local children = node.children or {}
-    local gap = props.gap or 0
-    local gaps = gap * math.max(#children - 1, 0)
-    local main_sum, cross_max = 0, 0
-    if node.kind == "col" then
-      for _, child in ipairs(children) do
-        measure(child, content_avail)
-        main_sum = main_sum + child.size.h
-        cross_max = math.max(cross_max, child.size.w)
-      end
-      node.content_size = { w = cross_max, h = main_sum + gaps }
-    else
-      -- Row: each child is measured against the width still unclaimed, so a
-      -- wrapping child after fixed siblings wraps to what is actually left.
-      local remaining = content_avail
-      for i, child in ipairs(children) do
-        measure(child, math.max(remaining, 1))
-        remaining = remaining - child.size.w - (i < #children and gap or 0)
-        main_sum = main_sum + child.size.w
-        cross_max = math.max(cross_max, child.size.h)
-      end
-      node.content_size = { w = main_sum + gaps, h = cross_max }
-    end
-  else
-    error("fibrous: unknown layout node kind '" .. tostring(node.kind) .. "'")
-  end
+	if node.kind == "text" then
+		-- Span-list text ("Style rework" S4) flattens once; the ranges are
+		-- re-applied to every (re)wrap so node.line_runs tracks node.lines.
+		local text, ranges = node.text or "", nil
+		if type(text) == "table" then
+			text, ranges = spans.flatten(text)
+		end
+		node._text, node._ranges = text, ranges
+		if props.wrap then
+			node.lines, node.line_runs = wrap_text(text, ranges, content_avail)
+			node._wrap_w = content_avail
+		else
+			node.lines, node.line_runs = split_text(text, ranges)
+		end
+		node.content_size = { w = max_line_width(node.lines), h = #node.lines }
+	elseif CONTAINERS[node.kind] then
+		local children = node.children or {}
+		local gap = props.gap or 0
+		local gaps = gap * math.max(#children - 1, 0)
+		local main_sum, cross_max = 0, 0
+		if node.kind == "col" then
+			for _, child in ipairs(children) do
+				measure(child, content_avail)
+				main_sum = main_sum + child.size.h
+				cross_max = math.max(cross_max, child.size.w)
+			end
+			node.content_size = { w = cross_max, h = main_sum + gaps }
+		else
+			-- Row: each child is measured against the width still unclaimed, so a
+			-- wrapping child after fixed siblings wraps to what is actually left.
+			local remaining = content_avail
+			for i, child in ipairs(children) do
+				measure(child, math.max(remaining, 1))
+				remaining = remaining - child.size.w - (i < #children and gap or 0)
+				main_sum = main_sum + child.size.w
+				cross_max = math.max(cross_max, child.size.h)
+			end
+			node.content_size = { w = main_sum + gaps, h = cross_max }
+		end
+	else
+		error("fibrous: unknown layout node kind '" .. tostring(node.kind) .. "'")
+	end
 
-  -- Explicit width/height props are border-box sizes (box-sizing: border-box).
-  local cs = node.content_size
-  node.size = {
-    w = props.width and (props.width + r.margin.left + r.margin.right)
-      or (cs.w + box.h_outer(r)),
-    h = props.height and (props.height + r.margin.top + r.margin.bottom)
-      or (cs.h + box.v_outer(r)),
-  }
+	-- Explicit width/height props are border-box sizes (box-sizing: border-box).
+	local cs = node.content_size
+	node.size = {
+		w = props.width and (props.width + r.margin.left + r.margin.right) or (cs.w + box.h_outer(r)),
+		h = props.height and (props.height + r.margin.top + r.margin.bottom) or (cs.h + box.v_outer(r)),
+	}
 
-  -- A border title floors the intrinsic width so it fits between the corners;
-  -- an explicit width wins (the renderer crops the title instead).
-  local title = r.border.title
-  if title and not props.width then
-    local min_w = str_width(title.text) + r.border.sides.left + r.border.sides.right
-    node.size.w = math.max(node.size.w, min_w + r.margin.left + r.margin.right)
-  end
+	-- A border title floors the intrinsic width so it fits between the corners;
+	-- an explicit width wins (the renderer crops the title instead).
+	local title = r.border.title
+	if title and not props.width then
+		local min_w = str_width(title.text) + r.border.sides.left + r.border.sides.right
+		node.size.w = math.max(node.size.w, min_w + r.margin.left + r.margin.right)
+	end
+	node._mw = avail_w
 end
 
 -- Top-down pass: assign the node's margin-box to (x, y, w, h) and derive its
@@ -259,111 +267,125 @@ end
 -- `align_self` overrides the container's `align` for that child alone.
 ---@param node table
 local function layout_children(node)
-  local props = node.props or {}
-  local children = node.children or {}
-  local gap = props.gap or 0
-  local horizontal = node.kind == "row"
-  local c = node.content
-  local main_avail = horizontal and c.w or c.h
-  local cross_avail = horizontal and c.h or c.w
-  local align = props.align or "stretch"
+	local props = node.props or {}
+	local children = node.children or {}
+	local gap = props.gap or 0
+	local horizontal = node.kind == "row"
+	local c = node.content
+	local main_avail = horizontal and c.w or c.h
+	local cross_avail = horizontal and c.h or c.w
+	local align = props.align or "stretch"
 
-  -- Leftover main-axis space after gaps and non-grow children.
-  local fixed = gap * math.max(#children - 1, 0)
-  local grow_total = 0
-  local last_grow = nil
-  for i, child in ipairs(children) do
-    local g = (child.props or {}).grow or 0
-    if g > 0 then
-      grow_total = grow_total + g
-      last_grow = i
-    else
-      fixed = fixed + (horizontal and child.size.w or child.size.h)
-    end
-  end
-  local leftover = math.max(main_avail - fixed, 0)
+	-- Leftover main-axis space after gaps and non-grow children.
+	local fixed = gap * math.max(#children - 1, 0)
+	local grow_total = 0
+	local last_grow = nil
+	for i, child in ipairs(children) do
+		local g = (child.props or {}).grow or 0
+		if g > 0 then
+			grow_total = grow_total + g
+			last_grow = i
+		else
+			fixed = fixed + (horizontal and child.size.w or child.size.h)
+		end
+	end
+	local leftover = math.max(main_avail - fixed, 0)
 
-  -- Main-axis run offset and inter-child spacing from justify (only when no
-  -- child grows — grow consumes the leftover instead).
-  local offset, spacing = 0, 0
-  if grow_total == 0 and leftover > 0 then
-    local justify = props.justify or "start"
-    if justify == "center" then
-      offset = math.floor(leftover / 2)
-    elseif justify == "end" then
-      offset = leftover
-    elseif justify == "space-between" and #children > 1 then
-      spacing = leftover / (#children - 1) -- fractional; floored per position
-    end
-  end
+	-- Main-axis run offset and inter-child spacing from justify (only when no
+	-- child grows — grow consumes the leftover instead).
+	local offset, spacing = 0, 0
+	if grow_total == 0 and leftover > 0 then
+		local justify = props.justify or "start"
+		if justify == "center" then
+			offset = math.floor(leftover / 2)
+		elseif justify == "end" then
+			offset = leftover
+		elseif justify == "space-between" and #children > 1 then
+			spacing = leftover / (#children - 1) -- fractional; floored per position
+		end
+	end
 
-  local pos = (horizontal and c.x or c.y) + offset
-  local distributed = 0
-  local acc_spacing = 0
-  for i, child in ipairs(children) do
-    local g = (child.props or {}).grow or 0
-    local main
-    if g > 0 then
-      if i == last_grow then
-        main = leftover - distributed -- remainder closes the gap exactly
-      else
-        main = math.floor(leftover * g / grow_total)
-      end
-      distributed = distributed + main
-    else
-      main = horizontal and child.size.w or child.size.h
-    end
+	local pos = (horizontal and c.x or c.y) + offset
+	local distributed = 0
+	local acc_spacing = 0
+	for i, child in ipairs(children) do
+		local g = (child.props or {}).grow or 0
+		local main
+		if g > 0 then
+			if i == last_grow then
+				main = leftover - distributed -- remainder closes the gap exactly
+			else
+				main = math.floor(leftover * g / grow_total)
+			end
+			distributed = distributed + main
+		else
+			main = horizontal and child.size.w or child.size.h
+		end
 
-    local child_props = child.props or {}
-    local explicit_cross = horizontal and child_props.height or child_props.width
-    local child_cross = horizontal and child.size.h or child.size.w
-    local child_align = child_props.align_self or align
-    local cross_size, cross_off
-    if child_align == "stretch" and not explicit_cross then
-      cross_size, cross_off = cross_avail, 0
-    elseif child_align == "center" then
-      cross_size = math.min(child_cross, cross_avail)
-      cross_off = math.floor((cross_avail - cross_size) / 2)
-    elseif child_align == "end" then
-      cross_size = math.min(child_cross, cross_avail)
-      cross_off = cross_avail - cross_size
-    else -- "start", or stretch with an explicit cross size
-      cross_size, cross_off = math.min(child_cross, cross_avail), 0
-    end
+		local child_props = child.props or {}
+		local explicit_cross = horizontal and child_props.height or child_props.width
+		local child_cross = horizontal and child.size.h or child.size.w
+		local child_align = child_props.align_self or align
+		local cross_size, cross_off
+		if child_align == "stretch" and not explicit_cross then
+			cross_size, cross_off = cross_avail, 0
+		elseif child_align == "center" then
+			cross_size = math.min(child_cross, cross_avail)
+			cross_off = math.floor((cross_avail - cross_size) / 2)
+		elseif child_align == "end" then
+			cross_size = math.min(child_cross, cross_avail)
+			cross_off = cross_avail - cross_size
+		else -- "start", or stretch with an explicit cross size
+			cross_size, cross_off = math.min(child_cross, cross_avail), 0
+		end
 
-    if horizontal then
-      layout(child, pos, c.y + cross_off, main, cross_size)
-    else
-      layout(child, c.x + cross_off, pos, cross_size, main)
-    end
-    acc_spacing = acc_spacing + spacing
-    pos = pos + main + gap + math.floor(acc_spacing + 0.5) - math.floor(acc_spacing - spacing + 0.5)
-  end
+		if horizontal then
+			layout(child, pos, c.y + cross_off, main, cross_size)
+		else
+			layout(child, c.x + cross_off, pos, cross_size, main)
+		end
+		acc_spacing = acc_spacing + spacing
+		pos = pos + main + gap + math.floor(acc_spacing + 0.5) - math.floor(acc_spacing - spacing + 0.5)
+	end
 end
 
 ---@param w integer  assigned margin-box width
 ---@param h integer  assigned margin-box height
 function layout(node, x, y, w, h)
-  local r = node.box
-  node.rect = {
-    x = x + r.margin.left,
-    y = y + r.margin.top,
-    w = w - r.margin.left - r.margin.right,
-    h = h - r.margin.top - r.margin.bottom,
-  }
-  node.content = {
-    x = node.rect.x + r.border.sides.left + r.padding.left,
-    y = node.rect.y + r.border.sides.top + r.padding.top,
-    w = node.rect.w - box.h_inner(r),
-    h = node.rect.h - box.v_inner(r),
-  }
+	-- Memoized skip (see measure): a reused node assigned the same margin box
+	-- keeps its whole subtree's rects. When a sibling's size change shifts it,
+	-- the args differ and the subtree re-positions normally — the memo makes
+	-- the position pass O(changed), not O(tree). The four args pack into one
+	-- number (one hash slot per node, one compare) — exact for values under
+	-- 2^13, which covers any real canvas; anything bigger just never memoizes.
+	local lkey
+	if x >= 0 and y >= 0 and w >= 0 and h >= 0 and x < 8192 and y < 8192 and w < 8192 and h < 8192 then
+		lkey = ((x * 8192 + y) * 8192 + w) * 8192 + h
+	end
+	if node._memo and lkey and node._lkey == lkey then
+		return
+	end
+	node._lkey = lkey
+	local r = node.box
+	node.rect = {
+		x = x + r.margin.left,
+		y = y + r.margin.top,
+		w = w - r.margin.left - r.margin.right,
+		h = h - r.margin.top - r.margin.bottom,
+	}
+	node.content = {
+		x = node.rect.x + r.border.sides.left + r.padding.left,
+		y = node.rect.y + r.border.sides.top + r.padding.top,
+		w = node.rect.w - box.h_inner(r),
+		h = node.rect.h - box.v_inner(r),
+	}
 
-  if node.kind == "text" and (node.props or {}).wrap and node.content.w ~= node._wrap_w then
-    node.lines, node.line_runs = wrap_text(node._text, node._ranges, math.max(node.content.w, 1))
-    node._wrap_w = node.content.w
-  elseif CONTAINERS[node.kind] then
-    layout_children(node)
-  end
+	if node.kind == "text" and (node.props or {}).wrap and node.content.w ~= node._wrap_w then
+		node.lines, node.line_runs = wrap_text(node._text, node._ranges, math.max(node.content.w, 1))
+		node._wrap_w = node.content.w
+	elseif CONTAINERS[node.kind] then
+		layout_children(node)
+	end
 end
 
 ---@class ComputeOpts
@@ -375,9 +397,9 @@ end
 ---@param opts ComputeOpts
 ---@return table tree  the same tree, annotated
 function M.compute(tree, opts)
-  measure(tree, opts.width)
-  layout(tree, 0, 0, opts.width, opts.height or tree.size.h)
-  return tree
+	measure(tree, opts.width)
+	layout(tree, 0, 0, opts.width, opts.height or tree.size.h)
+	return tree
 end
 
 return M

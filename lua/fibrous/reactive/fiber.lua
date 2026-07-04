@@ -24,19 +24,62 @@
 ---@field children_specs? VNode[]    child VNode specs (host primitives) to reconcile
 ---@field child_fibers? Fiber[]      reconciled child fibers, indexed positionally
 ---@field instance? any              backing host instance (host fibers only)
+---@field parent? Fiber              the fiber this one was reconciled under (nil at the root)
+---@field self_tick? integer         tick of this fiber's own last change (render or state flip)
+---@field tree_tick? integer         tick of the last change anywhere in this fiber's subtree
 local Fiber = {}
 Fiber.__index = Fiber
+
+-- Pre-size the hash part so the fields added over a fiber's life (render
+-- output, reconciliation links, dirtiness ticks, a host's memoized node)
+-- never force a rehash. LuaJIT-only; plain Lua falls back to {}.
+local ok, table_new = pcall(require, "table.new")
+if not ok then
+	table_new = function()
+		return {}
+	end
+end
 
 ---@param component Component
 ---@param props? table
 ---@return Fiber
 function Fiber.new(component, props)
-  return setmetatable({
-    type = component,
-    props = props or {},
-    hooks = {},
-    hook_index = 0,
-  }, Fiber)
+	local fiber = table_new(0, 16)
+	fiber.type = component
+	fiber.props = props or {}
+	fiber.hooks = {}
+	fiber.hook_index = 0
+	return setmetatable(fiber, Fiber)
+end
+
+-- Dirtiness clock ("subtree memoization"): every change pass takes a fresh
+-- tick; a host compares fiber ticks against the tick of its last flush to
+-- decide whether a subtree can possibly have changed. Monotonic and global —
+-- ticks are only ever compared, never counted.
+local tick = 0
+
+---@return integer
+function Fiber.next_tick()
+	tick = tick + 1
+	return tick
+end
+
+---@return integer
+function Fiber.current_tick()
+	return tick
+end
+
+-- Record that `fiber`'s subtree changed at tick `t`: mark it and every
+-- ancestor (their subtrees contain the change). The render pass stamps
+-- self_tick on each fiber it actually renders; touch covers the path ABOVE
+-- the entry point, which is not re-rendered but is no longer clean.
+---@param fiber Fiber|nil
+---@param t integer
+function Fiber.touch(fiber, t)
+	while fiber do
+		fiber.tree_tick = t
+		fiber = fiber.parent
+	end
 end
 
 return Fiber
