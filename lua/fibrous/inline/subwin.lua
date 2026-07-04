@@ -14,9 +14,13 @@
 --              viewport (topline) so the right slice of content shows;
 --   full     — hide the float (nvim_win_set_config hide).
 --
--- Focus traversal (task 7): native cursor motions are the primary navigation.
---   in   moving the root cursor into a subwindow's content box focuses its
---        float at the corresponding cell (CursorMoved on the root buffer);
+-- Focus traversal (task 7; explicit-focus rework): subwindows never capture
+-- the cursor — the root cursor glides across their region like any other
+-- cells. Focus is explicit:
+--   in   `enter_at(row, x)` (exposed on the manager) focuses the float whose
+--        rect contains that root-buffer cell, cursor translated (and clamped)
+--        into its content. interact.lua drives it from <CR>, clicks, and the
+--        insert-entry keys (i/I/a/A/o/O);
 --   out  h/j/k/l at the float buffer's edge step into the root buffer adjacent
 --        to the widget (keeping the cursor's row/col alignment); <C-w>-h/j/k/l
 --        exit unconditionally; <C-d>/<C-u> always hand focus AND the motion to
@@ -31,17 +35,61 @@
 -- fire time.
 
 local width = require("fibrous.inline.width")
+local cursorshim = require("fibrous.inline.cursorshim")
 
 local M = {}
 
 ---@class SubwinManager
 ---@field sync fun()      reconcile floats against host.subwins and reposition them
+---@field enter_at fun(row: integer, x: integer): boolean  focus the subwindow at root cell (row, x); false if none there
 ---@field teardown fun()  destroy all floats/buffers and the autocmds
 
 ---@param bufnr integer
 ---@return string
 local function buf_value(bufnr)
   return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+end
+
+-- Render `line` the way the float displays it in a `w`-cell window: tabs
+-- expand by logical virtual column to the next `ts` stop, and with `wrap` the
+-- line chops into continuation rows at every w cells (a wide char straddling
+-- the edge moves whole to the next row, like the display); without wrap it
+-- truncates to one row. Rows are space-padded to exactly w. ('linebreak' and
+-- horizontal scroll are not modeled — style="minimal" floats have neither.)
+---@param line string
+---@param w integer
+---@param ts integer
+---@param wrap boolean
+---@return string[] rows  one per display row
+local function chop(line, w, ts, wrap)
+  local rows, out, cells, vcol = {}, {}, 0, 0
+  local function flush_row()
+    rows[#rows + 1] = table.concat(out) .. (" "):rep(w - cells)
+    out, cells = {}, 0
+  end
+  for ch in line:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+    local cw
+    if ch == "\t" then
+      cw = ts - (vcol % ts)
+      ch = (" "):rep(cw)
+    else
+      cw = width.char(ch)
+    end
+    if cw > w then -- wider than the whole window: degrade to padding
+      ch, cw = (" "):rep(w), w
+    end
+    if cells + cw > w then
+      if not wrap then
+        break
+      end
+      flush_row()
+    end
+    out[#out + 1] = ch
+    cells = cells + cw
+    vcol = vcol + cw
+  end
+  flush_row()
+  return rows
 end
 
 -- Attach a manager to `host` (an InlineHost) whose buffer is shown in the
@@ -57,6 +105,188 @@ function M.attach(host, root_winid)
   -- (stable across commits — the reconciler reuses it when the type matches).
   ---@type table<table, { bufnr: integer, winid: integer, node: table, owned: boolean, maps: table[] }>
   local floats = {}
+
+  -- Per-component render policy (props.render):
+  --   "focus" (default)  the float is hidden until explicitly focused; the
+  --                      mirror + transcribed highlights ARE the widget. The
+  --                      page stays flat text: honest block cursor, complete
+  --                      visual-selection highlights, no guicursor shim.
+  --   "always"           the float is always shown (live down to treesitter
+  --                      fidelity); the mirror underneath is never seen and
+  --                      needs no highlight work.
+  local function policy(entry)
+    local r = (entry.node.props or {}).render
+    if r == "always" then
+      return "always"
+    end
+    if r ~= nil and r ~= "focus" then
+      error(('fibrous: invalid render policy %q (want "always" or "focus")'):format(tostring(r)))
+    end
+    return "focus"
+  end
+
+  -- Write the sub buffer's visible slice (topline `entry.base`, the widget's
+  -- own scroll) into the root canvas cells of the content box. The float
+  -- covers it when shown, so this is never LOOKED at then — it exists so the
+  -- region is honest under a gliding cursor (real characters under the
+  -- cursor, real text in yanks/selections) and it IS the view while a
+  -- render="focus" widget is unfocused. The canvas repaints the box blank on
+  -- every flush; sync() rewrites the mirror right after.
+  local function mirror(entry)
+    if not vim.api.nvim_buf_is_valid(host.bufnr) or not vim.api.nvim_buf_is_valid(entry.bufnr) then
+      return
+    end
+    local c = entry.node.content
+    if c.w <= 0 or c.h <= 0 then
+      return
+    end
+    local base = entry.base or 1
+    local ts = vim.bo[entry.bufnr].tabstop
+    local wrap = vim.api.nvim_win_is_valid(entry.winid) and vim.wo[entry.winid].wrap or false
+
+    -- Build the box's display rows starting at buffer line `base`, wrapping
+    -- exactly like the float does; without wrap, a horizontal scroll
+    -- (leftcol) shifts every row's window. `entry.mirror_map` records, per
+    -- box row, which buffer line and starting cell it shows — the highlight
+    -- transcriber translates sub-buffer positions through it.
+    local leftcol = (not wrap and entry.leftcol) or 0
+    local rows, map = {}, {}
+    local count = vim.api.nvim_buf_line_count(entry.bufnr)
+    local lnum = base
+    while #rows < c.h and lnum <= count do
+      local line = vim.api.nvim_buf_get_lines(entry.bufnr, lnum - 1, lnum, false)[1] or ""
+      if wrap then
+        for i, row in ipairs(chop(line, c.w, ts, true)) do
+          if #rows >= c.h then
+            break
+          end
+          rows[#rows + 1] = row
+          map[#rows] = { lnum = lnum, cell0 = (i - 1) * c.w }
+        end
+      else
+        -- render cells [leftcol, leftcol + w): chop wide enough, cut the
+        -- prefix by display cells (a wide char straddling the cut pads left)
+        local row = chop(line, leftcol + c.w, ts, false)[1]
+        local slice = row:sub(width.cell_to_byte(row, leftcol) + 1)
+        local d = width.str(slice)
+        if d < c.w then
+          slice = (" "):rep(c.w - d) .. slice
+        end
+        rows[#rows + 1] = slice
+        map[#rows] = { lnum = lnum, cell0 = leftcol }
+      end
+      lnum = lnum + 1
+    end
+    while #rows < c.h do
+      rows[#rows + 1] = (" "):rep(c.w)
+    end
+    entry.mirror_map = map
+
+    local last = vim.api.nvim_buf_line_count(host.bufnr) - 1
+    vim.bo[host.bufnr].modifiable = true
+    for i = 0, c.h - 1 do
+      local y = c.y + i
+      if y >= 0 and y <= last then
+        local root_line = vim.api.nvim_buf_get_lines(host.bufnr, y, y + 1, false)[1] or ""
+        local b0 = width.cell_to_byte(root_line, c.x)
+        local b1 = width.cell_to_byte(root_line, c.x + c.w)
+        if b1 <= #root_line then
+          vim.api.nvim_buf_set_text(host.bufnr, y, b0, y, b1, { rows[i + 1] })
+        end
+      end
+    end
+    vim.bo[host.bufnr].modifiable = false
+  end
+
+  -- Copy the sub buffer's queryable highlights onto the mirror region (only
+  -- for render="focus", where the mirror is looked at). Two sources cover a
+  -- typical buffer almost completely:
+  --   * persistent extmarks — diagnostics, LSP semantic tokens, inlay-hint
+  --     and plugin marks; anything nvim_buf_get_extmarks returns. hl_group
+  --     spans translate through entry.mirror_map (wrap-aware).
+  --   * regex :syntax — sampled per cell with synID when the buffer declares
+  --     a syntax (b:current_syntax), compressed into runs.
+  -- NOT copyable, by nvim design: ephemeral decoration-provider highlights
+  -- (treesitter's, indent guides, ...) — they exist only during a redraw.
+  -- Layout-changing features (conceal, inline virt_text, folds) are not
+  -- modeled either; the mirror shows buffer text.
+  local function transcribe(entry)
+    local c = entry.node.content
+    entry.ns = entry.ns or vim.api.nvim_create_namespace("fibrous_inline_mirror_" .. entry.winid)
+    local last = vim.api.nvim_buf_line_count(host.bufnr) - 1
+    vim.api.nvim_buf_clear_namespace(host.bufnr, entry.ns, math.max(c.y, 0), math.min(c.y + c.h, last + 1))
+    local map = entry.mirror_map or {}
+    local ts = vim.bo[entry.bufnr].tabstop
+    local has_syn = vim.b[entry.bufnr].current_syntax ~= nil
+
+    -- One hl span at box row `i` (1-based), box-relative cells [s, e).
+    local function mark(i, s, e, hl, prio)
+      local y = c.y + i - 1
+      if y < 0 or y > last or s >= e then
+        return
+      end
+      local root_line = vim.api.nvim_buf_get_lines(host.bufnr, y, y + 1, false)[1] or ""
+      vim.api.nvim_buf_set_extmark(host.bufnr, entry.ns, y, width.cell_to_byte(root_line, c.x + s), {
+        end_col = width.cell_to_byte(root_line, c.x + e),
+        hl_group = hl,
+        priority = prio,
+      })
+    end
+
+    for i = 1, c.h do
+      local m = map[i]
+      if m then
+        local sline = vim.api.nvim_buf_get_lines(entry.bufnr, m.lnum - 1, m.lnum, false)[1] or ""
+
+        for _, mk in ipairs(vim.api.nvim_buf_get_extmarks(entry.bufnr, -1, { m.lnum - 1, 0 }, { m.lnum - 1, -1 }, { details = true, overlap = true })) do
+          local d = mk[4]
+          if d.hl_group then
+            -- clamp a (possibly multi-line) span to this buffer line, in cells
+            local s_byte = mk[2] < m.lnum - 1 and 0 or mk[3]
+            local e_byte = (d.end_row or mk[2]) > m.lnum - 1 and #sline or (d.end_col or mk[3])
+            local s_cell = math.max(width.str(sline:sub(1, s_byte)), m.cell0)
+            local e_cell = math.min(width.str(sline:sub(1, e_byte)), m.cell0 + c.w)
+            -- +8: above the canvas's base spans (4096) without reordering
+            -- the copied marks relative to each other
+            mark(i, s_cell - m.cell0, e_cell - m.cell0, d.hl_group, (d.priority or 4096) + 8)
+          end
+        end
+
+        if has_syn then
+          vim.api.nvim_buf_call(entry.bufnr, function()
+            local byte, cell = 1, 0
+            local run_hl, run_s = nil, 0
+            local function flush(e_cell)
+              if run_hl then
+                mark(i, run_s - m.cell0, math.min(e_cell, m.cell0 + c.w) - m.cell0, run_hl, 4100)
+              end
+              run_hl = nil
+            end
+            for ch in sline:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+              if cell >= m.cell0 + c.w then
+                break
+              end
+              local cw = ch == "\t" and (ts - (cell % ts)) or width.char(ch)
+              if cell + cw > m.cell0 then
+                local id = vim.fn.synID(m.lnum, byte, 1)
+                local name = id ~= 0 and vim.fn.synIDattr(vim.fn.synIDtrans(id), "name") or nil
+                if name == "" then
+                  name = nil
+                end
+                if name ~= run_hl then
+                  flush(cell)
+                  run_hl, run_s = name, math.max(cell, m.cell0)
+                end
+              end
+              byte = byte + #ch
+              cell = cell + cw
+            end
+            flush(cell)
+          end)
+        end
+      end
+    end
+  end
 
   -- Place `entry`'s float over the visible slice of its content box, given the
   -- root's current scroll position.
@@ -83,9 +313,17 @@ function M.attach(host, root_winid)
         v = vim.fn.winsaveview()
       end)
       base = math.max(v.topline - (entry.clip or 0), 1)
+      entry.base = base
+      entry.leftcol = v.leftcol or 0
+      mirror(entry)
+      if policy(entry) == "focus" then
+        transcribe(entry)
+      end
     end
 
-    if vis_bot < vis_top or c.w <= 0 then
+    -- Hidden: occluded/zero-sized, or a render="focus" widget that nobody is
+    -- editing (entry.revealing is enter()'s "about to focus" escape hatch).
+    if vis_bot < vis_top or c.w <= 0 or (policy(entry) == "focus" and not focused and not entry.revealing) then
       vim.api.nvim_win_set_config(entry.winid, { hide = true })
       return
     end
@@ -138,16 +376,27 @@ function M.attach(host, root_winid)
   end
 
   -- Focus `entry`'s float, placing its cursor at root-buffer cell (row, x)
-  -- translated into the float's content (clamped to its lines).
+  -- translated into the float's content (clamped to its lines). A
+  -- render="focus" float is revealed first (it cannot be entered hidden);
+  -- false when there is nothing focusable (fully occluded).
   local function enter(entry, row, x)
     if not vim.api.nvim_win_is_valid(entry.winid) then
-      return
+      return false
+    end
+    if policy(entry) == "focus" then
+      entry.revealing = true
+      reposition(entry)
+      entry.revealing = nil
+    end
+    if vim.api.nvim_win_get_config(entry.winid).hide then
+      return false
     end
     local c = entry.node.content
     local lnum = math.min(math.max(row - c.y + 1, 1), vim.api.nvim_buf_line_count(entry.bufnr))
     local line = vim.api.nvim_buf_get_lines(entry.bufnr, lnum - 1, lnum, false)[1] or ""
     vim.api.nvim_set_current_win(entry.winid)
     vim.api.nvim_win_set_cursor(entry.winid, { lnum, width.cell_to_byte(line, math.max(x - c.x, 0)) })
+    return true
   end
 
   -- The float cursor's (pos, display cell) — cells because the root target of
@@ -229,6 +478,48 @@ function M.attach(host, root_winid)
     end
   end
 
+  -- Keep the mirror synced with the sub buffer: any text change (typing,
+  -- :normal, API edits to an unowned raw_buffer, LSP edits) schedules a
+  -- reposition — which recaptures the widget's view and rewrites the mirror.
+  -- Coalesced like wire_input's watcher; skipped while focused (the float
+  -- covers the mirror), the WinLeave refresh below settles it on exit.
+  local function wire_mirror(entry)
+    local pending = false
+    local function refresh()
+      if pending then
+        return
+      end
+      pending = true
+      vim.schedule(function()
+        pending = false
+        if entry.dead or not vim.api.nvim_win_is_valid(entry.winid) then
+          return
+        end
+        if entry.winid ~= vim.api.nvim_get_current_win() then
+          reposition(entry)
+        end
+      end)
+    end
+    vim.api.nvim_buf_attach(entry.bufnr, false, {
+      on_lines = function()
+        if entry.dead then
+          return true -- detach
+        end
+        refresh()
+      end,
+    })
+    -- Highlight-only changes arrive without on_lines: diagnostics and LSP
+    -- semantic tokens land as (persistent) extmark updates with their own
+    -- events. pcall: LspTokenUpdate needs nvim 0.10+.
+    for _, ev in ipairs({ "DiagnosticChanged", "LspTokenUpdate" }) do
+      pcall(vim.api.nvim_create_autocmd, ev, {
+        group = group,
+        buffer = entry.bufnr,
+        callback = refresh,
+      })
+    end
+  end
+
   -- text_input change/submit wiring. Handlers come off entry.node.props at
   -- fire time — sync() refreshes entry.node every flush, so this is always
   -- the latest committed component.
@@ -294,6 +585,9 @@ function M.attach(host, root_winid)
       callback = function()
         if vim.api.nvim_get_current_win() == entry.winid then
           set_focus(entry, true)
+          -- A hidden float CAN be entered (<C-w>w cycling, direct API) and
+          -- would be edited invisibly; any focus path must reveal it.
+          reposition(entry)
         end
       end,
     })
@@ -303,6 +597,14 @@ function M.attach(host, root_winid)
       callback = function()
         if vim.api.nvim_get_current_win() == entry.winid then
           set_focus(entry, false)
+          -- reposition skips focused floats (typing must not be yanked
+          -- around), so edits made while focused settle into the mirror now.
+          -- Deferred: WinLeave fires while the float is still current.
+          vim.schedule(function()
+            if not entry.dead then
+              reposition(entry)
+            end
+          end)
         end
       end,
     })
@@ -338,6 +640,7 @@ function M.attach(host, root_winid)
     local entry = { bufnr = bufnr, winid = winid, node = node, owned = owned, maps = {} }
     map_motions(entry)
     wire_focus(entry)
+    wire_mirror(entry)
     if node.subwin == "text_input" then
       wire_input(entry)
     end
@@ -346,6 +649,9 @@ function M.attach(host, root_winid)
 
   local function destroy(entry)
     entry.dead = true -- detaches the on_lines watcher on its next callback
+    if entry.ns and vim.api.nvim_buf_is_valid(host.bufnr) then
+      pcall(vim.api.nvim_buf_clear_namespace, host.bufnr, entry.ns, 0, -1)
+    end
     if vim.api.nvim_win_is_valid(entry.winid) then
       pcall(vim.api.nvim_win_close, entry.winid, true)
     end
@@ -361,6 +667,27 @@ function M.attach(host, root_winid)
         pcall(vim.keymap.del, m[1], m[2], { buffer = entry.bufnr })
       end
       pcall(vim.api.nvim_clear_autocmds, { group = group, buffer = entry.bufnr })
+    end
+  end
+
+  -- Hold the guicursor shim exactly while a render="always" widget is live:
+  -- only then can the root cursor glide UNDER a shown float (the obscured-
+  -- cursor underscore); render="focus" floats are hidden when unfocused.
+  local shim_held = false
+  local function update_shim()
+    local wants = false
+    for _, entry in pairs(floats) do
+      if policy(entry) == "always" then
+        wants = true
+        break
+      end
+    end
+    if wants and not shim_held then
+      cursorshim.acquire()
+      shim_held = true
+    elseif not wants and shim_held then
+      cursorshim.release()
+      shim_held = false
     end
   end
 
@@ -387,6 +714,7 @@ function M.attach(host, root_winid)
         floats[inst] = nil
       end
     end
+    update_shim()
   end
 
   -- Live scroll resync. Deliberately synchronous and uncoalesced — WinScrolled
@@ -419,39 +747,31 @@ function M.attach(host, root_winid)
     end,
   })
 
-  -- Traversal IN: the root cursor landing inside a subwindow's content box
-  -- focuses its float at that cell. `nested`: the window switch happens from
-  -- inside this autocmd, and the WinEnter it fires is what applies the _focus
-  -- style — without nesting it would be silently swallowed.
-  vim.api.nvim_create_autocmd("CursorMoved", {
-    group = group,
-    buffer = host.bufnr,
-    nested = true,
-    callback = function()
-      if vim.api.nvim_get_current_win() ~= root_winid then
-        return
+  -- Explicit focus entry (no traversal capture): focus the float whose RECT
+  -- (border box — entering from a border cell clamps into the content)
+  -- contains root-buffer cell (row, x). Returns true when a subwindow took
+  -- the focus. interact.lua drives this from <CR>, clicks, and insert keys;
+  -- keymaps fire autocmds normally, so WinEnter applies _focus with no
+  -- `nested` gymnastics.
+  local function enter_at(row, x)
+    for _, entry in pairs(floats) do
+      local r = entry.node.rect or entry.node.content
+      if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
+        return enter(entry, row, x)
       end
-      local pos = vim.api.nvim_win_get_cursor(root_winid)
-      local row = pos[1] - 1
-      local line = vim.api.nvim_buf_get_lines(host.bufnr, row, row + 1, false)[1] or ""
-      local x = width.str(line:sub(1, pos[2])) -- byte col → display cell
-      for _, entry in pairs(floats) do
-        local c = entry.node.content
-        if row >= c.y and row < c.y + c.h and x >= c.x and x < c.x + c.w then
-          enter(entry, row, x)
-          return
-        end
-      end
-    end,
-  })
+    end
+    return false
+  end
 
   return {
     sync = sync,
+    enter_at = enter_at,
     teardown = function()
       for _, entry in pairs(floats) do
         destroy(entry) -- before the augroup goes: destroy clears per-buffer autocmds through it
       end
       floats = {}
+      update_shim() -- no floats left: releases the guicursor hold if we had it
       pcall(vim.api.nvim_del_augroup_by_id, group)
     end,
   }

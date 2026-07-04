@@ -152,7 +152,35 @@ describe("inline.style focus state", function()
     handle.unmount()
   end)
 
-  it("the accent also applies when focus arrives via cursor traversal", function()
+  it("a bordered raw_buffer takes the same themed focus accent", function()
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "one", "two" })
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "head" } },
+          { comp = ui.raw_buffer, props = { bufnr = buf, border = true } },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 6 })
+    assert.same({}, marks_with(handle.bufnr, "FibrousBorderFocus"))
+
+    local float = subwin_float()
+    assert.is_not_nil(float)
+    vim.api.nvim_set_current_win(float)
+    assert.is_true(#marks_with(handle.bufnr, "FibrousBorderFocus") > 0)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    assert.same({}, marks_with(handle.bufnr, "FibrousBorderFocus"))
+
+    handle.unmount()
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+
+  it("the accent also applies when focus arrives via <CR> entry", function()
     local function App()
       return {
         comp = ui.col,
@@ -166,11 +194,11 @@ describe("inline.style focus state", function()
     local handle = mount.floating(App, {}, { width = 12, height = 4 })
     local float = subwin_float()
 
-    -- Enter the input the way a user does: move the root cursor into its
-    -- content box (the traversal CursorMoved switches windows from INSIDE an
-    -- autocmd, so WinEnter must be allowed to nest for _focus to apply).
+    -- Enter the input the way a user does: park the root cursor on its
+    -- content box and press <CR> (explicit focus — traversal never captures).
     vim.api.nvim_set_current_win(handle.winid)
     move_cursor(handle, 3, 3) -- content row; byte 3 = first cell after the 3-byte │
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "xt", false)
     assert.equal(float, vim.api.nvim_get_current_win())
     assert.is_true(#marks_with(handle.bufnr, "FibrousBorderFocus") > 0)
 

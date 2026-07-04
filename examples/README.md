@@ -40,7 +40,10 @@ closes the current one first.
 
 Everything renders through the inline host: the UI is text + extmarks in ONE
 unmodifiable buffer, the vim cursor drives hover/activation, and only the text
-inputs are real editable floats (focus follows the cursor in and out of them).
+inputs are real editable floats. Focus into them is explicit — the cursor
+glides over widgets like plain cells; `<CR>`, a click, or `i` enters one and
+h/j/k/l at its edges step back out (see the `policies` example for the two
+`render` policies).
 
 `util.lua` is just glue shared by the examples (binds global keymaps to an app
 handle and clears them on unmount) — it is not part of the library.

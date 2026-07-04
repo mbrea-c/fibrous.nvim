@@ -13,8 +13,8 @@
 -- It is mounted over a docked split (`mount_split`). It also demonstrates:
 --   * a user-defined hook (`use_plan`) composed from use_state, and
 --   * cursor-driven interaction replacing the old scoped keymaps: navigation
---     IS cursor motion — move into the prompt to type (focus follows the
---     cursor), move onto a plan item and <Space> toggles it.
+--     IS cursor motion — park on the prompt and press i (or <CR>) to type,
+--     move onto a plan item and <Space> toggles it.
 
 local nr = require("fibrous")
 local ui = nr.ui

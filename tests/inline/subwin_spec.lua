@@ -41,10 +41,11 @@ end
 
 -- An input above 6 filler lines: content rows 0-2 (explicit height 3), fillers
 -- rows 3-8. In a width-6 height-4 scroll-mode float, scrolling puts the input
--- partially, then fully, above the viewport.
+-- partially, then fully, above the viewport. render="always" — these specs
+-- assert the SHOWN float's clip geometry (the default policy hides it).
 local function ClippingApp()
   local children = {
-    { comp = text_input, props = { height = 3, value = "l1\nl2\nl3" } },
+    { comp = text_input, props = { height = 3, value = "l1\nl2\nl3", render = "always" } },
   }
   for i = 1, 6 do
     children[#children + 1] = { comp = text, props = { text = "f" .. i } }
@@ -60,7 +61,7 @@ describe("inline.subwin", function()
         props = {},
         children = {
           { comp = text, props = { text = "above" } },
-          { comp = text_input, props = { border = true } },
+          { comp = text_input, props = { border = true, render = "always" } },
         },
       }
     end
@@ -142,7 +143,7 @@ describe("inline.subwin", function()
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, buflines)
     local function App()
       local children = {
-        { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 3 } },
+        { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 3, render = "always" } },
       }
       for i = 1, 6 do
         children[#children + 1] = { comp = text, props = { text = "f" .. i } }
@@ -172,6 +173,318 @@ describe("inline.subwin", function()
 
     handle.unmount()
     vim.api.nvim_buf_delete(buf, { force = true })
+  end)
+
+  -- The text mirror: the sub buffer's visible slice is written into the root
+  -- canvas cells the float covers. Invisible under an always-shown float, but
+  -- it makes the region honest — the gliding cursor sits on real characters,
+  -- yank/visual selection get real text — and it IS the view when a
+  -- render="focus" widget is unfocused.
+  describe("text mirror", function()
+    local function editor_app(buf)
+      return function()
+        local children = {
+          { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 3 } },
+        }
+        for i = 1, 3 do
+          children[#children + 1] = { comp = text, props = { text = "f" .. i } }
+        end
+        return { comp = col, props = {}, children = children }
+      end
+    end
+
+    local function make_buf()
+      local buf = vim.api.nvim_create_buf(false, true)
+      local buflines = {}
+      for i = 1, 12 do
+        buflines[i] = "b" .. i
+      end
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, buflines)
+      return buf
+    end
+
+    it("mirrors the visible slice into the root canvas, padded to the box", function()
+      local buf = make_buf()
+      local handle = mount.floating(editor_app(buf), {}, { width = 6, height = 6 })
+
+      local root = lines_of(handle.bufnr)
+      assert.equal("b1    ", root[1])
+      assert.equal("b2    ", root[2])
+      assert.equal("b3    ", root[3])
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("follows the widget's own scroll", function()
+      local buf = make_buf()
+      local handle = mount.floating(editor_app(buf), {}, { width = 6, height = 6 })
+      local sub = subwin_of(handle)
+
+      vim.api.nvim_win_call(sub, function()
+        vim.fn.winrestview({ topline = 4, lnum = 4, col = 0 })
+      end)
+      handle.relayout()
+
+      local root = lines_of(handle.bufnr)
+      assert.equal("b4    ", root[1])
+      assert.equal("b6    ", root[3])
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("edits to the sub buffer refresh the mirror (coalesced)", function()
+      local buf = make_buf()
+      local handle = mount.floating(editor_app(buf), {}, { width = 6, height = 6 })
+
+      vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "EDITED" })
+      vim.wait(200, function()
+        return lines_of(handle.bufnr)[1] == "EDITED"
+      end)
+      assert.equal("EDITED", lines_of(handle.bufnr)[1])
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("long lines truncate to the box width; tabs expand", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "abcdefghij", "\tx" })
+      local handle = mount.floating(function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 2, wrap = false } },
+          },
+        }
+      end, {}, { width = 6, height = 4 })
+
+      local root = lines_of(handle.bufnr)
+      assert.equal("abcdef", root[1])
+      -- default tabstop 8 clipped at 6 cells: all spaces
+      assert.equal("      ", root[2])
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("a horizontally scrolled nowrap widget mirrors from leftcol", function()
+      -- nowrap + leftcol: the float displays the slice starting at leftcol;
+      -- the mirror (and its transcription map) must start there too.
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "abcdefghij", "0123456789" })
+      local handle = mount.floating(function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 2, wrap = false } },
+          },
+        }
+      end, {}, { width = 6, height = 4 })
+      local sub = subwin_of(handle)
+
+      vim.api.nvim_win_call(sub, function()
+        vim.fn.winrestview({ topline = 1, lnum = 1, col = 7, leftcol = 4 })
+      end)
+      handle.relayout()
+
+      local root = lines_of(handle.bufnr)
+      assert.equal("efghij", root[1])
+      assert.equal("456789", root[2])
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("a wrapping raw_buffer mirrors wrapped screen rows, like the float shows", function()
+      -- raw_buffer wraps by default: a 10-cell line in a 6-cell box occupies
+      -- two display rows; the mirror must reproduce that, not truncate.
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "abcdefghij", "z" })
+      local handle = mount.floating(function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 3 } },
+          },
+        }
+      end, {}, { width = 6, height = 4 })
+
+      local root = lines_of(handle.bufnr)
+      assert.equal("abcdef", root[1])
+      assert.equal("ghij  ", root[2])
+      assert.equal("z     ", root[3])
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("a text_input's seeded value is mirrored under its border", function()
+      local handle = mount.floating(function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = text_input, props = { border = true, value = "hi" } },
+          },
+        }
+      end, {}, { width = 8, height = 4 })
+
+      -- row 2 (1-based): │ + content + │
+      local row = lines_of(handle.bufnr)[2]
+      assert.truthy(row:find("hi", 1, true), "mirror missing: " .. row)
+
+      handle.unmount()
+    end)
+  end)
+
+  -- render="focus": the float exists but stays hidden until explicitly
+  -- focused; the text mirror (plus transcribed highlights) is the view. The
+  -- per-component prop is the experiment knob vs the default render="always"
+  -- (float always shown; mirror invisible but keeps the region honest).
+  describe("render policy", function()
+    local function press(key)
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(key, true, false, true), "xt", false)
+    end
+
+    local function focus_app(buf)
+      return function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = text, props = { text = "head" } },
+            { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 2, render = "focus", wrap = false } },
+            { comp = text, props = { text = "tail" } },
+          },
+        }
+      end
+    end
+
+    it("focus is the DEFAULT policy: an un-annotated widget's float hides until entered", function()
+      local handle = mount.floating(function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = text, props = { text = "head" } },
+            { comp = text_input, props = { value = "hi", height = 1 } },
+          },
+        }
+      end, {}, { width = 6, height = 3 })
+      local sub = subwin_of(handle)
+
+      assert.is_true(vim.api.nvim_win_get_config(sub).hide)
+      assert.equal("hi    ", lines_of(handle.bufnr)[2])
+
+      handle.unmount()
+    end)
+
+    it("the float stays hidden while unfocused; the mirror is the view", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "b1", "b2" })
+      local handle = mount.floating(focus_app(buf), {}, { width = 6, height = 4 })
+      local sub = subwin_of(handle)
+
+      assert.is_true(vim.api.nvim_win_get_config(sub).hide)
+      assert.equal("b1    ", lines_of(handle.bufnr)[2])
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("<CR> entry reveals and focuses it; leaving hides it again", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "b1", "b2" })
+      local handle = mount.floating(focus_app(buf), {}, { width = 6, height = 4 })
+      local sub = subwin_of(handle)
+
+      vim.api.nvim_set_current_win(handle.winid)
+      vim.api.nvim_win_set_cursor(handle.winid, { 2, 0 })
+      press("<CR>")
+      assert.equal(sub, vim.api.nvim_get_current_win())
+      assert.falsy(vim.api.nvim_win_get_config(sub).hide)
+
+      vim.api.nvim_set_current_win(handle.winid)
+      vim.wait(200, function()
+        return vim.api.nvim_win_get_config(sub).hide == true
+      end)
+      assert.is_true(vim.api.nvim_win_get_config(sub).hide)
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("persistent extmark highlights transcribe onto the mirror", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "b1", "b2" })
+      local ns = vim.api.nvim_create_namespace("subwin_spec_hl")
+      vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, { end_col = 2, hl_group = "ErrorMsg" })
+
+      local handle = mount.floating(focus_app(buf), {}, { width = 6, height = 4 })
+
+      local found = {}
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+        if m[4].hl_group == "ErrorMsg" then
+          found[#found + 1] = { row = m[2], col = m[3], end_col = m[4].end_col }
+        end
+      end
+      -- the widget's row 0 is root row 1 (below "head"), box starts at col 0
+      assert.same({ { row = 1, col = 0, end_col = 2 } }, found)
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("regex syntax highlights transcribe onto the mirror", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "b1", "b2" })
+      vim.api.nvim_buf_call(buf, function()
+        vim.cmd("syntax match Constant /b2/")
+      end)
+      vim.b[buf].current_syntax = "subwin_spec" -- transcriber's "has syntax" contract
+
+      local handle = mount.floating(focus_app(buf), {}, { width = 6, height = 4 })
+
+      local found = {}
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+        if m[4].hl_group == "Constant" then
+          found[#found + 1] = { row = m[2], col = m[3], end_col = m[4].end_col }
+        end
+      end
+      assert.same({ { row = 2, col = 0, end_col = 2 } }, found)
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("render='always' does NOT transcribe highlights (mirror is invisible)", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "b1", "b2" })
+      local ns = vim.api.nvim_create_namespace("subwin_spec_hl")
+      vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, { end_col = 2, hl_group = "ErrorMsg" })
+
+      local handle = mount.floating(function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 2, wrap = false, render = "always" } },
+          },
+        }
+      end, {}, { width = 6, height = 4 })
+
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+        assert.truthy(m[4].hl_group ~= "ErrorMsg", "always-policy mirror transcribed a highlight")
+      end
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
   end)
 
   it("WinScrolled resync is wired on the root float and cleared on unmount", function()

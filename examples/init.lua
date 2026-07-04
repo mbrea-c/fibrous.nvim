@@ -27,14 +27,15 @@ package.path = table.concat({
 }, ";")
 
 -- name → module. Order is the listing/completion order.
-local ORDER = { "hello", "counter", "form", "sidebar", "panel", "inline_scroll", "inline_fullscreen" }
+local ORDER = { "hello", "counter", "form", "sidebar", "panel", "policies", "inline_scroll", "inline_fullscreen" }
 local DESCRIPTIONS = {
 	hello = "static floating panel",
 	counter = "use_state + use_effect; buttons + external keymaps",
 	form = "uncontrolled text_input with live mirror",
 	sidebar = "split mount (mount_split), cursor-driven selection list",
 	panel = "ACP-shaped flex layout + custom hook + checkbox plan",
-	inline_scroll = "website-style scroll mode: wrapped sections, clipped input floats, focus traversal",
+	policies = 'subwindow render policies: "always" vs "focus", side by side',
+	inline_scroll = "website-style scroll mode: wrapped sections, clipped input floats, explicit subwindow focus",
 	inline_fullscreen = "the scroll-mode demo mounted fullscreen over the current window",
 }
 

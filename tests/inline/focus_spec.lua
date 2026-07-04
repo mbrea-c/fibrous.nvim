@@ -1,8 +1,11 @@
 -- Focus traversal between the root buffer and subwindow floats (tracker "NEW
--- UI HOST" task 7). Native cursor motions are the primary navigation:
+-- UI HOST" task 7; explicit-focus rework). Subwindows never capture the
+-- cursor: hjkl glides across their region like any other cells. Focus is
+-- always an explicit act:
 --
---   in   moving the root cursor into a subwindow's content box focuses its
---        float at the corresponding cell (CursorMoved, root window current)
+--   in   <CR> (or a click) with the root cursor anywhere in the widget's rect
+--        focuses its float at the corresponding cell; i/I/a/A/o/O focus it
+--        AND replay the key inside, so "type here" costs one keystroke
 --   out  h/j/k/l at the input buffer's edge exit to the root buffer adjacent
 --        to the widget; <C-w>h/j/k/l exit unconditionally; <C-d>/<C-u> hand
 --        focus back to the root and scroll it (page motions are never trapped)
@@ -39,17 +42,111 @@ local function PaddedApp()
 end
 
 describe("inline.focus", function()
-  it("moving the root cursor into an input region focuses its float at that cell", function()
+  it("moving the root cursor across an input region does NOT steal focus", function()
     local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
-    local sub = subwin_of(handle)
 
     vim.api.nvim_set_current_win(handle.winid)
     vim.api.nvim_win_set_cursor(handle.winid, { 2, 3 }) -- the input row, cell 3
     vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
 
+    -- the cursor glides over the widget; no capture
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    assert.same({ 2, 3 }, vim.api.nvim_win_get_cursor(handle.winid))
+    handle.unmount()
+  end)
+
+  it("<CR> over the input focuses its float at the corresponding cell", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    local sub = subwin_of(handle)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 3 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
+    press("<CR>")
+
     assert.equal(sub, vim.api.nvim_get_current_win())
     -- content box starts at x=1, so cell 3 is col 2 inside the input
     assert.same({ 1, 2 }, vim.api.nvim_win_get_cursor(sub))
+    handle.unmount()
+  end)
+
+  it("a click over the input focuses it too (<LeftRelease> shares the activate path)", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    local sub = subwin_of(handle)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 3 })
+    press("<LeftRelease>")
+
+    assert.equal(sub, vim.api.nvim_get_current_win())
+    handle.unmount()
+  end)
+
+  it("i over the input inserts into the float's buffer at that cell", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    local sub = subwin_of(handle)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 3 })
+    -- one batch, like typing: focus the float AND insert before its cell 2
+    press("iXY<Esc>")
+
+    assert.equal(sub, vim.api.nvim_get_current_win())
+    local buf = vim.api.nvim_win_get_buf(sub)
+    assert.same({ "abXYcdef" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    handle.unmount()
+  end)
+
+  it("a over the input appends after that cell", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    local sub = subwin_of(handle)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 3 })
+    press("aZ<Esc>")
+
+    assert.equal(sub, vim.api.nvim_get_current_win())
+    local buf = vim.api.nvim_win_get_buf(sub)
+    assert.same({ "abcZdef" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    handle.unmount()
+  end)
+
+  it("<CR> on a border cell enters, clamped into the content box", function()
+    local function App()
+      return {
+        comp = ui.col,
+        props = { padding = { x = 1 } },
+        children = {
+          { comp = ui.label, props = { text = "head" } },
+          { comp = ui.text_input, props = { border = true, value = "abcdef" } },
+        },
+      }
+    end
+    -- rows (0-based): 0 head; 1 top border; 2 content; 3 bottom border
+    local handle = mount.floating(App, {}, { width = 12, height = 6 })
+    local sub = subwin_of(handle)
+
+    -- park on the top border row above content cell 3 (byte 4: 3-byte ╭ + 2 ─)
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 4 })
+    press("<CR>")
+    assert.equal(sub, vim.api.nvim_get_current_win())
+    assert.same({ 1, 0 }, vim.api.nvim_win_get_cursor(sub))
+
+    handle.unmount()
+  end)
+
+  it("insert keys away from any widget do not enter one", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    local sub = subwin_of(handle)
+    local buf = vim.api.nvim_win_get_buf(sub)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 1, 0 }) -- on "head"
+    press("iXY<Esc>") -- native replay on the unmodifiable root: E21, no effect
+
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    assert.same({ "abcdef" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
     handle.unmount()
   end)
 

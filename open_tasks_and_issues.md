@@ -227,7 +227,7 @@ as a neovim UI host). We need a new UI host that truly feels "neovim-native", sa
 - [x] 6. Cursor interaction: hit-map, hover highlight, `<CR>`/`<Space>` activation on the component under cursor
   - `lua/fibrous/inline/interact.lua`: hit-map = pure walk of `host.tree` for the deepest node with a `role` under the cursor (reverse child order = paint order; role-less subtrees fall through to the closest interactive ancestor — containers can be interactive). Hover paints the node's rect with `hover_hl` (default CursorLine) in its own namespace at priority 4200, re-evaluated on CursorMoved AND after every flush. `<CR>`/`<Space>` buffer-local: button → on_press(), checkbox → on_toggle(not checked). Wired into both mount targets alongside the subwin manager. Specs: `interact_spec.lua` (5). The `inline_scroll` example now demos hover/activation too. **Post-eval fix (2026-07-02):** button/checkbox used to stretch to the container width (default cross-axis align), so hover lit the whole line; added per-child `align_self` to the layout engine (overrides container `align`) and both widgets now default to `align_self = "start"` — hover hugs the widget; pass `align_self = "stretch"` or a `width` for full-width widgets.
 - [x] 7. Subwindow engine (full): raw_buffer, focus traversal (edge motions hjkl/`<C-u>`/`<C-d>`, `<C-w>`-hjkl, parent-cursor entry into subwindow regions)
-  - Focus traversal (`subwin.lua`): IN — CursorMoved on the root buffer (only when the root float is current); cursor cell inside a subwin's content box focuses its float at the corresponding cell. OUT — buffer-local n-mode maps per float buffer: `h/j/k/l` at the buffer edge exit into the root adjacent to the widget's border box, keeping the cursor's row/col alignment (non-edge → native motion, count preserved via `v:count1`); `<C-w>h/j/k/l` exit unconditionally; `<C-d>/<C-u>` always hand focus AND the motion to the root (page motions never trapped). Exits whose target is outside the root buffer are no-ops — staying put beats the root clamping the cursor straight back into the widget (re-entry loop). Specs: `focus_spec.lua` (5).
+  - **(Superseded 2026-07-04** — see "Subwindow focus rework": traversal-in is REMOVED; focus is explicit via `<CR>`/click/insert-keys. Exits below unchanged.) Focus traversal (`subwin.lua`): IN — CursorMoved on the root buffer (only when the root float is current); cursor cell inside a subwin's content box focuses its float at the corresponding cell. OUT — buffer-local n-mode maps per float buffer: `h/j/k/l` at the buffer edge exit into the root adjacent to the widget's border box, keeping the cursor's row/col alignment (non-edge → native motion, count preserved via `v:count1`); `<C-w>h/j/k/l` exit unconditionally; `<C-d>/<C-u>` always hand focus AND the motion to the root (page motions never trapped). Exits whose target is outside the root buffer are no-ops — staying put beats the root clamping the cursor straight back into the widget (re-entry loop). Specs: `focus_spec.lua` (5).
   - text_input wiring (`subwin.lua`): `props.on_change(value)` via **nvim_buf_attach on_lines** — NOT TextChanged/TextChangedI (main-loop events; never fire inside a feedkeys batch). on_lines runs under textlock, so the handler is `vim.schedule`d + coalesced per edit burst. `<CR>` (n+i, buffer-local): `props.on_submit(value)` when given; otherwise insert-mode `<CR>` feeds a literal newline (flags "in": before remaining typeahead, noremap). Handlers read off `entry.node.props` at fire time (latest committed). Guard: `reposition()` skips its winrestview while the float is the current window — otherwise the on_change → re-render → resync path yanks the cursor to col 0 mid-typing (covered by the clobber spec). Specs: `input_spec.lua` (4).
   - raw_buffer (`components.lua` + `host.lua` + `subwin.lua`): `ui.raw_buffer` subwindow leaf showing a caller-provided `props.bufnr` — UNOWNED: unmount removes our keymaps/autocmds but leaves the buffer alive (no bufnr → owned scratch, destroyed as usual). Default height = the buffer's line count (measured as N-1 newlines); explicit `props.height` wins. `props.wrap ~= false` → native wrapping escape hatch (text_input stays nowrap). Traversal callbacks fall back to native motions when the buffer is shown in a non-float window. Specs: `raw_buffer_spec.lua` (4).
   - `width.lua` gained shared `cell_to_byte` (moved from interact.lua; the traversal needs it for cursor placement). Suite after: 138 passed + the 2 pre-existing relayout failures.
@@ -244,6 +244,7 @@ as a neovim UI host). We need a new UI host that truly feels "neovim-native", sa
   - Specs (`interact_spec.lua` +4) drive the maps at the KEY level: `nvim_input_mouse` is useless headless — without a UI grid, `mouse_find_win` can't resolve screen positions to floats, so synthesized clicks never reach the root float (getmousepos() returns the underlying window). Verified end-to-end instead in a live kitty TUI via the nvim MCP server: real `nvim_input_mouse` click → float focused, cursor on the button cell, on_press fired.
   - Web side (`../nvim-wasm-core`): `web/mouse.js`, a DOM-free adapter (px→cell math, per-cell move/drag dedupe, wheel px-accumulation into one tick per cell) wired in `main.js` to `nvim_input_mouse` (grid 0); node-unit-tested red-green by new `checks.web-mouse-unit` (8 tests). Guest semantics (click-to-activate etc.) are fibrous', identical to the terminal — the client only forwards faithfully.
   - Follow-up parked: float-on-focus text inputs if scroll-swim warrants it.
+    (Shipped 2026-07-04 as `render = "focus"` — see "Subwindow focus rework".)
 - [x] Bugfix (2026-07-03): root scrolls clobbered a subwindow's own scroll/cursor. `reposition()`'s occlusion re-anchor ran `winrestview({ topline = clip+1, lnum = clip+1, col = 0 })` unconditionally on unfocused floats — it OWNED the viewport, valid only for widgets with no scroll state of their own; a taller-than-window editor (raw_buffer) lost its place (and cursor) on every root scroll. Now the clip COMPOSES: `base` (the widget's own scroll) is reconstructed as displayed-topline − last-applied-clip (`entry.clip`), captured BEFORE `nvim_win_set_config` (a height shrink makes nvim re-anchor topline around the cursor, polluting the read — this cost a debug round); applied view = base + clip with cursor/columns preserved (lnum only dragged enough to keep topline valid). Focused floats stay untouched as before. Spec: subwin_spec +1 (internal scroll at topline 4, root clip composes to 5, unclip restores 4, cursor {5,1} intact). Suite: 189 passed, 0 failed.
   after focusing ("floating window cannot be relative to itself") — the raw 0
   was stored and re-resolved at sync time, when the current window is the
@@ -487,4 +488,97 @@ portions of a paragraph, and border-embedded titles.
   - Specs: theme_spec +1 and links updated, components_spec +1 (tag
     fallback), style_state_spec +1 (themed focus accent end-to-end).
     Suite: 181 passed, 0 failed; bench flat (re-commit ~7.0ms).
+
+### Subwindow focus rework — explicit focus + text mirror + render policies (2026-07-04)
+
+Decision (2026-07-04, after design discussion): subwindows must NOT capture
+the cursor. The old traversal-in (CursorMoved auto-focus) made hjkl-ing past a
+big editor traverse its whole content, and focus-steal aborted any visual
+selection crossing a widget. New model is Jupyter-like command/edit modes; the
+common "type here" flow still costs one keystroke (`i` over the widget).
+
+- [x] F1. Explicit focus: traversal-in autocmd REMOVED; the root cursor glides
+  over widget regions. Focus enters only via `<CR>`/click (interact's activate
+  path, subwins offered the cell before the role hit-map; `<Space>` stays
+  role-only) or i/I/a/A/o/O (root-buffer maps: focus + replay the key inside —
+  replayed with feedkeys "in", PREPENDED so batched typing keeps its order).
+  `manager.enter_at(row, x)` hit-tests the border box, clamps into content;
+  returns false (→ role fallthrough / native E21) when nothing focusable.
+  Exits unchanged (edge hjkl, `<C-w>hjkl`, `<C-d>/<C-u>`). Keymap-driven entry
+  fires WinEnter naturally — the old `nested` autocmd subtlety is gone.
+  Specs: focus_spec rewritten (12), style_state traversal test → `<CR>` entry.
+- [x] F2. Text mirror: subwin.lua writes each widget's visible buffer slice
+  into the root canvas cells of its content box (reposition captures
+  `entry.base` = the widget's own topline; canvas repaints blank each flush,
+  sync rewrites after). Honesty layer: the gliding cursor sits on real
+  characters, yank/visual get real text. Wrap-aware (`chop()` reproduces the
+  float's wrapping: tab expansion by logical vcol, continuation rows,
+  wide-char-at-edge moves whole; 'linebreak'/leftcol not modeled —
+  style=minimal floats have neither); `entry.mirror_map` records
+  (box row → lnum, cell0) for the transcriber. Refreshes: every
+  reposition (flush/WinScrolled), nvim_buf_attach on_lines (coalesced,
+  skipped while focused), WinLeave (deferred — settles focused edits).
+- [x] F3. Per-component render policy `props.render = "always" | "focus"`
+  (text_input + raw_buffer; default "always" — both stay available to
+  experiment, per discussion):
+  - "always": float always shown; mirror invisible, NO highlight work.
+  - "focus": float hidden unless focused (enter() reveals first — a hidden
+    float can't be entered; fully-occluded enter returns false), mirror is
+    the view, and `transcribe()` copies the buffer's queryable highlights
+    onto it: persistent extmarks (diagnostics, semantic tokens — verified
+    non-ephemeral in nvim source — inlay hints, plugin marks; priority +8
+    above canvas base) and regex :syntax via per-cell synID runs (only when
+    `b:current_syntax` is set; priority 4100). Refresh rides the mirror
+    triggers + DiagnosticChanged/LspTokenUpdate autocmds. NOT copyable by
+    nvim design: ephemeral decoration-provider hls (treesitter, indent
+    guides); layout-changing features (conceal, inline virt_text, folds)
+    not modeled.
+- [x] F4. guicursor shim (`inline/cursorshim.lua`): nvim renders an OBSCURED
+  cursor (cell covered by a higher-zindex float) with the REPLACE-mode
+  guicursor entry — ui_flush() substitutes mode_change("replace") via
+  ui_cursor_is_behind_floatwin() (src/nvim/ui.c; default r=hor20 →
+  underscore; verified by pty DECSCUSR capture). While any render="always"
+  widget is live the manager holds a refcounted `,r-cr:block` append: glide
+  cursor stays a block on the (mirror-guaranteed-real) character. Contract:
+  inert when guicursor=="" (never enables shaping); restore only if the
+  value is still exactly ours (user/plugin change wins); lifts live when the
+  last always-widget leaves the tree. Cost while held: real replace mode
+  shows a block. Spec: cursorshim_spec (6).
+- [x] F5. Benchmarks (scratchpad mirror_bench.lua; 80x40 raw_buffer over a
+  500-line buffer, scroll/edit + relayout per frame): no-subwin baseline
+  0.27ms · render=always (mirror only) ~0.75ms · render=focus no-syntax
+  ~0.6ms · render=focus + syntax transcription ~1.9ms. Verdict: no mirror
+  opt-out needed now; if a page ever hosts many large widgets, a
+  `mirror = false` prop is the escape hatch (user-approved option, parked).
+- Suite: **212 passed, 0 failed** (focus 12, subwin 19, cursorshim 6).
+- [x] F6. Follow-up round (2026-07-04, user review): **render="focus" is now
+  the DEFAULT** ("always" is the opt-in) — flat page by default: honest block
+  cursor, complete visual-selection highlights, no guicursor hold; geometry
+  specs pin the always path explicitly. WinEnter now reveals a hidden float
+  (verified: `nvim_set_current_win` CAN enter a hidden float and it stays
+  hidden — `<C-w>w` cycling would edit invisibly without the reveal). Mirror
+  gained horizontal scroll: nowrap widgets render cells
+  [leftcol, leftcol+w) (wide char straddling the cut pads left; mirror_map
+  cell0 = leftcol so transcription translates). `theme.styles.raw_buffer`
+  gets the same `_focus` border accent as text_input — the brightened border
+  is what marks the edited widget under the focus default. Policies examples
+  (repo + site) now linewrap (raw_buffer default) with a wrapping comment
+  line and explicit heights. Suite: **215 passed, 0 failed**.
+  - Perf note: the canvas rewrites the WHOLE buffer every flush
+    (`nvim_buf_set_lines(0,-1)` in host.flush), so the mirror must rewrite
+    every flush too — a skip-if-unchanged guard is only possible together
+    with canvas damage tracking (parked with it in the task-8 perf posture).
+- Known gaps / parked:
+  - Visual selection across a shown float still has a highlight HOLE (the
+    float covers the selection hl; content yanked is real now). Possible
+    later increment: hide subwin floats while in visual mode ("flatten").
+  - Clip composition for a PARTIALLY occluded wrapped widget still counts
+    buffer lines, not screen rows (predates this work).
+  - Site follow-up: homepage example "Two focus policies" showcases both
+    policies side by side on the same lua buffer (`../fibrous-docs`
+    examples.lua + home_spec TITLES; local tests green 5/5 — the BUILT site
+    needs the usual commit+push+flake-lock bump).
+  - Repo example: `examples/policies.lua` (`make example EX=policies`), same
+    demo standalone; stale "focus follows the cursor" wording updated in
+    form/panel examples + examples/README.
 - Parked: inline flow layout; `_active` state.

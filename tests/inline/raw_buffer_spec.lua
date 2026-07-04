@@ -33,7 +33,8 @@ describe("inline.raw_buffer", function()
         props = {},
         children = {
           { comp = ui.label, props = { text = "head" } },
-          { comp = ui.raw_buffer, props = { bufnr = bufnr } },
+          -- render="always": this test asserts the SHOWN float's placement
+          { comp = ui.raw_buffer, props = { bufnr = bufnr, render = "always" } },
         },
       }
     end
@@ -56,7 +57,7 @@ describe("inline.raw_buffer", function()
         comp = ui.col,
         props = {},
         children = {
-          { comp = ui.raw_buffer, props = { bufnr = bufnr, height = 2 } },
+          { comp = ui.raw_buffer, props = { bufnr = bufnr, height = 2, render = "always" } },
           { comp = ui.label, props = { text = "tail" } },
         },
       }

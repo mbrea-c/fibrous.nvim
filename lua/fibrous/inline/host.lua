@@ -90,9 +90,13 @@ local function build_node(fiber, states)
   if tag == "text_input" or tag == "raw_buffer" then
     -- Subwindow leaves measure as text (one content row unless props size
     -- them); the float shows the real content, so nothing is painted in the
-    -- content box — but border/background still render inline in the root
-    -- buffer. A raw_buffer without an explicit height sizes itself to its
-    -- buffer's line count: N-1 newlines measure as N empty rows.
+    -- content box at layout time — but border/background still render inline
+    -- in the root buffer, and subwin.lua mirrors the buffer's visible slice
+    -- into those cells after every flush. A raw_buffer without an explicit
+    -- height sizes itself to its buffer's line count: N-1 newlines measure
+    -- as N empty rows. props.render = "focus" (default) | "always" picks the
+    -- float policy: hidden until focused with the mirror (plus transcribed
+    -- highlights) standing in, or always shown.
     local text = ""
     if tag == "raw_buffer" and not props.height then
       local count = props.bufnr

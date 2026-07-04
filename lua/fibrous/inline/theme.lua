@@ -58,9 +58,11 @@ M.styles = {
     _hover = { hl = "FibrousButtonHover" },
   },
   checkbox = { _hover = { hl = "FibrousHover" } },
-  -- host primitives default their theme key to their own tag, so this
-  -- applies to every text_input: the border brightens while its float has
-  -- the cursor (subwin.lua drives the focus state)
+  -- host primitives default their theme key to their own tag, so these
+  -- apply to every text_input/raw_buffer: the border brightens while its
+  -- float has the cursor (subwin.lua drives the focus state) — with the
+  -- render="focus" default, that accent is what marks the edited widget
+  raw_buffer = { _focus = { border_hl = "FibrousBorderFocus" } },
   text_input = { _focus = { border_hl = "FibrousBorderFocus" } },
 }
 

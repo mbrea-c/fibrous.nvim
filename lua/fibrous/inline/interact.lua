@@ -13,7 +13,12 @@
 --              baking the hover style into the canvas. Re-evaluated on
 --              CursorMoved and after every flush (rects may have moved).
 --   activate   <CR>/<Space>, buffer-local on the host buffer: role "button"
---              → on_press(); "checkbox" → on_toggle(not checked).
+--              → on_press(); "checkbox" → on_toggle(not checked). <CR> (and
+--              clicks) first offer the cell to the subwindow manager —
+--              subwindows are focused explicitly, never by traversal — and
+--              i/I/a/A/o/O over a subwindow focus it and replay the key
+--              inside, so "type here" costs one keystroke. <Space> stays
+--              role-only (it is too common a motion to swallow into editors).
 --   mouse      Neovim's own mouse=nvi handling moves the cursor on click, so
 --              hover already follows clicks with no code here. On top of that
 --              (tracker task 10, `opts.mouse`):
@@ -71,8 +76,9 @@ end
 ---@param host InlineHost
 ---@param root_winid integer
 ---@param mouse? InlineMouseOpts|false  false disables all mouse maps
+---@param subwins? SubwinManager  explicit-focus target for <CR>/click/insert keys
 ---@return InteractHandle
-function M.attach(host, root_winid, mouse)
+function M.attach(host, root_winid, mouse, subwins)
   if mouse == false then
     mouse = { activate = false, follow = false }
   else
@@ -81,15 +87,27 @@ function M.attach(host, root_winid, mouse)
   local bufnr = host.bufnr
   local group = vim.api.nvim_create_augroup("FibrousInlineInteract_" .. root_winid, { clear = true })
 
-  -- The interactive node under the root window's cursor, or nil.
-  local function node_under_cursor()
-    if not host.tree or not vim.api.nvim_win_is_valid(root_winid) then
+  -- The root cursor as a buffer cell (row, x), both 0-indexed; nil when the
+  -- root window is gone.
+  local function cursor_cell()
+    if not vim.api.nvim_win_is_valid(root_winid) then
       return nil
     end
     local pos = vim.api.nvim_win_get_cursor(root_winid)
     local row = pos[1] - 1
     local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
-    local x = str_width(line:sub(1, pos[2])) -- byte col → display cell
+    return row, str_width(line:sub(1, pos[2])) -- byte col → display cell
+  end
+
+  -- The interactive node under the root window's cursor, or nil.
+  local function node_under_cursor()
+    if not host.tree then
+      return nil
+    end
+    local row, x = cursor_cell()
+    if not row then
+      return nil
+    end
     return hit(host.tree, x, row)
   end
 
@@ -192,7 +210,15 @@ function M.attach(host, root_winid, mouse)
     paint(node)
   end
 
-  local function activate()
+  -- `enter_subwins`: <CR> and clicks focus a subwindow under the cursor;
+  -- <Space> passes false and only activates roles.
+  local function activate(enter_subwins)
+    if enter_subwins and subwins then
+      local row, x = cursor_cell()
+      if row and subwins.enter_at(row, x) then
+        return
+      end
+    end
     local node = node_under_cursor()
     if not node then
       return
@@ -212,12 +238,35 @@ function M.attach(host, root_winid, mouse)
   })
 
   local maps = { "<CR>", "<Space>" }
-  for _, lhs in ipairs(maps) do
-    vim.keymap.set("n", lhs, activate, { buffer = bufnr, nowait = true, desc = "fibrous: activate" })
-  end
+  vim.keymap.set("n", "<CR>", function()
+    activate(true)
+  end, { buffer = bufnr, nowait = true, desc = "fibrous: activate" })
+  vim.keymap.set("n", "<Space>", function()
+    activate(false)
+  end, { buffer = bufnr, nowait = true, desc = "fibrous: activate" })
   if mouse.activate then
     maps[#maps + 1] = "<LeftRelease>"
-    vim.keymap.set("n", "<LeftRelease>", activate, { buffer = bufnr, nowait = true, desc = "fibrous: activate (mouse)" })
+    vim.keymap.set("n", "<LeftRelease>", function()
+      activate(true)
+    end, { buffer = bufnr, nowait = true, desc = "fibrous: activate (mouse)" })
+  end
+
+  -- Insert-entry keys: over a subwindow they focus its float and replay the
+  -- key inside (native semantics at the translated cell); elsewhere they
+  -- replay unmapped, which on the unmodifiable root is vim's own no-op/E21.
+  if subwins then
+    for _, key in ipairs({ "i", "I", "a", "A", "o", "O" }) do
+      maps[#maps + 1] = key
+      vim.keymap.set("n", key, function()
+        local row, x = cursor_cell()
+        if row then
+          subwins.enter_at(row, x)
+        end
+        -- "i": BEFORE anything still in the typeahead (a batched "ifoo" must
+        -- replay as i,f,o,o); "n": noremap, so this map does not recurse.
+        vim.api.nvim_feedkeys(key, "in", false)
+      end, { buffer = bufnr, nowait = true, desc = "fibrous: edit subwindow" })
+    end
   end
   local saved_mousemoveevent = nil
   if mouse.follow then

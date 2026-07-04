@@ -2,8 +2,9 @@
 -- of truth while you type — keystrokes are handled natively by Neovim, no
 -- per-keystroke re-render of the input itself. Each edit fires `on_change`,
 -- which we mirror into `use_state` so the panel below updates reactively;
--- `<CR>` fires `on_submit`. Focus follows the cursor: move onto the input to
--- edit it, h/j/k/l at its edges step back out into the page.
+-- `<CR>` fires `on_submit`. Focus is explicit: the cursor glides over the
+-- input like any other cell — press i (or <CR>) on it to edit, and h/j/k/l
+-- at its edges step back out into the page.
 
 local nr = require("fibrous")
 local ui = nr.ui
@@ -49,8 +50,8 @@ local M = {}
 function M.run()
   local handle = nr.mount(Form, {}, { width = 56, height = 13 })
   handle.focus()
-  -- Land the cursor inside the input's content box: focus-follows-cursor
-  -- moves us straight into the editable float.
+  -- Park the cursor on the input's box — one `i` away from typing (focus is
+  -- explicit; the cursor no longer dives into the float by itself).
   vim.api.nvim_win_set_cursor(handle.winid, { 4, 3 })
   return util.bind(handle, {
     { "n", "q", function() handle.unmount() end, { desc = "close example" } },
