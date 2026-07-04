@@ -175,6 +175,127 @@ describe("inline.subwin", function()
     vim.api.nvim_buf_delete(buf, { force = true })
   end)
 
+  -- Horizontal root scroll (the root float is nowrap, so leftcol can move —
+  -- e.g. a trackpad's ScrollWheelRight): floats must shift with leftcol,
+  -- clip at the view's left edge — composing the clip into the widget's own
+  -- leftcol, like vertical clipping composes topline — and hide fully-off
+  -- widgets. Same deterministic pattern as above: set the view, resync.
+  describe("horizontal root scroll", function()
+    local function hscroll_root(handle, leftcol)
+      vim.api.nvim_win_call(handle.winid, function()
+        vim.fn.winrestview({ topline = 1, lnum = 1, col = 0, leftcol = leftcol })
+      end)
+    end
+
+    it("left clip: the float narrows and its own view scrolls by the clip", function()
+      local function App()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = text, props = { text = "head" } },
+            { comp = text_input, props = { value = "abcdefghij", render = "always" } },
+          },
+        }
+      end
+      local handle = mount.floating(App, {}, { width = 12, height = 4 })
+      local sub = subwin_of(handle)
+
+      hscroll_root(handle, 3)
+      handle.relayout()
+
+      local cfg = vim.api.nvim_win_get_config(sub)
+      assert.falsy(cfg.hide)
+      assert.equal(0, cfg.col)
+      assert.equal(9, cfg.width)
+      -- the 3 hidden cells are scrolled out of the float's own viewport
+      local v
+      vim.api.nvim_win_call(sub, function()
+        v = vim.fn.winsaveview()
+      end)
+      assert.equal(3, v.leftcol)
+
+      hscroll_root(handle, 0)
+      handle.relayout()
+      cfg = vim.api.nvim_win_get_config(sub)
+      assert.equal(0, cfg.col)
+      assert.equal(12, cfg.width)
+      vim.api.nvim_win_call(sub, function()
+        v = vim.fn.winsaveview()
+      end)
+      -- the clip composed with (not overwrote) the widget's own leftcol
+      assert.equal(0, v.leftcol)
+
+      handle.unmount()
+    end)
+
+    it("an unclipped widget right of the scroll shifts left with the page", function()
+      local function App()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = text, props = { text = ("x"):rep(20) } },
+            {
+              comp = { __host = "row" },
+              props = {},
+              children = {
+                { comp = text, props = { text = "abcdef" } },
+                { comp = text_input, props = { value = "hi", width = 5, render = "always" } },
+              },
+            },
+          },
+        }
+      end
+      local handle = mount.floating(App, {}, { width = 14, height = 4 })
+      local sub = subwin_of(handle)
+      assert.equal(6, vim.api.nvim_win_get_config(sub).col)
+
+      hscroll_root(handle, 4)
+      handle.relayout()
+
+      local cfg = vim.api.nvim_win_get_config(sub)
+      assert.falsy(cfg.hide)
+      assert.equal(2, cfg.col) -- 6 - 4
+      assert.equal(5, cfg.width) -- untouched: no clip
+      local v
+      vim.api.nvim_win_call(sub, function()
+        v = vim.fn.winsaveview()
+      end)
+      assert.equal(0, v.leftcol)
+
+      handle.unmount()
+    end)
+
+    it("a widget fully scrolled off to the left hides; scrolling back reveals", function()
+      local function App()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = text, props = { text = ("x"):rep(20) } },
+            { comp = text_input, props = { value = "hi", width = 4, render = "always" } },
+          },
+        }
+      end
+      local handle = mount.floating(App, {}, { width = 12, height = 4 })
+      local sub = subwin_of(handle)
+
+      hscroll_root(handle, 6) -- the widget spans cells 0-3: fully off-view
+      handle.relayout()
+      assert.is_true(vim.api.nvim_win_get_config(sub).hide)
+
+      hscroll_root(handle, 0)
+      handle.relayout()
+      local cfg = vim.api.nvim_win_get_config(sub)
+      assert.falsy(cfg.hide)
+      assert.equal(0, cfg.col)
+      assert.equal(4, cfg.width)
+
+      handle.unmount()
+    end)
+  end)
+
   -- The text mirror: the sub buffer's visible slice is written into the root
   -- canvas cells the float covers. Invisible under an always-shown float, but
   -- it makes the region honest — the gliding cursor sits on real characters,
@@ -481,6 +602,117 @@ describe("inline.subwin", function()
       for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
         assert.truthy(m[4].hl_group ~= "ErrorMsg", "always-policy mirror transcribed a highlight")
       end
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    -- Every flush rewrites the whole canvas (nvim_buf_set_lines 0,-1), which
+    -- RELOCATES existing extmarks out of the widget's box — a box-ranged
+    -- namespace clear misses them, and transcription marks accumulate
+    -- (hundreds per flush on the docs homepage, with linearly growing frame
+    -- times). The clear must cover the whole per-entry namespace.
+    it("transcribed highlights do not accumulate across flushes", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "b1", "b2" })
+      local ns = vim.api.nvim_create_namespace("subwin_spec_hl")
+      vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, { end_col = 2, hl_group = "ErrorMsg" })
+      local handle = mount.floating(focus_app(buf), {}, { width = 6, height = 4 })
+
+      handle.relayout()
+      handle.relayout()
+
+      local found = 0
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+        if m[4].hl_group == "ErrorMsg" then
+          found = found + 1
+        end
+      end
+      assert.equal(1, found)
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    -- A pure scroll frame changes only where floats sit on the window grid;
+    -- the widget's view, its buffer and the canvas cells are all untouched —
+    -- so the mirror + transcription extraction must be REUSED, not redone
+    -- (it is the dominant per-frame cost with syntax on: ~3ms per widget).
+    it("a pure scroll resync reuses the extraction: no writes, stable marks", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "b1", "b2" })
+      local ns = vim.api.nvim_create_namespace("subwin_spec_hl")
+      vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, { end_col = 2, hl_group = "ErrorMsg" })
+      local function App()
+        local children = {
+          { comp = text, props = { text = "head" } },
+          { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 2, render = "focus", wrap = false } },
+        }
+        for i = 1, 6 do
+          children[#children + 1] = { comp = text, props = { text = "f" .. i } }
+        end
+        return { comp = col, props = {}, children = children }
+      end
+      local handle = mount.floating(App, {}, { width = 6, height = 4, mode = "scroll" })
+
+      local function mark_of()
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+          if m[4].hl_group == "ErrorMsg" then
+            return m[1], m[2]
+          end
+        end
+      end
+      local id0 = mark_of()
+      local tick0 = vim.api.nvim_buf_get_changedtick(handle.bufnr)
+
+      -- scroll without a re-render/flush: the WinScrolled path alone
+      scroll_root(handle, 2)
+      vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(handle.winid) })
+
+      assert.equal(tick0, vim.api.nvim_buf_get_changedtick(handle.bufnr))
+      local id1, row1 = mark_of()
+      assert.equal(id0, id1)
+      assert.equal(1, row1) -- still at the widget's buffer row, untouched
+
+      -- but an actual view change (the widget's own scroll) re-extracts
+      vim.api.nvim_win_call(subwin_of(handle), function()
+        vim.fn.winrestview({ topline = 2, lnum = 2, col = 0 })
+      end)
+      vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(handle.winid) })
+      assert.equal("b2    ", lines_of(handle.bufnr)[2]) -- mirror followed
+      assert.is_nil((mark_of())) -- line 1 (and its mark) scrolled out of view
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    -- Guards the syntax-run cache: an edit must invalidate cached runs.
+    it("editing the sub buffer refreshes transcribed syntax highlights", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "b1", "b2" })
+      vim.api.nvim_buf_call(buf, function()
+        vim.cmd("syntax match Constant /b2/")
+      end)
+      vim.b[buf].current_syntax = "subwin_spec"
+      local handle = mount.floating(focus_app(buf), {}, { width = 6, height = 4 })
+
+      vim.api.nvim_buf_set_lines(buf, 1, 2, false, { "x b2" })
+      vim.wait(200, function()
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+          if m[4].hl_group == "Constant" and m[3] == 2 then
+            return true
+          end
+        end
+        return false
+      end)
+
+      local found = {}
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+        if m[4].hl_group == "Constant" then
+          found[#found + 1] = { row = m[2], col = m[3], end_col = m[4].end_col }
+        end
+      end
+      assert.same({ { row = 2, col = 2, end_col = 4 } }, found)
 
       handle.unmount()
       vim.api.nvim_buf_delete(buf, { force = true })

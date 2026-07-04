@@ -7,9 +7,10 @@
 -- scratch one without it).
 --
 -- Because relative="win" floats anchor to the window grid, not its scrolled
--- content, the manager subtracts the root's topline offset itself and resyncs
--- on WinScrolled. Occlusion (tracker decision, clipping strategy; the 4b eval
--- verdict: no visible swim, clipping stays):
+-- content, the manager subtracts the root's scroll offsets itself — topline
+-- AND leftcol (the root is nowrap, so trackpads/zl can scroll it sideways) —
+-- and resyncs on WinScrolled. Occlusion (tracker decision, clipping strategy;
+-- the 4b eval verdict: no visible swim, clipping stays):
 --   partial  — resize the float to its visible rows and re-anchor its own
 --              viewport (topline) so the right slice of content shows;
 --   full     — hide the float (nvim_win_set_config hide).
@@ -214,10 +215,58 @@ function M.attach(host, root_winid)
     local c = entry.node.content
     entry.ns = entry.ns or vim.api.nvim_create_namespace("fibrous_inline_mirror_" .. entry.winid)
     local last = vim.api.nvim_buf_line_count(host.bufnr) - 1
-    vim.api.nvim_buf_clear_namespace(host.bufnr, entry.ns, math.max(c.y, 0), math.min(c.y + c.h, last + 1))
+    -- Clear the WHOLE namespace, not just the box rows: every canvas flush
+    -- is a full set_lines that RELOCATES existing marks out of the box,
+    -- where a ranged clear would miss them forever — they accumulate by the
+    -- hundreds per flush and frame times grow linearly.
+    vim.api.nvim_buf_clear_namespace(host.bufnr, entry.ns, 0, -1)
     local map = entry.mirror_map or {}
     local ts = vim.bo[entry.bufnr].tabstop
-    local has_syn = vim.b[entry.bufnr].current_syntax ~= nil
+    local syn = vim.b[entry.bufnr].current_syntax
+
+    -- synID sampling costs milliseconds per widget: cache whole-line runs
+    -- keyed by changedtick + syntax name, so flush frames over an unchanged
+    -- buffer only re-place extmarks. Runs are absolute cells over the full
+    -- line (window-independent): wrap continuation rows and later
+    -- repositions all reuse them.
+    local tick = vim.api.nvim_buf_get_changedtick(entry.bufnr)
+    local cache = entry.syn_cache
+    if not cache or cache.tick ~= tick or cache.syntax ~= syn then
+      cache = { tick = tick, syntax = syn, rows = {} }
+      entry.syn_cache = cache
+    end
+    local function syn_runs(lnum, sline)
+      local runs = cache.rows[lnum]
+      if runs then
+        return runs
+      end
+      runs = {}
+      vim.api.nvim_buf_call(entry.bufnr, function()
+        local byte, cell = 1, 0
+        local run_hl, run_s = nil, 0
+        for ch in sline:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+          local cw = ch == "\t" and (ts - (cell % ts)) or width.char(ch)
+          local id = vim.fn.synID(lnum, byte, 1)
+          local name = id ~= 0 and vim.fn.synIDattr(vim.fn.synIDtrans(id), "name") or nil
+          if name == "" then
+            name = nil
+          end
+          if name ~= run_hl then
+            if run_hl then
+              runs[#runs + 1] = { s = run_s, e = cell, hl = run_hl }
+            end
+            run_hl, run_s = name, cell
+          end
+          byte = byte + #ch
+          cell = cell + cw
+        end
+        if run_hl then
+          runs[#runs + 1] = { s = run_s, e = cell, hl = run_hl }
+        end
+      end)
+      cache.rows[lnum] = runs
+      return runs
+    end
 
     -- One hl span at box row `i` (1-based), box-relative cells [s, e).
     local function mark(i, s, e, hl, prio)
@@ -252,54 +301,45 @@ function M.attach(host, root_winid)
           end
         end
 
-        if has_syn then
-          vim.api.nvim_buf_call(entry.bufnr, function()
-            local byte, cell = 1, 0
-            local run_hl, run_s = nil, 0
-            local function flush(e_cell)
-              if run_hl then
-                mark(i, run_s - m.cell0, math.min(e_cell, m.cell0 + c.w) - m.cell0, run_hl, 4100)
-              end
-              run_hl = nil
+        if syn then
+          for _, run in ipairs(syn_runs(m.lnum, sline)) do
+            local s = math.max(run.s, m.cell0)
+            local e = math.min(run.e, m.cell0 + c.w)
+            if s < e then
+              mark(i, s - m.cell0, e - m.cell0, run.hl, 4100)
             end
-            for ch in sline:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-              if cell >= m.cell0 + c.w then
-                break
-              end
-              local cw = ch == "\t" and (ts - (cell % ts)) or width.char(ch)
-              if cell + cw > m.cell0 then
-                local id = vim.fn.synID(m.lnum, byte, 1)
-                local name = id ~= 0 and vim.fn.synIDattr(vim.fn.synIDtrans(id), "name") or nil
-                if name == "" then
-                  name = nil
-                end
-                if name ~= run_hl then
-                  flush(cell)
-                  run_hl, run_s = name, math.max(cell, m.cell0)
-                end
-              end
-              byte = byte + #ch
-              cell = cell + cw
-            end
-            flush(cell)
-          end)
+          end
         end
       end
     end
   end
 
-  -- Place `entry`'s float over the visible slice of its content box, given the
-  -- root's current scroll position.
-  local function reposition(entry)
+  -- Place `entry`'s float over the visible slice of its content box, given
+  -- the root's current scroll position. `fresh` means the canvas was just
+  -- rewritten (a flush frame): the mirror under the box is blank again and
+  -- must be re-extracted no matter what.
+  local function reposition(entry, fresh)
     if not (vim.api.nvim_win_is_valid(root_winid) and vim.api.nvim_win_is_valid(entry.winid)) then
       return
     end
     local c = entry.node.content
-    local top_off = vim.fn.line("w0", root_winid) - 1
+    -- The root scrolls both ways (it is nowrap, so a trackpad/zl can move
+    -- leftcol): the float offsets by topline AND leftcol, clipping on both
+    -- axes symmetrically.
+    local rv
+    vim.api.nvim_win_call(root_winid, function()
+      rv = vim.fn.winsaveview()
+    end)
+    local top_off = rv.topline - 1
+    local left_off = rv.leftcol or 0
     local view_h = vim.api.nvim_win_get_height(root_winid)
+    local view_w = vim.api.nvim_win_get_width(root_winid)
     local y0 = c.y - top_off
     local y1 = y0 + c.h - 1
     local vis_top, vis_bot = math.max(y0, 0), math.min(y1, view_h - 1)
+    local x0 = c.x - left_off
+    local x1 = x0 + c.w - 1
+    local vis_left, vis_right = math.max(x0, 0), math.min(x1, view_w - 1)
 
     -- The widget may have scroll state of its own (an editor taller than its
     -- window). Capture its view BEFORE the resize below: shrinking a window
@@ -314,16 +354,42 @@ function M.attach(host, root_winid)
       end)
       base = math.max(v.topline - (entry.clip or 0), 1)
       entry.base = base
-      entry.leftcol = v.leftcol or 0
-      mirror(entry)
-      if policy(entry) == "focus" then
-        transcribe(entry)
+      -- like base: the displayed leftcol minus the horizontal clip we last
+      -- applied is the widget's OWN horizontal scroll
+      entry.leftcol = math.max((v.leftcol or 0) - (entry.lclip or 0), 0)
+      -- Extraction memo: the mirror + transcription depend only on the
+      -- widget's own view (base, leftcol), its buffer and the box — none of
+      -- which a pure root scroll changes. Redo them only when a flush blanked
+      -- the canvas (fresh), a highlight event flagged the entry (view_dirty),
+      -- or the key moved. With syntax on, extraction dominates the scroll
+      -- frame (~3ms per widget) — this skip is what keeps scrolling flat.
+      local key = table.concat({
+        base,
+        entry.leftcol,
+        vim.api.nvim_buf_get_changedtick(entry.bufnr),
+        c.x,
+        c.y,
+        c.w,
+        c.h,
+      }, ":")
+      if fresh or entry.view_dirty or entry.extracted ~= key then
+        mirror(entry)
+        if policy(entry) == "focus" then
+          transcribe(entry)
+        end
+        entry.extracted = key
+        entry.view_dirty = nil
       end
     end
 
     -- Hidden: occluded/zero-sized, or a render="focus" widget that nobody is
     -- editing (entry.revealing is enter()'s "about to focus" escape hatch).
-    if vis_bot < vis_top or c.w <= 0 or (policy(entry) == "focus" and not focused and not entry.revealing) then
+    if
+      vis_bot < vis_top
+      or vis_right < vis_left
+      or c.w <= 0
+      or (policy(entry) == "focus" and not focused and not entry.revealing)
+    then
       vim.api.nvim_win_set_config(entry.winid, { hide = true })
       return
     end
@@ -332,8 +398,8 @@ function M.attach(host, root_winid)
       relative = "win",
       win = root_winid,
       row = vis_top,
-      col = c.x,
-      width = c.w,
+      col = vis_left,
+      width = vis_right - vis_left + 1,
       height = vis_bot - vis_top + 1,
       hide = false,
     })
@@ -346,13 +412,31 @@ function M.attach(host, root_winid)
     -- between keystrokes.
     if not focused then
       local clipped = vis_top - y0
+      local lclip = vis_left - x0
       local height = vis_bot - vis_top + 1
       v.topline = base + clipped
       v.lnum = math.min(math.max(v.lnum, v.topline), v.topline + height - 1)
+      -- Left clip composes into the widget's own leftcol the same way — but
+      -- only for nowrap floats: with wrap, leftcol is meaningless and a
+      -- narrowed window REWRAPS instead (known mirror divergence, accepted).
+      if not (vim.wo[entry.winid].wrap) then
+        v.leftcol = (entry.leftcol or 0) + lclip
+        -- keep the cursor inside the horizontal view: winrestview would
+        -- otherwise let nvim re-scroll to reveal it, undoing the clip
+        local w = vis_right - vis_left + 1
+        local line = vim.api.nvim_buf_get_lines(entry.bufnr, v.lnum - 1, v.lnum, false)[1] or ""
+        local cell = width.str(line:sub(1, math.min(v.col, #line)))
+        if cell < v.leftcol then
+          v.col = width.cell_to_byte(line, v.leftcol)
+        elseif cell >= v.leftcol + w then
+          v.col = width.cell_to_byte(line, v.leftcol + w - 1)
+        end
+      end
       vim.api.nvim_win_call(entry.winid, function()
         vim.fn.winrestview(v)
       end)
       entry.clip = clipped
+      entry.lclip = lclip
     end
   end
 
@@ -510,12 +594,16 @@ function M.attach(host, root_winid)
     })
     -- Highlight-only changes arrive without on_lines: diagnostics and LSP
     -- semantic tokens land as (persistent) extmark updates with their own
-    -- events. pcall: LspTokenUpdate needs nvim 0.10+.
+    -- events — and without a changedtick bump, so the extraction memo needs
+    -- an explicit dirty flag. pcall: LspTokenUpdate needs nvim 0.10+.
     for _, ev in ipairs({ "DiagnosticChanged", "LspTokenUpdate" }) do
       pcall(vim.api.nvim_create_autocmd, ev, {
         group = group,
         buffer = entry.bufnr,
-        callback = refresh,
+        callback = function()
+          entry.view_dirty = true
+          refresh()
+        end,
       })
     end
   end
@@ -649,6 +737,22 @@ function M.attach(host, root_winid)
 
   local function destroy(entry)
     entry.dead = true -- detaches the on_lines watcher on its next callback
+    -- Never strand the user's focus: a widget can be unmounted out from under
+    -- its own cursor (the TODO pattern — a submit handler inserts a sibling
+    -- before the input and the positional reconciler recreates it). Closing
+    -- the current window would drop focus into an arbitrary previous window
+    -- with the MODE intact — insert mode "in the air" over the unmodifiable
+    -- root. Leave insert deliberately and step out to where the widget was.
+    if vim.api.nvim_win_is_valid(entry.winid) and vim.api.nvim_get_current_win() == entry.winid then
+      if vim.api.nvim_get_mode().mode:find("i") then
+        vim.cmd("stopinsert")
+      end
+      local c = entry.node.content
+      exit_to(c.y, c.x)
+      if vim.api.nvim_get_current_win() == entry.winid and vim.api.nvim_win_is_valid(root_winid) then
+        vim.api.nvim_set_current_win(root_winid) -- exit_to found no cell there
+      end
+    end
     if entry.ns and vim.api.nvim_buf_is_valid(host.bufnr) then
       pcall(vim.api.nvim_buf_clear_namespace, host.bufnr, entry.ns, 0, -1)
     end
@@ -693,7 +797,10 @@ function M.attach(host, root_winid)
 
   -- Reconcile floats against the host's last flush: create for new subwindow
   -- leaves, reposition everything, destroy floats whose leaf is gone.
-  local function sync()
+  -- `fresh` defaults to true (the on_flush path: the canvas was rewritten);
+  -- the WinScrolled resync passes false — nothing under the floats changed.
+  local function sync(fresh)
+    fresh = fresh ~= false
     local seen = {}
     for _, node in ipairs(host.subwins or {}) do
       local inst = node.fiber and node.fiber.instance
@@ -705,7 +812,7 @@ function M.attach(host, root_winid)
           floats[inst] = entry
         end
         entry.node = node
-        reposition(entry)
+        reposition(entry, fresh)
       end
     end
     for inst, entry in pairs(floats) do
@@ -722,7 +829,9 @@ function M.attach(host, root_winid)
   vim.api.nvim_create_autocmd("WinScrolled", {
     group = group,
     pattern = tostring(root_winid),
-    callback = sync,
+    callback = function()
+      sync(false) -- pure scroll: the canvas under the floats is intact
+    end,
   })
 
   -- A user :q on a subwindow float kills the whole app, exactly like :q on

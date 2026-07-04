@@ -582,3 +582,81 @@ common "type here" flow still costs one keystroke (`i` over the widget).
     demo standalone; stale "focus follows the cursor" wording updated in
     form/panel examples + examples/README.
 - Parked: inline flow layout; `_active` state.
+
+### Subwindow sync bugs + site performance round (2026-07-04, later)
+
+User-reported: (a) horizontal scrolling desyncs floats from the page (seen
+with a mac trackpad), (b) submitting a TODO in insert mode leaves insert mode
+"in the air", (c) the site needs a native-run flake app + a real-scenario
+benchmark, (d) suspected render="focus" extraction lag, (e) a ~1s periodic
+lag spike (GC suspected).
+
+- [x] G1. Horizontal root scroll: `reposition()` now offsets floats by the
+  root's leftcol as well as topline (the root float is nowrap, so trackpads /
+  zl can scroll it sideways) — col shift, left-edge clip with the clip
+  COMPOSED into the widget's own leftcol (`entry.lclip`, symmetric with
+  base/clip vertically; cursor clamped into the narrowed view so nvim can't
+  re-scroll it back), hide when fully off-view. Wrapped floats accept a
+  rewrap divergence when horizontally clipped (same family as the vertical
+  wrapped-clip gap). Specs: subwin_spec "horizontal root scroll" (3).
+- [x] G2. Focused-widget unmount guard: `destroy()` of the CURRENT window now
+  stopinserts + deliberately exits to the root at the widget's old origin.
+  The TODO demo shape (on_submit inserts a sibling before the text_input →
+  positional reconciler recreates it → float closed mid-insert) left the user
+  in insert mode over the unmodifiable root. Spec: focus_spec, submit batch
+  with the flush landed while insert is active (vim.wait inside on_submit).
+  - Parked (nicer UX, needs design): keyed reconciliation (`props.key`) would
+    PRESERVE the input across submits (focus + insert survive); today the
+    accidental destroy/recreate is also what clears the input — a controlled
+    `value` prop (reset buffer when the prop changes across commits) would
+    replace that. Decide the wanted submit UX before building either.
+- [x] G3. `fibrous-docs` native app: `nix run .#native` — same site/init.lua,
+  same webapp modules, fibrous as a pack/start plugin, in a real terminal
+  nvim ("is it slow, or slow in wasm"). Defaults to the PINNED fibrous input;
+  `FIBROUS_PATH=/path nix run .#native` debugs a local tree without a lock
+  bump. Headless-smoked (homepage mounts: root + 9 widget floats).
+- [x] G4. `fibrous-docs` homepage benchmark: `nix run .#bench` /
+  `nvim --headless -u NONE -i NONE -l tests/bench.lua` — mount, set_props
+  re-render, relayout, WinScrolled resync, hover step; BENCH_COLS/LINES/N
+  knobs. GOTCHA that hid everything: `-u NONE` leaves syntax OFF, and the
+  transcriber skips synID without `b:current_syntax` — early numbers were
+  ~5x too good. bench.lua now `syntax enable`s for site parity (headless
+  also needs `wincmd =` + win_set_height; the sole window ignores
+  lines/columns changes).
+- [x] G5. **Extmark leak** (the real source of the periodic-spike growth and
+  most of the flush cost): every canvas flush is a whole-buffer
+  `nvim_buf_set_lines(0,-1)`, which RELOCATES existing extmarks out of the
+  widget's box — `transcribe()`'s box-ranged namespace clear missed them
+  forever (+~476 marks/flush on the homepage; frame times grew linearly:
+  relayout 87→168ms over 30 frames). Fix: clear the whole per-entry
+  namespace. Spec: "transcribed highlights do not accumulate across flushes".
+- [x] G6. Scroll-path extraction memo: a pure root scroll changes only where
+  floats sit — mirror + transcription depend on (base, leftcol, widget
+  changedtick, box), so `reposition()` now skips extraction when that key is
+  unchanged, unless the frame is `fresh` (on_flush: canvas rewritten) or
+  `entry.view_dirty` (DiagnosticChanged/LspTokenUpdate — no changedtick
+  bump). WinScrolled passes fresh=false. Spec: "a pure scroll resync reuses
+  the extraction" (host changedtick + mark ids stable; widget's OWN scroll
+  still re-extracts). This answers the async/cooperative-scheduling idea:
+  the scroll-path work is REDUNDANT, not slow — skip beats defer.
+- [x] G7. Syntax-run cache: whole-line synID runs cached per entry keyed by
+  (changedtick, b:current_syntax); flush frames over an unchanged buffer only
+  re-place extmarks. Guard spec: editing the sub buffer refreshes transcribed
+  syntax (invalidation via tick).
+- Homepage numbers (native, 160x45, syntax on, ~7 focus-policy widgets):
+  | phase | before | after |
+  | mount + first paint | 32ms | 32ms |
+  | set_props re-render | 53ms avg, growing | ~10ms, stable |
+  | relayout | 129ms avg, growing | ~10ms, stable |
+  | WinScrolled resync | ~11ms | **0.03ms** |
+  Micro (72x16 widget/scroll frame): focus+syntax 2.9ms → 0.01ms.
+- [x] G8. The ~1s lag spike (user report): the clock example's 1s timer ticks
+  state → full commit + canvas rewrite + all-widget re-extraction every
+  second. NOT GC (Lua mem stable 4-8MB across hundreds of frames). Before:
+  ~50ms native and GROWING with the G5 leak (wasm: multiples of that —
+  matches "spike every second"); after G5-G7: ~10ms native, bounded. Needs
+  the usual push + fibrous-docs lock bump to reach the built site.
+  - Remaining if wasm still spikes: canvas damage tracking / subtree-scoped
+    commit (parked, task-8 perf posture) — the ~10ms is now layout+paint of
+    306 lines, not extraction.
+- Suite: **222 passed, 0 failed**; fibrous-docs 5/5.

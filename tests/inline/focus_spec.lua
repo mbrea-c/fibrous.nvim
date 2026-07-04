@@ -317,4 +317,54 @@ describe("inline.focus", function()
 
     handle.unmount()
   end)
+
+  -- A focused widget can be unmounted out from under its own focus: the TODO
+  -- pattern — on_submit inserts a sibling BEFORE the input, the positional
+  -- reconciler recreates the input at the shifted index — destroys the float
+  -- the user is typing in. Without a guard, nvim drops focus into whatever
+  -- window is previous, with insert mode still active in the unmodifiable
+  -- root ("insert mode in the air").
+  it("unmounting the focused widget leaves insert mode and refocuses the root", function()
+    local function App(ctx)
+      local items = ctx.use_state({ "item a" })
+      local children = {}
+      for _, it in ipairs(items.get()) do
+        children[#children + 1] = { comp = ui.label, props = { text = it } }
+      end
+      children[#children + 1] = {
+        comp = ui.text_input,
+        props = {
+          height = 1,
+          on_submit = function(value)
+            local next_items = vim.deepcopy(items.get())
+            next_items[#next_items + 1] = value
+            items.set(next_items)
+            -- land the re-render (and the input's destroy) while insert mode
+            -- is still active — a live user's <CR> pauses here too
+            vim.wait(100, function()
+              return false
+            end)
+          end,
+        },
+      }
+      return { comp = ui.col, props = {}, children = children }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 5 })
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 0 }) -- the input row
+    -- one batch: enter, type, submit — then "gg", which distinguishes the
+    -- outcomes: left in insert mode it mangles the root (E21, cursor stuck);
+    -- back in normal mode it is a plain motion to the top
+    press("ifoo<CR>gg")
+
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    assert.equal("n", vim.api.nvim_get_mode().mode)
+    assert.same({ 1, 0 }, vim.api.nvim_win_get_cursor(handle.winid))
+    -- the submit itself landed: the new item is on the page
+    local lines = vim.api.nvim_buf_get_lines(handle.bufnr, 0, -1, false)
+    assert.is_not_nil(table.concat(lines, "\n"):find("foo", 1, true))
+
+    handle.unmount()
+  end)
 end)
