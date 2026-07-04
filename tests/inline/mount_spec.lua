@@ -170,8 +170,14 @@ describe("inline.mount", function()
       vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(winid) })
     end
 
+    -- the restore is deferred to the main loop (an inline restore would
+    -- desync nvim's per-window scroll checkpoint and stop the event firing
+    -- for repeat scrolls to the same topline): pump it
     local fixed = mount.floating(Hello, {}, { width = 10, height = 3 })
     scroll(fixed.winid)
+    vim.wait(200, function()
+      return view_of(fixed.winid).topline == 1
+    end, 10)
     assert.equal(1, view_of(fixed.winid).topline)
 
     -- scroll mode: the window is a real viewport, scrolling must survive
@@ -184,6 +190,7 @@ describe("inline.mount", function()
     end
     local scroller = mount.floating(Tall, {}, { width = 8, height = 3, mode = "scroll" })
     scroll(scroller.winid)
+    vim.wait(50) -- long enough for a (wrongly) deferred restore to land
     assert.equal(2, view_of(scroller.winid).topline)
 
     fixed.unmount()

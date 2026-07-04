@@ -1654,6 +1654,16 @@ same-size mid-replace over memo'd entry components.
     snaps topline/leftcol back on WinScrolled, wired BEFORE subwin.attach so
     the manager's resync (definition order) sees the restored view — no float
     swim. Scroll-mode mounts are untouched (the window is a real viewport).
+    GOTCHA (second user report, "wheel scroll can stick"): the restore must be
+    DEFERRED (vim.schedule), not inline — a view change made inside the
+    WinScrolled autocmd is invisible to nvim's per-window scroll checkpoint,
+    so an inline restore leaves the checkpoint at the scrolled topline and the
+    next wheel notch landing on that same topline fires NO event (pin never
+    runs, root stuck scrolled). Deferred, the restore is itself an observed
+    scroll and the checkpoint tracks. Reproduced + verified against a live
+    `--headless --listen` demo (real WinScrolled cadence, nvim_input_mouse
+    wheel bursts): root pinned through 20 notches, transcript container still
+    scrolls natively.
   - Also pinned by spec while chasing a clanker cursor-jump report: a splice
     under a window cursor does NOT move it (fold-toggle pattern spec in
     container_spec — fibrous was already correct; the jump was clanker's

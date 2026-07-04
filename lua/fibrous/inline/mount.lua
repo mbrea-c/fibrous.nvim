@@ -50,19 +50,34 @@ end
 ---@param winid integer  the root float
 ---@param group integer
 local function pin_view(winid, group)
+	local pending = false
+	local function restore()
+		pending = false
+		if not vim.api.nvim_win_is_valid(winid) then
+			return
+		end
+		vim.api.nvim_win_call(winid, function()
+			local v = vim.fn.winsaveview()
+			if v.topline ~= 1 or (v.leftcol or 0) ~= 0 then
+				vim.fn.winrestview({ topline = 1, leftcol = 0 })
+			end
+		end)
+	end
 	vim.api.nvim_create_autocmd("WinScrolled", {
 		group = group,
 		pattern = tostring(winid),
 		callback = function()
-			if not vim.api.nvim_win_is_valid(winid) then
-				return
+			-- DEFERRED, not inline: a view change made inside the WinScrolled
+			-- autocmd is invisible to nvim's per-window scroll checkpoint (it
+			-- never re-triggers the event), so an inline restore leaves the
+			-- checkpoint at the SCROLLED topline — and the next wheel notch
+			-- landing on that same topline fires no event at all, sticking the
+			-- root scrolled. Restored on the main loop, the restore is itself
+			-- an observed scroll: the checkpoint follows, every notch fires.
+			if not pending then
+				pending = true
+				vim.schedule(restore)
 			end
-			vim.api.nvim_win_call(winid, function()
-				local v = vim.fn.winsaveview()
-				if v.topline ~= 1 or (v.leftcol or 0) ~= 0 then
-					vim.fn.winrestview({ topline = 1, leftcol = 0 })
-				end
-			end)
 		end,
 	})
 end
