@@ -155,9 +155,11 @@ function M.floating(component, props, opts)
 			local cur = geom()
 			return { width = cur.width, height = not scroll and cur.height or nil }
 		end,
-		on_flush = function()
+		on_flush = function(damage)
 			if manager then
-				manager.sync()
+				-- nil damage = the canvas didn't change: nothing under the floats
+				-- to re-extract (sync(nil) would force everything)
+				manager.sync(damage == nil and false or damage)
 				interaction.update()
 			end
 		end,
@@ -274,9 +276,11 @@ function M.window(component, props, opts)
 			local cur = pane_size()
 			return { width = cur.width, height = not scroll and cur.height or nil }
 		end,
-		on_flush = function()
+		on_flush = function(damage)
 			if manager then
-				manager.sync()
+				-- nil damage = the canvas didn't change: nothing under the floats
+				-- to re-extract (sync(nil) would force everything)
+				manager.sync(damage == nil and false or damage)
 				interaction.update()
 			end
 		end,

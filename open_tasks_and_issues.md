@@ -660,3 +660,77 @@ lag spike (GC suspected).
     commit (parked, task-8 perf posture) — the ~10ms is now layout+paint of
     306 lines, not extraction.
 - Suite: **222 passed, 0 failed**; fibrous-docs 5/5.
+
+### Canvas damage tracking + nix packaging (2026-07-04, evening)
+
+- [x] H1. **Canvas damage tracking** (pulled out of the back pocket per G8):
+  the flush no longer rewrites the whole buffer. `host.lua` retains the
+  previous frame's canvas (lines + per-row hl spans), diffs the new frame
+  (equal head + equal tail bracket the change), and applies ONE minimal
+  splice: ranged `nvim_buf_clear_namespace` BEFORE the write (afterwards the
+  edit would have relocated the marks out of the range — the G5 lesson),
+  one ranged `set_lines`, extmarks re-set for the spliced rows only. Marks
+  outside the splice survive and shift with row-count changes. `on_flush`
+  now receives the damage: `nil` = canvas unchanged, else `{top, bot}`
+  0-based inclusive new-frame rows (`bot < top` = pure deletion). The diff
+  is canvas-vs-canvas, never against the buffer — the buffer legitimately
+  diverges where mirrors wrote.
+- [x] H2. Subwin damage plumbing: `sync(damage)` (false = pure scroll /
+  no-op flush; table = spliced rows; nil = unknown → assume all, mount.lua
+  maps on_flush nil → false) forces re-extraction only for widgets whose
+  content box the splice reached. Consequence of no wholesale repaint:
+  whoever paints over the canvas must clean up after itself —
+  - `mirror()` records `entry.mirrored`; `restore_box()` writes
+    `host.canvas_lines` (new: retained painted canvas, the pre-mirror
+    ground truth) back over a box;
+  - destroy() restores the canvas under the old box (else stale mirror text
+    lingers wherever the next flush's damage doesn't reach); sync destroys
+    FIRST so a restore can't land on a survivor's fresh mirror;
+  - a moved/resized box restores the OLD box before mirroring the new one
+    (fixed-height shrink orphans rows with zero canvas damage).
+- [x] H3. **Stale-mirror-on-unfocus bug** (user report: "the view of an
+  unfocused subbuffer becomes empty until the next relayout that hits it"):
+  a flush that damaged a FOCUSED widget's box blanked the canvas there, but
+  reposition skips extraction while focused and the memo key never changed
+  (no edits) — so leaving showed the blank until some later flush hit the
+  box. Fix: a forced reposition on a focused entry invalidates
+  `entry.extracted`; the WinLeave reposition then repairs the mirror.
+  (Pre-damage-tracking this needed every flush to hit every box to
+  self-heal; now it's spec'd: "a damaging flush while the widget is focused
+  repairs the mirror on leave".)
+- [x] H4. Specs: tests/inline/damage_spec.lua — no-change relayout writes
+  nothing (changedtick + mark ids stable), one-row change splices exactly
+  that row (buf_attach on_lines range + surviving mark ids), row-count
+  change equivalent to full repaint, on_flush damage contract
+  ("0:2"/"1:1"/nil), miss-flush leaves extraction untouched (tick delta ==
+  1: only the splice wrote), damaging flush re-extracts over the splice,
+  unmount restore, shrink restore, focused-damage repair-on-leave. Note:
+  mark IDs restart after a namespace clear — id stability alone is a weak
+  observable, the changedtick delta is the honest one. Adapted contract:
+  bare persistent-extmark changes (no event, no changedtick) now reach the
+  mirror on the NEXT extraction rather than on any flush; Diagnostic/
+  LspToken events still force via view_dirty.
+- [x] H5. Benchmarks (the "was it worth it" gate), before → after:
+  - micro (bench/run.lua, N=100 sections ~600 nodes, fixed 60-col):
+    full re-commit 6.25 → 4.81ms; incremental 6.34 → 4.93ms; NEW scenario
+    "scoped leaf update (state in child component)" — isolates the commit
+    pipeline — 5.12 → 4.13ms. Scroll tick unchanged 0.011ms.
+  - docs homepage (160x45, syntax on): set_props 10.13 → 8.18ms avg;
+    relayout 9.44 → 7.47ms; scroll resync 0.06 → 0.03ms. The remaining
+    ~7.5ms is pure engine (build_node + layout + paint + diff) — buffer
+    writes and the ~1400/frame extmark clear+re-set churn are GONE, and
+    unrelated flushes no longer touch widget mirrors/transcriptions at all
+    (a clock tick now splices ~2 rows and skips every widget).
+  - Verdict: worth it — ~20% on full-page frames, near-free no-change
+    flushes, plus the H3 correctness fix falls out of the same mechanism.
+    Next lever if wasm still hurts: subtree-scoped layout/paint memoization
+    (the 7.5ms floor), NOT more write-side work.
+- [x] H6. Nix: `packages.<sys>.default`/`.fibrous` (vimUtils.buildVimPlugin,
+  doCheck off — the suite is the check; source tree stays a valid bare
+  plugin dir for path consumers like fibrous-docs), apps `.#test` /
+  `.#bench` / `.#example` (+ default = example) wrapping the Makefile
+  entry points against the flake snapshot (committed/staged state — make
+  targets remain the working-tree loop). README "Nix" section.
+  `nix flake check` green.
+- Suite: **231 passed, 0 failed** (222 + 9 damage specs); `nix flake check`
+  green; docs 5/5 unaffected (bench-only consumer change none).
