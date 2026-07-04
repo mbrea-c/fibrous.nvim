@@ -164,6 +164,52 @@ describe("inline.host damage tracking", function()
 		root:unmount()
 	end)
 
+	it("appending to a memo'd list splices only the appended rows (growth path)", function()
+		-- The transcript hot path end to end: scroll mode, the list re-renders
+		-- with one more entry, the canvas GROWS in place — rows above the append
+		-- must not be rewritten and their marks must keep their ids.
+		local function Entry(_, props)
+			return { comp = text, props = { text = props.item.text, style = { text_hl = props.item.hl } } }
+		end
+		local setter
+		local function App(ctx)
+			local s = ctx.use_state({ { text = "aaa", hl = "Title" }, { text = "bbb", hl = "Comment" } })
+			setter = s
+			local children = {}
+			for i, item in ipairs(s.get()) do
+				children[i] = { comp = Entry, props = { item = item }, memo = true }
+			end
+			return { comp = col, props = {}, children = children }
+		end
+		local damages = {}
+		local host = inline_host.new({
+			get_size = function()
+				return { width = 4 }
+			end,
+			on_flush = function(damage)
+				damages[#damages + 1] = damage == nil and "nil" or (damage.top .. ":" .. damage.bot)
+			end,
+		})
+		local root = runtime.create_root(App, {}, { host = host }):render()
+		local head_id = mark_with_hl(host.bufnr, "Title").id
+		local events = {}
+		vim.api.nvim_buf_attach(host.bufnr, false, {
+			on_lines = function(_, _, _, first, last, last_new)
+				events[#events + 1] = { first, last, last_new }
+			end,
+		})
+
+		local cur = setter.get()
+		setter.set({ cur[1], cur[2], { text = "ccc", hl = "Constant" } })
+
+		assert.same({ { 2, 2, 3 } }, events) -- one write: the appended row
+		assert.same({ "aaa ", "bbb ", "ccc " }, lines_of(host.bufnr))
+		assert.same({ "0:1", "2:2" }, damages)
+		assert.equal(head_id, mark_with_hl(host.bufnr, "Title").id)
+		assert.equal(2, mark_with_hl(host.bufnr, "Constant").row)
+		root:unmount()
+	end)
+
 	it("on_flush reports the damage: full on first paint, the row range after, nil on no change", function()
 		local damages = {}
 		local setter

@@ -21,6 +21,13 @@ test-file:
 bench:
 	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/run.lua
 
+# Transcript-shaped workload (long chat log: append / stream / mid-edit):
+#   make bench-transcript            # default N=1000 entries
+#   make bench-transcript BENCH_N=4000
+.PHONY: bench-transcript
+bench-transcript:
+	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/transcript.lua
+
 # Launch an interactive, fully isolated Neovim with only this plugin loaded, and
 # (optionally) open one example straight away:
 #   make example            # opens, then :Examples / :Example <name>

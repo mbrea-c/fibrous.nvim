@@ -68,3 +68,19 @@ describe("inline.canvas", function()
     assert.same({ "   " }, c:lines())
   end)
 end)
+
+describe("inline.canvas grow", function()
+  it("appends blank rows in place, keeping existing cells and spans", function()
+    local c = Canvas.new(4, 2)
+    c:text(0, 0, "abcd", "Title")
+    c:text(0, 1, "ef")
+
+    c:grow(4)
+
+    assert.equal(4, c.h)
+    assert.same({ "abcd", "ef  ", "    ", "    " }, c:lines())
+    assert.same({ { row = 0, start_col = 0, end_col = 4, hl = "Title" } }, c:highlights())
+    c:text(0, 3, "gh") -- the new rows are real, writable cells
+    assert.equal("gh  ", c:line(4))
+  end)
+end)

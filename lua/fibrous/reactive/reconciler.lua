@@ -17,6 +17,7 @@ local hooks = require("fibrous.reactive.hooks")
 ---@field comp Component|HostDescriptor   component function, or a host primitive descriptor
 ---@field props? table
 ---@field children? VNode[]
+---@field memo? boolean   bail out of re-rendering when props are shallow-equal (function components only)
 
 ---@class HostDescriptor
 ---@field __host string   the primitive's tag (e.g. "text", "row")
@@ -87,6 +88,27 @@ function M.create_fiber(spec, env)
 	return fiber
 end
 
+-- Both tables hold the same keys mapped to the same (rawequal) values.
+---@param a table
+---@param b table
+---@return boolean
+local function shallow_equal(a, b)
+	if a == b then
+		return true
+	end
+	local n = 0
+	for k, v in pairs(a) do
+		if b[k] ~= v then
+			return false
+		end
+		n = n + 1
+	end
+	for _ in pairs(b) do
+		n = n - 1
+	end
+	return n == 0
+end
+
 -- Reconcile a parent's existing child fibers against fresh child VNode specs.
 --
 -- Matching is positional: at each index, if the existing fiber's component
@@ -94,6 +116,19 @@ end
 -- (design.md §5: reuse when `type` matches), and a host fiber's instance is
 -- updated in place. Otherwise the old fiber is unmounted and a new one mounts.
 -- Trailing fibers left over (the new list is shorter) are unmounted.
+--
+-- Render bailout (React.memo semantics, opted into per call site): a reused
+-- FUNCTION component whose spec carries `memo = true` and whose props are
+-- shallow-equal to the fiber's current props is not re-rendered at all — the
+-- subtree is skipped and its dirtiness ticks stay untouched, so a host's
+-- subtree memoization (inline `fiber._node`) holds right through the parent's
+-- re-render. That is what keeps a long homogeneous list (a chat transcript)
+-- O(change) instead of O(N) per update. Function components only: a bailed
+-- fiber keeps stale `children_specs`, which is safe solely because function
+-- fibers re-derive children from `rendered` — a host fiber bailing on props
+-- would freeze the fresh child specs its children actually come from. The
+-- fiber's own state updates are unaffected: `set` schedules the fiber itself,
+-- entering below this check.
 ---@param parent Fiber
 ---@param specs VNode[]
 ---@param env Env
@@ -103,15 +138,20 @@ function M.reconcile_children(parent, specs, env)
 	for i, spec in ipairs(specs) do
 		local existing = old[i]
 		if existing and existing.type == spec.comp then
-			local prev_props = existing.props
-			existing.props = spec.props or {}
-			existing.children_specs = spec.children or {}
-			existing.parent = parent
-			if existing.instance and env.host then
-				env.host.update_instance(existing.instance, prev_props, existing.props)
+			if spec.memo and type(spec.comp) == "function" and shallow_equal(existing.props, spec.props or {}) then
+				existing.parent = parent
+				next_children[i] = existing
+			else
+				local prev_props = existing.props
+				existing.props = spec.props or {}
+				existing.children_specs = spec.children or {}
+				existing.parent = parent
+				if existing.instance and env.host then
+					env.host.update_instance(existing.instance, prev_props, existing.props)
+				end
+				M.render_fiber(existing, env)
+				next_children[i] = existing
 			end
-			M.render_fiber(existing, env)
-			next_children[i] = existing
 		else
 			if existing then
 				M.unmount_fiber(existing, env)

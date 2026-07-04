@@ -164,6 +164,23 @@ function Canvas:blank_rect(rect)
 	end
 end
 
+-- Grow the canvas to `h` rows in place: existing cells stay put, the new
+-- rows start blank. This is what keeps scroll-mode content that only gets
+-- TALLER (a transcript appending at the tail) on the incremental-repaint
+-- path instead of starting over with a fresh full paint.
+---@param h integer
+function Canvas:grow(h)
+	for y = self.h + 1, h do
+		local cr, wr = {}, {}
+		for x = 1, self.w do
+			cr[x] = " "
+			wr[x] = 1
+		end
+		self.ch[y], self.cw[y], self.hl[y] = cr, wr, {}
+	end
+	self.h = math.max(self.h, h)
+end
+
 -- The canvas as buffer lines (continuation cells contribute nothing, keeping
 -- wide chars display-aligned).
 ---@return string[]

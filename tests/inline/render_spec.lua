@@ -182,3 +182,148 @@ describe("inline.render", function()
     }, c:lines())
   end)
 end)
+
+-- The incremental painter's container-descend: a container REBUILT because it
+-- re-rendered (a list component committing a new entries array) but whose own
+-- chrome — background, border — and child count are unchanged at the same
+-- rect must not become a repaint root. It descends like a `_keep` node, so
+-- its memoized children skip and only the truly changed child repaints. The
+-- previous node rides along as `_prev` (host build_node stashes it); dirty
+-- rows are the observable contract.
+describe("inline.render update container-descend", function()
+  local function entry(txt)
+    return { kind = "text", props = {}, text = txt }
+  end
+
+  -- Simulate the host build's next frame: reuse `prev`'s children as memoized
+  -- objects except position `swap`, which gets `fresh`.
+  local function next_frame(prev, swap, fresh, props)
+    local children = {}
+    for i, child in ipairs(prev.children) do
+      if i == swap then
+        fresh._old_rect = child.rect
+        children[i] = fresh
+      else
+        child._memo = true
+        children[i] = child
+      end
+    end
+    return {
+      kind = "col",
+      props = props or prev.props,
+      children = children,
+      _old_rect = prev.rect,
+      _prev = prev,
+    }
+  end
+
+  it("unchanged chrome at the same rect descends: only the changed child's rows are dirty", function()
+    local t1 = { kind = "col", props = {}, children = { entry("aaa"), entry("bbb"), entry("ccc") } }
+    layout.compute(t1, { width = 4 })
+    local c = render.paint(t1, 4, t1.size.h)
+
+    local t2 = next_frame(t1, 2, entry("BBB"))
+    layout.compute(t2, { width = 4 })
+
+    assert.same({ 1 }, render.update(c, t2))
+    assert.same({ "aaa ", "BBB ", "ccc " }, c:lines())
+  end)
+
+  it("changed chrome stays a repaint root (and paints correctly)", function()
+    local t1 = { kind = "col", props = {}, children = { entry("aaa"), entry("bbb") } }
+    layout.compute(t1, { width = 4 })
+    local c = render.paint(t1, 4, t1.size.h)
+
+    local t2 = next_frame(t1, 2, entry("BBB"), { hl = "Visual" })
+    layout.compute(t2, { width = 4 })
+
+    assert.same({ 0, 1 }, render.update(c, t2))
+    assert.same({ "aaa ", "BBB " }, c:lines())
+    -- the new background reached every row, memoized child included
+    local rows = {}
+    for _, s in ipairs(c:highlights()) do
+      if s.hl == "Visual" then
+        rows[#rows + 1] = s.row
+      end
+    end
+    assert.same({ 0, 1 }, rows)
+  end)
+
+  it("a lost trailing child forces the repaint root (vacated cells blanked)", function()
+    -- fixed height: the container rect survives the removal, so only the
+    -- child-count guard stands between the descend and stale bottom cells
+    local t1 = { kind = "col", props = {}, children = { entry("aaa"), entry("bbb"), entry("ccc") } }
+    layout.compute(t1, { width = 4, height = 3 })
+    local c = render.paint(t1, 4, 3)
+
+    local t2 = {
+      kind = "col",
+      props = t1.props,
+      children = { t1.children[1], t1.children[2] },
+      _old_rect = t1.rect,
+      _prev = t1,
+    }
+    t1.children[1]._memo = true
+    t1.children[2]._memo = true
+    layout.compute(t2, { width = 4, height = 3 })
+
+    render.update(c, t2)
+
+    assert.same({ "aaa ", "bbb ", "    " }, c:lines())
+  end)
+end)
+
+-- Growth: in scroll mode every append makes the frame taller, which used to
+-- discard the canvas and repaint from scratch. With the canvas grown in place
+-- (host calls Canvas:grow), a chrome-less container whose rect only gained
+-- height — same x/y/w — descends: the old cells are all still right, the new
+-- area is virgin canvas, and only the appended child paints.
+describe("inline.render update growth-descend", function()
+  local function entry(txt)
+    return { kind = "text", props = {}, text = txt }
+  end
+
+  it("appending to a chrome-less container dirties only the new child's rows", function()
+    local t1 = { kind = "col", props = {}, children = { entry("aaa"), entry("bbb") } }
+    layout.compute(t1, { width = 4 })
+    local c = render.paint(t1, 4, t1.size.h)
+
+    for _, child in ipairs(t1.children) do
+      child._memo = true
+    end
+    local t2 = {
+      kind = "col",
+      props = t1.props,
+      children = { t1.children[1], t1.children[2], entry("ccc") },
+      _old_rect = t1.rect,
+      _prev = t1,
+    }
+    layout.compute(t2, { width = 4 })
+    c:grow(t2.size.h)
+
+    assert.same({ 2 }, render.update(c, t2))
+    assert.same({ "aaa ", "bbb ", "ccc " }, c:lines())
+  end)
+
+  it("a bordered container that grows stays a repaint root (the edge moves)", function()
+    local t1 = { kind = "col", props = { border = "single" }, children = { entry("aa") } }
+    layout.compute(t1, { width = 4 })
+    local c = render.paint(t1, 4, t1.size.h)
+
+    t1.children[1]._memo = true
+    local t2 = {
+      kind = "col",
+      props = t1.props,
+      children = { t1.children[1], entry("bb") },
+      _old_rect = t1.rect,
+      _prev = t1,
+    }
+    layout.compute(t2, { width = 4 })
+    c:grow(t2.size.h)
+
+    render.update(c, t2)
+
+    -- the bottom border sits under the new child, not stranded mid-box
+    assert.same({ "┌──┐", "│aa│", "│bb│", "└──┘" }, c:lines())
+  end)
+end)

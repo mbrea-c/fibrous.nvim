@@ -326,6 +326,113 @@ describe("inline.host subtree memoization", function()
 		fresh_root:unmount()
 	end)
 
+	it("a memo'd list re-render reuses every unchanged entry's node", function()
+		-- The transcript shape: the list component's own state holds the entries
+		-- array; each entry is a `memo = true` child. Replacing ONE entry object
+		-- re-renders the list, but the others bail out of the render entirely —
+		-- so their fibers stay clean and build hands back their node objects.
+		local function Entry(_, props)
+			return { comp = text, props = { text = props.item.text } }
+		end
+		local setter
+		local function App(ctx)
+			local s = ctx.use_state({ { text = "aaa" }, { text = "bbb" }, { text = "ccc" } })
+			setter = s
+			local children = {}
+			for i, item in ipairs(s.get()) do
+				children[i] = { comp = Entry, props = { item = item }, memo = true }
+			end
+			return { comp = col, props = {}, children = children }
+		end
+		local host = inline_host.new({
+			get_size = function()
+				return { width = 4 }
+			end,
+		})
+		local root = runtime.create_root(App, {}, { host = host }):render()
+		local first = host.tree.children[1]
+		local third = host.tree.children[3]
+
+		local cur = setter.get()
+		setter.set({ cur[1], { text = "BBB" }, cur[3] })
+
+		assert.rawequal(first, host.tree.children[1])
+		assert.rawequal(third, host.tree.children[3])
+		assert.same({ "aaa ", "BBB ", "ccc " }, lines_of(host.bufnr))
+
+		local fresh = inline_host.new({
+			get_size = function()
+				return { width = 4 }
+			end,
+		})
+		local function Fresh()
+			return {
+				comp = col,
+				props = {},
+				children = {
+					{ comp = text, props = { text = "aaa" } },
+					{ comp = text, props = { text = "BBB" } },
+					{ comp = text, props = { text = "ccc" } },
+				},
+			}
+		end
+		local fresh_root = runtime.create_root(Fresh, {}, { host = fresh }):render()
+		assert.same(lines_of(fresh.bufnr), lines_of(host.bufnr))
+		assert.same(spans_of(fresh.bufnr), spans_of(host.bufnr))
+		root:unmount()
+		fresh_root:unmount()
+	end)
+
+	it("appending through the grown canvas stays equivalent to a fresh mount", function()
+		-- Growth-path oracle: append two entries (the second exercises growing
+		-- an ALREADY-grown canvas), then compare byte-for-byte with a fresh
+		-- mount at the final state — lines and highlight spans.
+		local function Entry(_, props)
+			return { comp = text, props = { text = props.item.text, style = { text_hl = props.item.hl } } }
+		end
+		local function list_app(box, items)
+			return function(ctx)
+				local s = ctx.use_state(items)
+				box.get, box.set = s.get, s.set
+				local children = {}
+				for i, item in ipairs(s.get()) do
+					children[i] = { comp = Entry, props = { item = item }, memo = true }
+				end
+				return { comp = col, props = { gap = 1 }, children = children }
+			end
+		end
+		local box = {}
+		local host = inline_host.new({
+			get_size = function()
+				return { width = 4 }
+			end,
+		})
+		local seed = { { text = "aaa", hl = "Title" } }
+		local root = runtime.create_root(list_app(box, seed), {}, { host = host }):render()
+
+		local one = box.get()
+		box.set({ one[1], { text = "bb", hl = "Comment" } })
+		local two = box.get()
+		box.set({ two[1], two[2], { text = "c", hl = "Constant" } })
+
+		local fresh_box = {}
+		local fresh = inline_host.new({
+			get_size = function()
+				return { width = 4 }
+			end,
+		})
+		local final = {
+			{ text = "aaa", hl = "Title" },
+			{ text = "bb", hl = "Comment" },
+			{ text = "c", hl = "Constant" },
+		}
+		local fresh_root = runtime.create_root(list_app(fresh_box, final), {}, { host = fresh }):render()
+		assert.same(lines_of(fresh.bufnr), lines_of(host.bufnr))
+		assert.same(spans_of(fresh.bufnr), spans_of(host.bufnr))
+		root:unmount()
+		fresh_root:unmount()
+	end)
+
 	it("set_state rebuilds the touched fiber's node despite the memo", function()
 		local box = {}
 		local host = inline_host.new({

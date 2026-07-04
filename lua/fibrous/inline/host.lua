@@ -179,12 +179,21 @@ local function build_node(fiber, ctx)
 	-- Tier B (incremental paint) bookkeeping, stored only off the fast path:
 	-- `_keep` marks a node rebuilt ONLY because a descendant changed (its own
 	-- visual is intact — the paint can descend instead of repainting it), and
-	-- `_old_rect` remembers where its previous incarnation sat.
+	-- `_old_rect` remembers where its previous incarnation sat. A rebuilt
+	-- CONTAINER additionally carries its previous incarnation (`_prev`): the
+	-- fiber DID render — a list component committing a fresh children array —
+	-- but if the paint finds the old chrome and child count intact it can
+	-- still descend instead of repainting every entry (render.update's
+	-- chrome_equal). The painter consumes the field on every path, so old
+	-- nodes never chain alive across frames.
 	if prev then
 		if (fiber.self_tick or 0) <= ctx.last_tick then
 			node._keep = true
 		end
 		node._old_rect = prev.rect
+		if CONTAINERS[tag] then
+			node._prev = prev
+		end
 	end
 	fiber._node = node
 	return node
@@ -244,8 +253,9 @@ function M.new(opts)
 	---@type table[][]
 	local prev_hl_rows = {}
 	-- The persistent cell grid the previous frame was painted on. While the
-	-- size holds, flushes repaint only changed subtrees onto it
-	-- (render.update); a size change starts over with a fresh full paint.
+	-- width holds and the frame doesn't shrink, flushes repaint only changed
+	-- subtrees onto it (render.update) — taller frames grow it in place; a
+	-- width change or a shrink starts over with a fresh full paint.
 	---@type Canvas|nil
 	local canvas = nil
 
@@ -334,14 +344,24 @@ function M.new(opts)
 		if tree then
 			layout.compute(tree, { width = size.width, height = size.height })
 			local w, h = size.width, size.height or tree.size.h
-			if canvas and canvas.w == w and canvas.h == h and prev_lines then
+			if canvas and canvas.w == w and h >= canvas.h and prev_lines then
 				-- Incremental frame: repaint only changed subtrees on the
 				-- persistent canvas, then patch the retained line/span arrays for
 				-- the touched rows. Clean rows keep their very string/table
 				-- objects, so the splice diff below equates them by identity.
+				-- A TALLER frame (scroll mode appending at the tail) grows the
+				-- canvas in place rather than starting over; the gained rows are
+				-- virgin and always extracted (they exist in no retained array).
+				local grown_from = canvas.h
+				if h > canvas.h then
+					canvas:grow(h)
+				end
 				local dirty = render.update(canvas, tree)
 				for i = 1, h do
 					canvas_lines[i], hl_rows[i] = prev_lines[i], prev_hl_rows[i]
+				end
+				for y = grown_from, h - 1 do
+					dirty[#dirty + 1] = y -- may repeat a repainted row; extraction is idempotent
 				end
 				for _, y in ipairs(dirty) do
 					canvas_lines[y + 1] = canvas:line(y + 1)

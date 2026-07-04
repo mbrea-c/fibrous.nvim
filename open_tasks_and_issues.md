@@ -1529,3 +1529,74 @@ shrinking to nothing on narrow (mobile) viewports.
   dispatch, vs 0.12 ms for the bare label-text scoped update); static frame
   ~2.5 ms CPU/s at 0 commits — the diff-skip saves ~18 ms/s, leaving only
   30×(value() + deep_equal + dispatch).
+
+### Transcript-scale perf: render bailout + paint descend + canvas growth (2026-07-04, late night)
+
+Driven by remote-clanker.nvim (the ACP client rewrite in `~/src/remote-clanker.nvim`,
+whose transcript is ONE long col of per-entry components): before this round,
+ANY entries mutation at N=1000 entries cost ~50ms — the reconciler re-rendered
+all N children (no bailout), which stamped every fiber dirty and defeated all
+the I1–I4 memo tiers; and in scroll mode every append changed the canvas
+height, discarding the canvas for a full fresh paint. `make bench-transcript`
+(bench/transcript.lua, NEW) pins the workload: mount / append / stream-tick /
+same-size mid-replace over memo'd entry components.
+
+- [x] M1. **Reconciler render bailout** (reconciler.lua, VNode `memo = true`):
+  React.memo semantics, per call site. On positional reuse with the same comp,
+  a memo'd FUNCTION component whose props are SHALLOW-equal to the fiber's
+  current props skips render_fiber entirely — subtree untouched, ticks
+  untouched, so host build memo (fiber._node) holds through the parent's
+  re-render. Function components only: a bailed fiber keeps stale
+  children_specs, safe solely because function fibers re-derive children from
+  `rendered` (a host fiber would freeze its children — pinned by the "ignored
+  on host primitives" spec). Own set_state is unaffected (schedules the fiber
+  itself). Composes with the store discipline: reassign arrays, keep unchanged
+  entry OBJECTS reference-stable, build fresh `{ entry = e }` props per render
+  (shallow compare absorbs the fresh table). 9 specs in
+  tests/reactive/memo_bailout_spec.lua (skip/effect-skip, value change, key
+  removal, non-memo default, own-state, subtree skip, tick preservation, type
+  switch, host guard).
+- [x] M2. **Container chrome-descend** (render.update + host.build_node
+  `_prev`): a container rebuilt BECAUSE IT RE-RENDERED (the list committing a
+  new children array) used to become a repaint root — full blank + repaint of
+  every entry, O(N) cells, even when N-1 children were `_memo` at their old
+  rects. Now build stashes the previous incarnation on rebuilt containers
+  (`_prev`, consumed on every paint path so old nodes never chain), and the
+  walk descends when the rect is unchanged and `chrome_equal`: same bg, same
+  border (sides/chars/corners/hl/title), same border_hl, and NO CHILD LOST —
+  removals still repaint wholesale because only the parent's blanket blank
+  cleans a vanished child's cells (pinned by the "lost trailing child" spec).
+- [x] M3. **Canvas growth** (Canvas:grow + host + growth-descend): scroll-mode
+  frames that only get TALLER grow the canvas in place (blank rows appended)
+  instead of discarding it; host patches retained arrays with update()'s dirty
+  rows plus the virgin grown rows. A CHROME-LESS container whose rect grew
+  strictly downward (same x/y/w) descends — old cells right, new area virgin;
+  any chrome rejects (bottom border/bg stretch — pinned by the bordered-growth
+  spec). Width change or shrink → full fresh paint as before. Host-level
+  guards: damage_spec "appending splices only the appended rows" (one write,
+  mark ids above survive), memo_spec fresh-mount oracle through two grows.
+- [x] M4. **Numbers** (native, width 100, ~3.5 lines/entry): N=1000 —
+  append 53.9 → 1.0ms, stream tick 47.1 → 0.68ms, same-size mid-replace
+  48.9 → 0.62ms; mount 46ms (one-time). N=4000 — all ops ~10-12ms: the
+  remainder is flat O(N) walks with tiny constants (spec building in the list
+  component ~12%, build/layout ~30%, reconcile ~6%, splice scan ~9% — jit.p,
+  no hotspot). Verdict: fine under the transcript's 40ms-debounce coalescing;
+  if truly monstrous sessions ever hurt, the escape hatch is app-level
+  windowing (mount last K entries + "older messages" expander), no framework
+  support needed. Suite 285/0, docs 7/7.
+
+### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
+
+- Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not
+  a raw managed buffer — ADR 0008's bug class (stale lines, fold loss, scroll
+  races) is what the pure projection precludes; M1–M3 above make it O(change).
+- No virtual scrolling: buffer + scroll-mode viewport already virtualize the
+  display; CPU is bounded by the memo tiers.
+- Store: plain Lua + subscriber list (NOT nui-components signals), reassign
+  references on mutation; keep agentic's permission FIFO queue pattern.
+- Copy `acp/` + `acp_bridge` wholesale (store-agnostic already); prompt =
+  text_input subwin; panel dock = mount.split(); tool-call fold = conditional
+  render on store `expanded`.
+- Markdown/diff highlighting: per-entry "parse once on stream-settle, cache
+  spans" (detached string parser) — strictly better than agentic's
+  viewport-throttled repaint; wants to become a fibrous component eventually.

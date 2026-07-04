@@ -122,7 +122,11 @@ local function visit(c, node)
 	-- What this node has painted on the canvas — the incremental painter
 	-- (M.update) compares against it to decide whether a subtree can be
 	-- skipped. Recorded even for degenerate rects, so the baseline exists.
+	-- `_prev` (build bookkeeping M.update normally consumes) is dropped here
+	-- too: a full paint that skips M.update must not leave old node objects
+	-- chained alive frame over frame.
 	node._prect = rect
+	node._prev = nil
 	if rect.w <= 0 or rect.h <= 0 then
 		return
 	end
@@ -186,6 +190,71 @@ local function rects_equal(a, b)
 	return b ~= nil and a.x == b.x and a.y == b.y and a.w == b.w and a.h == b.h
 end
 
+local SIDES = { "top", "right", "bottom", "left" }
+local CORNERS = { "tl", "tr", "bl", "br" }
+
+---@param a Border
+---@param b Border
+local function border_equal(a, b)
+	if a.hl ~= b.hl then
+		return false
+	end
+	for _, k in ipairs(SIDES) do
+		if a.sides[k] ~= b.sides[k] or a.chars[k] ~= b.chars[k] then
+			return false
+		end
+	end
+	for _, k in ipairs(CORNERS) do
+		if a.chars[k] ~= b.chars[k] then
+			return false
+		end
+	end
+	local at, bt = a.title, b.title
+	if at == nil or bt == nil then
+		return at == bt
+	end
+	return at.text == bt.text and at.hl == bt.hl and at.align == bt.align and at.pos == bt.pos
+end
+
+local function bg_of(node)
+	local rs = node.style_resolved
+	return rs and rs.hl or (node.props or {}).hl
+end
+
+-- Everything a CONTAINER paints itself — background fill and border — is
+-- unchanged between its previous incarnation and this rebuild, and no child
+-- was LOST. Removals matter because a lost child's cells are only ever
+-- blanked by a wholesale repaint of the parent's rect; children that stayed
+-- (however many joined them) each blank their own old area when they change
+-- or move, so every stale cell is accounted for.
+---@param node table  the rebuilt container, laid out this frame
+---@param prev table  its previous incarnation (`_prev`, stashed by the build)
+local function chrome_equal(node, prev)
+	if #(node.children or {}) < #(prev.children or {}) then
+		return false
+	end
+	if bg_of(node) ~= bg_of(prev) then
+		return false
+	end
+	local rs, prs = node.style_resolved, prev.style_resolved
+	if (rs and rs.border_hl) ~= (prs and prs.border_hl) then
+		return false
+	end
+	return border_equal(node.box.border, prev.box.border)
+end
+
+-- The node paints no cells of its own: no background fill, no border side.
+-- Only such a container may treat pure downward growth as "already right" —
+-- with any chrome, growth moves the bottom/right edges and stretches the fill.
+---@param node table
+local function no_chrome(node)
+	if bg_of(node) then
+		return false
+	end
+	local s = node.box.border.sides
+	return s.top + s.right + s.bottom + s.left == 0
+end
+
 ---@return { x: integer, y: integer, w: integer, h: integer }  a ∩ b (w/h 0 when disjoint)
 local function intersect(a, b)
 	local x0, y0 = math.max(a.x, b.x), math.max(a.y, b.y)
@@ -198,8 +267,14 @@ end
 -- painted on. Per node, in document order:
 --   * reused node (`_memo`) painted at the same rect  → skip the subtree
 --     (identical objects, identical spot: every cell is already right);
---   * fresh node whose own visual is intact (`_keep`) at its predecessor's
---     rect → descend (only some descendant changed);
+--   * fresh node whose own visual is intact at its predecessor's rect →
+--     descend (only some descendant changed). Two ways to know the visual is
+--     intact: the fiber didn't render at all (`_keep`), or it did — a list
+--     component committing a new children array — but the container paints
+--     the same chrome around a superset of its children (chrome_equal
+--     against `_prev`), the case that keeps ONE changed entry in a long
+--     list from repainting all of them. A chrome-less container may also
+--     GROW downward in place (append-at-tail onto a grown canvas);
 --   * anything else → repaint root: its old and new areas are blanked,
 --     ancestor backgrounds restored over them, then the subtree painted
 --     exactly like a full paint would.
@@ -229,11 +304,21 @@ function M.update(c, tree)
 		-- fresh node: consume the build-time bookkeeping either way
 		local old = node._old_rect
 		node._old_rect = nil
-		if node._keep and rects_equal(rect, old) then
+		local prev = node._prev
+		node._prev = nil
+		-- own visual intact: the fiber didn't render (_keep), or it did but
+		-- repainted the same chrome around a superset of the children
+		local intact = node._keep or (prev ~= nil and CONTAINERS[node.kind] and chrome_equal(node, prev))
+		-- ...and every cell it stands for is already right: same rect, or (for
+		-- a chrome-less container) the rect only grew downward onto virgin rows
+		local fits = rects_equal(rect, old)
+		if intact and not fits and old and CONTAINERS[node.kind] then
+			fits = rect.x == old.x and rect.y == old.y and rect.w == old.w and rect.h > old.h and no_chrome(node)
+		end
+		if intact and fits then
 			node._keep = nil
 			node._prect = rect -- predecessor's paint of this box still stands
-			local rs = node.style_resolved
-			local bg = rs and rs.hl or (node.props or {}).hl
+			local bg = bg_of(node)
 			if bg then
 				bgs = vim.list_extend({ { rect = rect, hl = bg } }, bgs)
 			end
