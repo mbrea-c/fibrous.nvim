@@ -531,6 +531,23 @@ Incremental build plan (each step has a runnable smoke check under headless
   `handle.unmount()`, so mounts leak into later specs — the winid-pattern
   assertion in "WinScrolled resync is wired" fails for any red spec ABOVE it
   in the file; heals at green.
+- [x] WRAP teleport ("directly going `i` teleports a few lines", 2026-07-04):
+  the fourth member of the family, and the one the playground actually hits —
+  raw_buffer WRAPS by default (the playground editor passes no `wrap`), and
+  under wrap one buffer line occupies several box rows, so `enter()`'s
+  base-arithmetic row→line mapping is off by one line per wrapped row above
+  the cursor (any code line wider than the editor content — guaranteed on
+  narrow viewports where the editor squeezes below 80). Fix: `enter()` and
+  `exit_dir()` translate through `entry.mirror_map` — the per-box-row
+  {lnum, cell0} record mirror() already builds, i.e. literally "land where
+  the mirror says the user is looking" — with the base/leftcol arithmetic
+  kept as fallback for blank padding rows and never-mirrored widgets. 2 more
+  specs (wrapped entry, wrapped horizontal exit); suite 267/0. Known
+  remaining divergence (accepted, pre-existing): a top-clipped WRAPPED
+  widget's REVEAL composes `topline = base + clip` in buffer lines while the
+  clip is display rows — the revealed float can show a slightly different
+  slice than the mirror did; the cursor still lands on the mirror-correct
+  line (set_cursor re-scrolls the float to it).
   - **Momentum/fling scrolling**: in the DOM-free mouse adapter (TDD'd, 13/13
     node tests): touchmove samples a smoothed velocity; releasing above 0.25
     px/ms keeps scrolling with v(t) = v₀·e^(−t/325ms) integrated in closed

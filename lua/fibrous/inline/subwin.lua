@@ -553,14 +553,24 @@ function M.attach(host, root_winid)
 			return false
 		end
 		local c = entry.node.content
-		-- Translate through the widget's OWN scroll (base, leftcol): the
-		-- mirror shows the scrolled slice, so the buffer position under a root
-		-- cell is offset by it — mapping from line 1 instead lands the cursor
-		-- above/left of what the user activated.
-		local base = entry.base or 1
-		local lnum = math.min(math.max(base + (row - c.y), 1), vim.api.nvim_buf_line_count(entry.bufnr))
+		-- Land where the user is LOOKING: the mirror's row map records, per
+		-- box row, exactly which buffer line and starting cell it shows — the
+		-- one true translation once the widget has scroll state of its own
+		-- (base, leftcol) or wraps (one buffer line across several rows, where
+		-- base + row-offset arithmetic teleports by one line per wrapped row).
+		-- The arithmetic fallback covers blank padding rows and a widget that
+		-- has not mirrored yet.
+		local count = vim.api.nvim_buf_line_count(entry.bufnr)
+		local m = entry.mirror_map and entry.mirror_map[row - c.y + 1]
+		local lnum, cell
+		if m and m.lnum <= count then
+			lnum = m.lnum
+			cell = m.cell0 + math.max(x - c.x, 0)
+		else
+			lnum = math.min(math.max((entry.base or 1) + (row - c.y), 1), count)
+			cell = (entry.leftcol or 0) + math.max(x - c.x, 0)
+		end
 		local line = vim.api.nvim_buf_get_lines(entry.bufnr, lnum - 1, lnum, false)[1] or ""
-		local cell = (entry.leftcol or 0) + math.max(x - c.x, 0)
 		vim.api.nvim_set_current_win(entry.winid)
 		vim.api.nvim_win_set_cursor(entry.winid, { lnum, width.cell_to_byte(line, cell) })
 		if insert and click_insert(entry) then
@@ -601,11 +611,22 @@ function M.attach(host, root_winid)
 	local function exit_dir(entry, dir)
 		local pos, cell = float_cursor(entry)
 		local c = entry.node.content
-		-- Buffer position → screen position through the widget's own scroll
-		-- (base, leftcol), clamped into the box: the exit target sits beside
-		-- what is ON SCREEN, not beside the raw buffer coordinates.
-		local srow = math.min(math.max(c.y + (pos[1] - (entry.base or 1)), c.y), c.y + c.h - 1)
-		local scol = math.min(math.max(c.x + (cell - (entry.leftcol or 0)), c.x), c.x + c.w - 1)
+		-- Buffer position → the box row/cell that SHOWS it, via the mirror's
+		-- row map (enter()'s translation inverted — under wrap the mapping is
+		-- non-linear, and the widget's own scroll offsets it). Arithmetic
+		-- fallback for a widget that never mirrored; clamped into the box so
+		-- the exit target always sits beside the box.
+		local drow, dcell
+		for i, mm in ipairs(entry.mirror_map or {}) do
+			if mm.lnum == pos[1] and cell >= mm.cell0 and cell < mm.cell0 + c.w then
+				drow, dcell = i - 1, cell - mm.cell0
+				break
+			end
+		end
+		drow = drow or (pos[1] - (entry.base or 1))
+		dcell = dcell or math.max(cell - (entry.leftcol or 0), 0)
+		local srow = math.min(math.max(c.y + drow, c.y), c.y + c.h - 1)
+		local scol = math.min(math.max(c.x + dcell, c.x), c.x + c.w - 1)
 		if dir == "k" then
 			exit_to(c.y - 1, scol)
 		elseif dir == "j" then

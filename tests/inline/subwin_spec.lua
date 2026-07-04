@@ -276,6 +276,80 @@ describe("inline.subwin", function()
       vim.api.nvim_buf_delete(buf, { force = true })
     end)
 
+    it("entering through a WRAPPED widget lands on the line the row shows", function()
+      -- wrap is raw_buffer's default (and the playground's): one buffer line
+      -- can occupy several box rows, so row → line is the mirror's row map,
+      -- not base + offset — arithmetic teleports by one line per wrapped row
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+        "short-1",
+        "long-2-" .. ("x"):rep(30), -- 37 cells: three rows of a 16-wide box
+        "short-3",
+        "short-4",
+      })
+      local handle = mount.floating(function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = text, props = { text = "head" } },
+            { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 6 } },
+          },
+        }
+      end, {}, { width = 16, height = 10 })
+      local sub = subwin_of(handle)
+
+      -- root row 5 is long-2's third wrapped row (cells 32-36)
+      vim.api.nvim_set_current_win(handle.winid)
+      vim.api.nvim_win_set_cursor(handle.winid, { 5, 2 })
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "xt", false)
+      assert.equal(sub, vim.api.nvim_get_current_win())
+      assert.same({ 2, 34 }, vim.api.nvim_win_get_cursor(sub)) -- cell 32 + 2
+
+      -- and the row after the wrapped block is short-3 again
+      vim.api.nvim_set_current_win(handle.winid)
+      vim.api.nvim_win_set_cursor(handle.winid, { 6, 0 })
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "xt", false)
+      assert.same({ 3, 0 }, vim.api.nvim_win_get_cursor(sub))
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("a horizontal exit from a wrapped widget keeps the on-screen row", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+        "short-1",
+        "long-2-" .. ("x"):rep(30),
+        "short-3",
+        "short-4",
+      })
+      local handle = mount.floating(function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = text, props = { text = "head" } },
+            {
+              comp = { __host = "raw_buffer" },
+              props = { bufnr = buf, height = 6, style = { margin = { left = 2 } } },
+            },
+          },
+        }
+      end, {}, { width = 18, height = 10 })
+      local sub = subwin_of(handle)
+
+      -- buffer line 3 (short-3) is shown on box row 5 (after 3 wrapped rows)
+      vim.api.nvim_set_current_win(sub)
+      vim.api.nvim_win_set_cursor(sub, { 3, 0 })
+      vim.api.nvim_feedkeys("h", "xt", false)
+      assert.equal(handle.winid, vim.api.nvim_get_current_win())
+      assert.same({ 6, 1 }, vim.api.nvim_win_get_cursor(handle.winid))
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
     it("page-scrolling while focused does not corrupt the own-scroll bookkeeping", function()
       -- The resize that clipping applies makes nvim re-anchor the FOCUSED
       -- float's topline around its cursor; entry.clip must track that
