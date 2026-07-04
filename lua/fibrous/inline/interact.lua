@@ -23,7 +23,10 @@
 --              hover already follows clicks with no code here. On top of that
 --              (tracker task 10, `opts.mouse`):
 --                activate (default true)   <LeftRelease> fires the same
---                  activate path as <CR>. Release, not press: a drag lands in
+--                  activate path as <CR>, except text fields are entered in
+--                  INSERT mode (see subwin.lua's click_insert policy — a
+--                  pointer user may have no keyboard).
+--                  Release, not press: a drag lands in
 --                  visual mode where the normal-mode map doesn't apply, so
 --                  drag-selections never activate.
 --                follow (default false)    focus-follows-mouse: <MouseMove>
@@ -211,11 +214,13 @@ function M.attach(host, root_winid, mouse, subwins)
   end
 
   -- `enter_subwins`: <CR> and clicks focus a subwindow under the cursor;
-  -- <Space> passes false and only activates roles.
-  local function activate(enter_subwins)
+  -- <Space> passes false and only activates roles. `via_click`: clicks enter
+  -- text fields in INSERT mode (subwin.lua's click_insert policy) — a
+  -- pointer user may have no keyboard; <CR> users have `i` right there.
+  local function activate(enter_subwins, via_click)
     if enter_subwins and subwins then
       local row, x = cursor_cell()
-      if row and subwins.enter_at(row, x) then
+      if row and subwins.enter_at(row, x, via_click) then
         return
       end
     end
@@ -247,7 +252,7 @@ function M.attach(host, root_winid, mouse, subwins)
   if mouse.activate then
     maps[#maps + 1] = "<LeftRelease>"
     vim.keymap.set("n", "<LeftRelease>", function()
-      activate(true)
+      activate(true, true)
     end, { buffer = bufnr, nowait = true, desc = "fibrous: activate (mouse)" })
   end
 

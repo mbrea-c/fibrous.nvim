@@ -42,7 +42,7 @@ local M = {}
 
 ---@class SubwinManager
 ---@field sync fun(damage?: { top: integer, bot: integer }|false)  reconcile floats against host.subwins and reposition them; damage = the flush's spliced rows (false: none, nil: assume all)
----@field enter_at fun(row: integer, x: integer): boolean  focus the subwindow at root cell (row, x); false if none there
+---@field enter_at fun(row: integer, x: integer, insert?: boolean): boolean  focus the subwindow at root cell (row, x), in insert mode when `insert` and the policy allows; false if none there
 ---@field teardown fun()  destroy all floats/buffers and the autocmds
 
 ---@param bufnr integer
@@ -464,9 +464,9 @@ function M.attach(host, root_winid)
 		-- requires. NEVER while the float is focused: a resync in the middle of
 		-- typing (on_change → re-render → flush → here) would yank the cursor
 		-- between keystrokes.
+		local clipped = vis_top - y0
+		local lclip = vis_left - x0
 		if not focused then
-			local clipped = vis_top - y0
-			local lclip = vis_left - x0
 			local height = vis_bot - vis_top + 1
 			v.topline = base + clipped
 			v.lnum = math.min(math.max(v.lnum, v.topline), v.topline + height - 1)
@@ -489,9 +489,16 @@ function M.attach(host, root_winid)
 			vim.api.nvim_win_call(entry.winid, function()
 				vim.fn.winrestview(v)
 			end)
-			entry.clip = clipped
-			entry.lclip = lclip
 		end
+		-- Record the clip for the geometry just applied EVEN WHILE FOCUSED:
+		-- the view is deliberately left alone then, but the resize above makes
+		-- nvim re-anchor topline around the cursor — so the own-scroll
+		-- reconstruction at the next capture (base = topline - clip) must
+		-- subtract the clip this geometry has, not the last unfocused visit's.
+		-- A stale clip is a phantom scroll: the mirror renders the wrong slice
+		-- and the next entry teleports.
+		entry.clip = clipped
+		entry.lclip = lclip
 	end
 
 	-- Move the root cursor to buffer cell (row, x) [0-indexed] and focus the
@@ -513,11 +520,27 @@ function M.attach(host, root_winid)
 		vim.api.nvim_win_set_cursor(root_winid, { row + 1, width.cell_to_byte(line, x) })
 	end
 
+	-- Click-to-insert policy: clicking a text field means "edit it" — a
+	-- pointer user may have no keyboard at all (on mobile the OSK only
+	-- appears once the guest is in an insert-ish mode, so normal mode is a
+	-- trap you cannot type your way out of). text_input defaults on;
+	-- raw_buffer (arbitrary content, often read-only) defaults off;
+	-- props.insert_on_click overrides either way. Keyboard entry (<CR>, the
+	-- i/a/o replays) is never affected.
+	local function click_insert(entry)
+		local props = entry.node.props or {}
+		if props.insert_on_click ~= nil then
+			return props.insert_on_click
+		end
+		return entry.node.subwin == "text_input"
+	end
+
 	-- Focus `entry`'s float, placing its cursor at root-buffer cell (row, x)
-	-- translated into the float's content (clamped to its lines). A
+	-- translated into the float's content (clamped to its lines). `insert`
+	-- (the click path) also starts insert mode when the policy allows. A
 	-- render="focus" float is revealed first (it cannot be entered hidden);
 	-- false when there is nothing focusable (fully occluded).
-	local function enter(entry, row, x)
+	local function enter(entry, row, x, insert)
 		if not vim.api.nvim_win_is_valid(entry.winid) then
 			return false
 		end
@@ -530,10 +553,21 @@ function M.attach(host, root_winid)
 			return false
 		end
 		local c = entry.node.content
-		local lnum = math.min(math.max(row - c.y + 1, 1), vim.api.nvim_buf_line_count(entry.bufnr))
+		-- Translate through the widget's OWN scroll (base, leftcol): the
+		-- mirror shows the scrolled slice, so the buffer position under a root
+		-- cell is offset by it — mapping from line 1 instead lands the cursor
+		-- above/left of what the user activated.
+		local base = entry.base or 1
+		local lnum = math.min(math.max(base + (row - c.y), 1), vim.api.nvim_buf_line_count(entry.bufnr))
 		local line = vim.api.nvim_buf_get_lines(entry.bufnr, lnum - 1, lnum, false)[1] or ""
+		local cell = (entry.leftcol or 0) + math.max(x - c.x, 0)
 		vim.api.nvim_set_current_win(entry.winid)
-		vim.api.nvim_win_set_cursor(entry.winid, { lnum, width.cell_to_byte(line, math.max(x - c.x, 0)) })
+		vim.api.nvim_win_set_cursor(entry.winid, { lnum, width.cell_to_byte(line, cell) })
+		if insert and click_insert(entry) then
+			-- takes effect when the calling mapping ends; a click past the end
+			-- of the line appends (GUI caret lands after the text)
+			vim.cmd(cell >= width.str(line) and "startinsert!" or "startinsert")
+		end
 		return true
 	end
 
@@ -567,14 +601,19 @@ function M.attach(host, root_winid)
 	local function exit_dir(entry, dir)
 		local pos, cell = float_cursor(entry)
 		local c = entry.node.content
+		-- Buffer position → screen position through the widget's own scroll
+		-- (base, leftcol), clamped into the box: the exit target sits beside
+		-- what is ON SCREEN, not beside the raw buffer coordinates.
+		local srow = math.min(math.max(c.y + (pos[1] - (entry.base or 1)), c.y), c.y + c.h - 1)
+		local scol = math.min(math.max(c.x + (cell - (entry.leftcol or 0)), c.x), c.x + c.w - 1)
 		if dir == "k" then
-			exit_to(c.y - 1, c.x + cell)
+			exit_to(c.y - 1, scol)
 		elseif dir == "j" then
-			exit_to(c.y + c.h, c.x + cell)
+			exit_to(c.y + c.h, scol)
 		elseif dir == "h" then
-			exit_to(c.y + (pos[1] - 1), c.x - 1)
+			exit_to(srow, c.x - 1)
 		else
-			exit_to(c.y + (pos[1] - 1), c.x + c.w)
+			exit_to(srow, c.x + c.w)
 		end
 	end
 
@@ -781,6 +820,16 @@ function M.attach(host, root_winid)
 
 		local entry = { bufnr = bufnr, winid = winid, node = node, owned = owned, maps = {} }
 		map_motions(entry)
+		-- The native half of click-to-insert: a click on a VISIBLE float never
+		-- reaches the root's <LeftRelease> map — core focuses the float on the
+		-- press and delivers the release to its buffer. Normal-mode only, so a
+		-- drag-selection's release (visual mode by then) never fires it.
+		entry.map("n", "<LeftRelease>", function()
+			if vim.api.nvim_get_current_win() == entry.winid and click_insert(entry) then
+				-- coladd > 0 = the click landed past the end of the line: append
+				vim.cmd(vim.fn.getmousepos().coladd > 0 and "startinsert!" or "startinsert")
+			end
+		end)
 		wire_focus(entry)
 		wire_mirror(entry)
 		if node.subwin == "text_input" then
@@ -943,11 +992,11 @@ function M.attach(host, root_winid)
 	-- the focus. interact.lua drives this from <CR>, clicks, and insert keys;
 	-- keymaps fire autocmds normally, so WinEnter applies _focus with no
 	-- `nested` gymnastics.
-	local function enter_at(row, x)
+	local function enter_at(row, x, insert)
 		for _, entry in pairs(floats) do
 			local r = entry.node.rect or entry.node.content
 			if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
-				return enter(entry, row, x)
+				return enter(entry, row, x, insert)
 			end
 		end
 		return false

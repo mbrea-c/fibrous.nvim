@@ -489,6 +489,48 @@ Incremental build plan (each step has a runnable smoke check under headless
     keyboard through normal-mode navigation until tapped again; canvas taps
     re-summon when the guest is in an insert-ish mode (recovers from
     back-button dismissal). Still needs a real-device pass.
+- [x] Click-to-insert — DONE (2026-07-04), fibrous-side completion of the OSK
+  story: clicking a text field enters it in INSERT mode, GUI-style (a pointer
+  user may have no keyboard; on mobile insert mode is also what summons the
+  OSK via mode-following). `<CR>` deliberately keeps normal-mode entry —
+  whoever pressed it has a keyboard and `i` is right there. Two halves in
+  subwin.lua behind one `click_insert(entry)` policy (text_input default on,
+  raw_buffer default off, `insert_on_click` prop overrides): the root
+  `<LeftRelease>` → `activate(true, true)` → `enter_at(row, x, insert)` path
+  (the default render="focus" case — the click lands on the mirror), and a
+  normal-mode-only `<LeftRelease>` map on each float buffer (visible
+  render="always" floats take clicks natively; n-mode-only means a
+  drag-selection's release, visual mode by then, never fires it). Clicks past
+  EOL append (`startinsert!`; enter_at compares the cell to the line width,
+  the native map uses `getmousepos().coladd`). 7 specs in subwin_spec
+  ("click to insert"); the docs playground editor opts in with
+  `insert_on_click = true` on its raw_buffer.
+- [x] Mirror/entry desync on scrolled widgets — DONE (2026-07-04, reported
+  from the playground: focusing an editor "teleports" the cursor). Three bugs
+  of one family in subwin.lua, all "translated through buffer coordinates
+  where screen coordinates were meant":
+  - `enter()` mapped root cell → buffer line as `row - c.y + 1`, assuming the
+    widget shows its buffer from line 1 — wrong by `base - 1` once the widget
+    has scroll state of its own (which is exactly what the mirror renders
+    from); same for the column vs the widget's own `leftcol`. Now composes
+    `entry.base`/`entry.leftcol` (and the click-to-insert past-EOL check uses
+    the composed cell).
+  - `exit_dir()` had the mirror image: horizontal exits kept the BUFFER row
+    (`c.y + lnum - 1`), vertical exits the buffer column — now both translate
+    through base/leftcol and clamp into the box.
+  - `reposition()` only updated `entry.clip`/`entry.lclip` in the unfocused
+    branch, but a page scroll resizes a FOCUSED float too (set_config always
+    runs) and nvim re-anchors its topline around the cursor. The leave-time
+    reconstruction `base = topline - clip` then subtracted a stale clip — a
+    phantom scroll the mirror rendered (the next unfocused reposition
+    cancelled the error again, which is why it looked intermittent). Clip
+    bookkeeping now tracks the applied geometry unconditionally; the view
+    itself is still never touched while focused.
+  4 specs in subwin_spec ("entry/exit through a scrolled widget"). Spec
+  gotcha discovered on the way: a red spec aborts before its
+  `handle.unmount()`, so mounts leak into later specs — the winid-pattern
+  assertion in "WinScrolled resync is wired" fails for any red spec ABOVE it
+  in the file; heals at green.
   - **Momentum/fling scrolling**: in the DOM-free mouse adapter (TDD'd, 13/13
     node tests): touchmove samples a smoothed velocity; releasing above 0.25
     px/ms keeps scrolling with v(t) = v₀·e^(−t/325ms) integrated in closed

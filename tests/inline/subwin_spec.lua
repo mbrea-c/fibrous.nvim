@@ -175,6 +175,143 @@ describe("inline.subwin", function()
     vim.api.nvim_buf_delete(buf, { force = true })
   end)
 
+  -- Entry/exit translation must go through the widget's OWN scroll (base,
+  -- leftcol): the mirror shows the scrolled slice, so the buffer line under a
+  -- root cell is base + content-row, not content-row + 1. Getting this wrong
+  -- is a teleport: you activate the line you see, and land somewhere else.
+  describe("entry/exit through a scrolled widget", function()
+    -- "head", then an editor-style raw_buffer (12 lines through 3 rows,
+    -- nowrap, left margin 2 so horizontal exits have somewhere to land)
+    local function editor_app(buf)
+      return function()
+        local children = {
+          { comp = text, props = { text = "head" } },
+          {
+            comp = { __host = "raw_buffer" },
+            props = { bufnr = buf, height = 3, wrap = false, render = "always", style = { margin = { left = 2 } } },
+          },
+        }
+        for i = 1, 6 do
+          children[#children + 1] = { comp = text, props = { text = "f" .. i } }
+        end
+        return { comp = col, props = {}, children = children }
+      end
+    end
+
+    local function editor_buf()
+      local buf = vim.api.nvim_create_buf(false, true)
+      local buflines = {}
+      for i = 1, 12 do
+        buflines[i] = ("line-%02d"):format(i)
+      end
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, buflines)
+      return buf
+    end
+
+    it("entering lands on the line and column the mirror shows", function()
+      local buf = editor_buf()
+      local handle = mount.floating(editor_app(buf), {}, { width = 10, height = 12 })
+      local sub = subwin_of(handle)
+
+      -- the widget scrolled itself both ways: showing lines 4-6 from cell 2
+      vim.api.nvim_win_call(sub, function()
+        vim.fn.winrestview({ topline = 4, leftcol = 2 })
+      end)
+      handle.relayout()
+
+      -- root line 3 shows buffer line 5; its cell 3 shows the line's cell 3
+      vim.api.nvim_set_current_win(handle.winid)
+      vim.api.nvim_win_set_cursor(handle.winid, { 3, 3 })
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "xt", false)
+
+      assert.equal(sub, vim.api.nvim_get_current_win())
+      assert.same({ 5, 3 }, vim.api.nvim_win_get_cursor(sub))
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("a horizontal exit keeps the on-screen row, not the buffer row", function()
+      local buf = editor_buf()
+      local handle = mount.floating(editor_app(buf), {}, { width = 10, height = 12 })
+      local sub = subwin_of(handle)
+
+      vim.api.nvim_win_call(sub, function()
+        vim.fn.winrestview({ topline = 4 })
+      end)
+      handle.relayout()
+
+      -- cursor on buffer line 5 = the widget's second visible row
+      vim.api.nvim_set_current_win(sub)
+      vim.api.nvim_win_set_cursor(sub, { 5, 0 })
+      vim.api.nvim_feedkeys("h", "xt", false)
+
+      assert.equal(handle.winid, vim.api.nvim_get_current_win())
+      -- one cell left of the content box, on the SAME screen row
+      assert.same({ 3, 1 }, vim.api.nvim_win_get_cursor(handle.winid))
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("a vertical exit keeps the on-screen column, not the buffer column", function()
+      local buf = editor_buf()
+      local handle = mount.floating(editor_app(buf), {}, { width = 10, height = 12 })
+      local sub = subwin_of(handle)
+
+      vim.api.nvim_win_call(sub, function()
+        vim.fn.winrestview({ topline = 1, leftcol = 2 })
+      end)
+      handle.relayout()
+
+      -- cursor at cell 3 of line 1 = on-screen column 1 of the content box
+      vim.api.nvim_set_current_win(sub)
+      vim.api.nvim_win_set_cursor(sub, { 1, 3 })
+      vim.api.nvim_feedkeys("k", "xt", false)
+
+      assert.equal(handle.winid, vim.api.nvim_get_current_win())
+      assert.same({ 1, 3 }, vim.api.nvim_win_get_cursor(handle.winid)) -- "head" row, cell c.x + 1
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("page-scrolling while focused does not corrupt the own-scroll bookkeeping", function()
+      -- The resize that clipping applies makes nvim re-anchor the FOCUSED
+      -- float's topline around its cursor; entry.clip must track that
+      -- geometry even though the view is deliberately left alone, or the
+      -- own-scroll reconstruction on leave (base = topline - clip) is off by
+      -- the clip — a phantom scroll the mirror then renders.
+      local handle = mount.floating(ClippingApp, {}, { width = 6, height = 4, mode = "scroll" })
+      local sub = subwin_of(handle)
+
+      vim.api.nvim_set_current_win(sub)
+      vim.api.nvim_win_set_cursor(sub, { 3, 0 })
+      scroll_root(handle, 3) -- clips the two rows above the cursor
+      handle.relayout()
+      assert.equal(3, vim.fn.line("w0", sub)) -- nvim kept the cursor visible
+
+      vim.api.nvim_set_current_win(handle.winid) -- leave; reposition is deferred
+      vim.wait(80, function()
+        return false
+      end, 10)
+      -- the discriminating moment: the leave-time reposition reconstructs the
+      -- widget's own scroll and re-extracts the mirror — with a stale clip it
+      -- reads base 3 and renders the box from l3 (the NEXT reposition would
+      -- cancel the error out again, which is why this asserts here)
+      assert.truthy(lines_of(handle.bufnr)[1]:find("l1", 1, true))
+
+      scroll_root(handle, 1)
+      handle.relayout()
+      -- the widget never scrolled itself: unclipped, it shows from the top,
+      -- and the mirror agrees
+      assert.equal(1, vim.fn.line("w0", sub))
+      assert.truthy(lines_of(handle.bufnr)[1]:find("l1", 1, true))
+
+      handle.unmount()
+    end)
+  end)
+
   -- Horizontal root scroll (the root float is nowrap, so leftcol can move —
   -- e.g. a trackpad's ScrollWheelRight): floats must shift with leftcol,
   -- clip at the view's left edge — composing the clip into the widget's own
@@ -780,5 +917,144 @@ describe("inline.subwin", function()
 
     handle.unmount()
     assert.equal(before, #vim.api.nvim_list_wins())
+  end)
+
+  -- Click-to-insert: a pointer user may have no keyboard at all (on mobile
+  -- the OSK only appears in insert-ish modes), so clicking a text field means
+  -- "edit it" — the click path (<LeftRelease>) enters the widget IN INSERT
+  -- MODE, GUI-style. <CR> keeps today's normal-mode entry: whoever pressed it
+  -- has a keyboard and `i` is right there. text_input defaults on, raw_buffer
+  -- (arbitrary content, often read-only) defaults off; `insert_on_click`
+  -- overrides either way.
+  --
+  -- Real clicks can't be synthesized headless (no UI grid = mouse_find_win
+  -- can't resolve floats), so like interact_spec these park the cursor where
+  -- the click's press would and fire <LeftRelease>; keys batched behind it
+  -- type into whatever mode the click landed in — insert types text, normal
+  -- runs operators — which is the observable the specs pin. (feedkeys "x"
+  -- leaves insert mode when the batch drains, so live mode is never probed.)
+  describe("click to insert", function()
+    local function input_app(props)
+      return function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = text_input, props = props },
+          },
+        }
+      end
+    end
+
+    -- Park the root cursor at display cell `x` of row 1 and click+type.
+    local function click_then(handle, x, keys)
+      vim.api.nvim_set_current_win(handle.winid)
+      vim.api.nvim_win_set_cursor(handle.winid, { 1, x })
+      vim.api.nvim_feedkeys(
+        vim.api.nvim_replace_termcodes("<LeftRelease>" .. keys, true, false, true),
+        "xt",
+        false
+      )
+    end
+
+    local function sub_line(handle)
+      local sub = subwin_of(handle)
+      assert.is_not_nil(sub, "no subwindow float")
+      return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(sub), 0, 1, false)[1]
+    end
+
+    it("a click on a text_input enters it in insert mode at the clicked cell", function()
+      local handle = mount.floating(input_app({ value = "hi" }), {}, { width = 8, height = 3 })
+      click_then(handle, 0, "yo!")
+      assert.equal("yo!hi", sub_line(handle)) -- typed as text, before the clicked char
+      handle.unmount()
+    end)
+
+    it("<CR> still enters in normal mode (keyboard users have `i`)", function()
+      local handle = mount.floating(input_app({ value = "hi" }), {}, { width = 8, height = 3 })
+      vim.api.nvim_set_current_win(handle.winid)
+      vim.api.nvim_win_set_cursor(handle.winid, { 1, 0 })
+      vim.api.nvim_feedkeys(
+        vim.api.nvim_replace_termcodes("<CR>rY", true, false, true),
+        "xt",
+        false
+      )
+      assert.equal("Yi", sub_line(handle)) -- rY ran as a normal-mode operator
+      handle.unmount()
+    end)
+
+    it("a click past the end of the line appends, GUI-caret style", function()
+      local handle = mount.floating(input_app({ value = "hi" }), {}, { width = 8, height = 3 })
+      click_then(handle, 4, "!")
+      assert.equal("hi!", sub_line(handle))
+      handle.unmount()
+    end)
+
+    it("insert_on_click = false keeps the click in normal mode", function()
+      local handle =
+        mount.floating(input_app({ value = "hi", insert_on_click = false }), {}, { width = 8, height = 3 })
+      click_then(handle, 0, "rY")
+      assert.equal("Yi", sub_line(handle))
+      handle.unmount()
+    end)
+
+    it("raw_buffer clicks stay in normal mode unless opted in", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hi" })
+      local handle = mount.floating(function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            { comp = { __host = "raw_buffer" }, props = { bufnr = buf, height = 1, wrap = false } },
+          },
+        }
+      end, {}, { width = 8, height = 3 })
+      click_then(handle, 0, "rY")
+      assert.equal("Yi", vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1])
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("raw_buffer with insert_on_click = true inserts", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hi" })
+      local handle = mount.floating(function()
+        return {
+          comp = col,
+          props = {},
+          children = {
+            {
+              comp = { __host = "raw_buffer" },
+              props = { bufnr = buf, height = 1, wrap = false, insert_on_click = true },
+            },
+          },
+        }
+      end, {}, { width = 8, height = 3 })
+      click_then(handle, 0, "rY")
+      assert.equal("rYhi", vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1]) -- typed, not operated
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    it("a click on an already-visible, focused float also enters insert", function()
+      -- render="always" floats take real clicks natively (core focuses the
+      -- float); the float-buffer <LeftRelease> map is that path's half
+      local handle =
+        mount.floating(input_app({ value = "hi", render = "always" }), {}, { width = 8, height = 3 })
+      -- get into the float in normal mode first, the keyboard way
+      vim.api.nvim_set_current_win(handle.winid)
+      vim.api.nvim_win_set_cursor(handle.winid, { 1, 0 })
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "xt", false)
+      local sub = subwin_of(handle)
+      assert.equal(sub, vim.api.nvim_get_current_win())
+      vim.api.nvim_feedkeys(
+        vim.api.nvim_replace_termcodes("<LeftRelease>x", true, false, true),
+        "xt",
+        false
+      )
+      assert.equal("xhi", sub_line(handle))
+      handle.unmount()
+    end)
   end)
 end)
