@@ -1672,6 +1672,20 @@ same-size mid-replace over memo'd entry components.
     WinScrolled never fires in headless -l, the spec delivers it via
     nvim_exec_autocmds), container_spec +1. Suite 301/0.
 
+- [x] **Layout: an explicit `width` pins the measuring constraint (2026-07-04,
+  found reworking clanker's sidebar).** measure() only let `max_width` tighten
+  the constraint — a fixed-width col late in a ROW measured its subtree at the
+  row's remaining space, and since the position pass only re-wraps
+  col-STRETCHED text, a wrapping paragraph inside a nested row kept its
+  over-wide measure and painted clipped at the canvas edge (sidebar task rows:
+  icon + paragraph). Now `props.width` REPLACES the incoming constraint
+  (border-box, margins added back), so the subtree measures and wraps at the
+  width the node actually gets — this also makes the wrap memo stable inside
+  rows and makes the documented "explicit width" workaround for the
+  AUTO-container-in-row caveat actually work. Spec: "an explicit width pins
+  the measuring constraint" (the nested-row shape; the col-stretch shape was
+  already green). Suite 302/0.
+
 ### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
 
 - Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not

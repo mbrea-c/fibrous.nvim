@@ -186,8 +186,16 @@ function measure(node, avail_w)
 	local r = node.box
 	-- min/max_width/height are border-box bounds, like width/height. max_width
 	-- also tightens the measuring constraint, so wrapping text reflows under it.
+	-- An explicit width REPLACES the constraint outright: the subtree measures
+	-- (and text wraps) at the width the node will actually get, whatever the
+	-- parent had left — the position pass only re-wraps col-stretched text, so
+	-- a nested row measured over-wide would keep its size and paint clipped.
+	-- (It also makes the wrap memo stable inside rows, where the remaining-
+	-- width constraint shifts with siblings.)
 	local eff_avail = avail_w
-	if props.max_width then
+	if props.width then
+		eff_avail = props.width + r.margin.left + r.margin.right
+	elseif props.max_width then
 		eff_avail = math.min(eff_avail, props.max_width + r.margin.left + r.margin.right)
 	end
 	local content_avail = math.max(eff_avail - box.h_outer(r), 1)

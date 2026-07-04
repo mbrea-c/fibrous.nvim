@@ -354,6 +354,37 @@ describe("inline.layout containers", function()
     assert.same({ x = 0, y = 3, w = 5, h = 7 }, tree.children[2].rect)
   end)
 
+  it("an explicit width pins the measuring constraint: children wrap at it", function()
+    -- A fixed-width col late in a row must MEASURE its subtree at its own
+    -- width, not at the row's remaining space (the sidebar-in-a-panel shape).
+    -- The position pass only re-wraps col-STRETCHED text; inside a nested row
+    -- children keep their measured size, so an over-wide measure is never
+    -- corrected and paints clipped at the canvas edge.
+    local text = { kind = "text", props = { wrap = true }, text = "aa bb cc dd" }
+    local fixed = {
+      kind = "col",
+      props = { width = 8 },
+      children = {
+        {
+          kind = "row",
+          props = { gap = 1 },
+          children = { { kind = "text", text = "*" }, text },
+        },
+      },
+    }
+    local tree = {
+      kind = "row",
+      children = {
+        { kind = "col", props = { grow = 1 } },
+        fixed,
+      },
+    }
+    layout.compute(tree, { width = 30 })
+    assert.same({ "aa bb", "cc dd" }, text.lines) -- wrapped at 8 - icon - gap = 6
+    assert.equal(8, fixed.rect.w)
+    assert.is_true(text.rect.x + text.rect.w <= 30)
+  end)
+
   it("max_width caps cross-axis stretch and constrains the wrap width", function()
     local text = { kind = "text", props = { wrap = true, max_width = 5 }, text = "aa bb cc" }
     local tree = { kind = "col", children = { text } } -- default align = stretch
