@@ -1,10 +1,13 @@
 -- The subwindow manager (tracker "NEW UI HOST" tasks 4 + 7). Subwindow leaves
--- (text_input, raw_buffer) are laid out inline like everything else — their
--- border/background even paint in the root buffer — but their CONTENT box is
--- covered by a real float anchored to the root float, so the user gets a
--- native buffer to type into (text_input: an owned scratch buffer seeded from
--- props.value; raw_buffer: a caller-provided, UNOWNED props.bufnr, or an owned
--- scratch one without it).
+-- (text_input, raw_buffer, container) are laid out inline like everything
+-- else — their border/background even paint in the root buffer — but their
+-- CONTENT box is covered by a real float anchored to the root float, so the
+-- user gets a native buffer to type into (text_input: an owned scratch buffer
+-- seeded from props.value; raw_buffer: a caller-provided, UNOWNED props.bufnr,
+-- or an owned scratch one without it; container: the host's own flush target
+-- for the leaf's children — a container entry recursively attaches a nested
+-- manager + interaction layer to ITS float, so inputs and deeper containers
+-- inside compose with no extra wiring).
 --
 -- Because relative="win" floats anchor to the window grid, not its scrolled
 -- content, the manager subtracts the root's scroll offsets itself — topline
@@ -25,9 +28,13 @@
 --   out  h/j/k/l at the float buffer's edge step into the root buffer adjacent
 --        to the widget (keeping the cursor's row/col alignment); <C-w>-h/j/k/l
 --        exit unconditionally; <C-d>/<C-u> always hand focus AND the motion to
---        the root — page motions are never trapped. Exits whose target falls
---        outside the root buffer are no-ops (staying put beats the root
---        clamping the cursor straight back into the widget).
+--        the root — page motions are never trapped — EXCEPT inside a
+--        container, a scrolling region in its own right, where they stay
+--        native. Exits whose target falls outside the root buffer are no-ops
+--        (staying put beats the root clamping the cursor straight back into
+--        the widget). Across nesting levels the same rules apply one hop at a
+--        time: entering a container's input is two <CR>s, leaving it is two
+--        edge exits.
 --
 -- text_input wiring: buffer edits report through props.on_change(value)
 -- (TextChanged/TextChangedI); <CR> — normal or insert mode — calls
@@ -37,6 +44,7 @@
 
 local width = require("fibrous.inline.width")
 local cursorshim = require("fibrous.inline.cursorshim")
+local interact = require("fibrous.inline.interact")
 
 local M = {}
 
@@ -93,13 +101,24 @@ local function chop(line, w, ts, wrap)
 	return rows
 end
 
--- Attach a manager to `host` (an InlineHost) whose buffer is shown in the
--- root float `root_winid`. The mount target calls this once, wires
--- `host.on_flush` to `sync`, and calls `teardown` on unmount.
+---@class SubwinAttachOpts
+---@field target? FlushTarget  the flush target this manager serves; default the host's root. A container entry spawns a nested manager over ITS target, anchored to the container's float — the same wiring, one level down.
+---@field mouse? InlineMouseOpts|false  threaded into nested containers' interaction layers
+---@field zindex? integer  this level's float zindex (default 60); each nesting level stacks +10 so children always cover their container
+
+-- Attach a manager to one of `host`'s flush targets, whose buffer is shown in
+-- `root_winid` (the mount's root float, or — one level down — a container's
+-- float). The mount target calls this once for the root, wires
+-- `host.on_flush` to `sync`, and calls `teardown` on unmount; container
+-- entries recurse from create().
 ---@param host InlineHost
 ---@param root_winid integer
+---@param opts? SubwinAttachOpts
 ---@return SubwinManager
-function M.attach(host, root_winid)
+function M.attach(host, root_winid, opts)
+	opts = opts or {}
+	local target = opts.target or host.root_target
+	local zindex = opts.zindex or 60
 	local group = vim.api.nvim_create_augroup("FibrousInlineSubwin_" .. root_winid, { clear = true })
 
 	-- One float per live subwindow leaf, keyed by the fiber's host instance
@@ -116,6 +135,11 @@ function M.attach(host, root_winid)
 	--                      fidelity); the mirror underneath is never seen and
 	--                      needs no highlight work.
 	local function policy(entry)
+		if entry.node.subwin == "container" then
+			-- the float IS the content — a mirror can't stand in for it (it
+			-- couldn't carry the container's own nested floats)
+			return "always"
+		end
 		local r = (entry.node.props or {}).render
 		if r == "always" then
 			return "always"
@@ -135,7 +159,7 @@ function M.attach(host, root_winid)
 	-- damage reaches it (host splices, it no longer repaints wholesale);
 	-- sync() re-mirrors exactly then.
 	local function mirror(entry)
-		if not vim.api.nvim_buf_is_valid(host.bufnr) or not vim.api.nvim_buf_is_valid(entry.bufnr) then
+		if not vim.api.nvim_buf_is_valid(target.bufnr) or not vim.api.nvim_buf_is_valid(entry.bufnr) then
 			return
 		end
 		local c = entry.node.content
@@ -184,20 +208,20 @@ function M.attach(host, root_winid)
 		end
 		entry.mirror_map = map
 
-		local last = vim.api.nvim_buf_line_count(host.bufnr) - 1
-		vim.bo[host.bufnr].modifiable = true
+		local last = vim.api.nvim_buf_line_count(target.bufnr) - 1
+		vim.bo[target.bufnr].modifiable = true
 		for i = 0, c.h - 1 do
 			local y = c.y + i
 			if y >= 0 and y <= last then
-				local root_line = vim.api.nvim_buf_get_lines(host.bufnr, y, y + 1, false)[1] or ""
+				local root_line = vim.api.nvim_buf_get_lines(target.bufnr, y, y + 1, false)[1] or ""
 				local b0 = width.cell_to_byte(root_line, c.x)
 				local b1 = width.cell_to_byte(root_line, c.x + c.w)
 				if b1 <= #root_line then
-					vim.api.nvim_buf_set_text(host.bufnr, y, b0, y, b1, { rows[i + 1] })
+					vim.api.nvim_buf_set_text(target.bufnr, y, b0, y, b1, { rows[i + 1] })
 				end
 			end
 		end
-		vim.bo[host.bufnr].modifiable = false
+		vim.bo[target.bufnr].modifiable = false
 		-- what we painted over, so the box can be restored when it moves or dies
 		entry.mirrored = { x = c.x, y = c.y, w = c.w, h = c.h }
 	end
@@ -207,26 +231,26 @@ function M.attach(host, root_winid)
 	-- alone, so a mirror outlives its widget unless somebody cleans it up —
 	-- this runs when a widget is destroyed or its box changes.
 	local function restore_box(b)
-		local canvas = host.canvas_lines
-		if not canvas or not vim.api.nvim_buf_is_valid(host.bufnr) or b.w <= 0 then
+		local canvas = target.canvas_lines
+		if not canvas or not vim.api.nvim_buf_is_valid(target.bufnr) or b.w <= 0 then
 			return
 		end
-		local last = vim.api.nvim_buf_line_count(host.bufnr) - 1
-		vim.bo[host.bufnr].modifiable = true
+		local last = vim.api.nvim_buf_line_count(target.bufnr) - 1
+		vim.bo[target.bufnr].modifiable = true
 		for y = math.max(b.y, 0), math.min(b.y + b.h - 1, last) do
 			local cline = canvas[y + 1]
 			if cline then
-				local root_line = vim.api.nvim_buf_get_lines(host.bufnr, y, y + 1, false)[1] or ""
+				local root_line = vim.api.nvim_buf_get_lines(target.bufnr, y, y + 1, false)[1] or ""
 				local b0 = width.cell_to_byte(root_line, b.x)
 				local b1 = width.cell_to_byte(root_line, b.x + b.w)
 				if b1 <= #root_line then
 					local s0 = width.cell_to_byte(cline, b.x)
 					local s1 = width.cell_to_byte(cline, b.x + b.w)
-					vim.api.nvim_buf_set_text(host.bufnr, y, b0, y, b1, { cline:sub(s0 + 1, s1) })
+					vim.api.nvim_buf_set_text(target.bufnr, y, b0, y, b1, { cline:sub(s0 + 1, s1) })
 				end
 			end
 		end
-		vim.bo[host.bufnr].modifiable = false
+		vim.bo[target.bufnr].modifiable = false
 	end
 
 	-- Copy the sub buffer's queryable highlights onto the mirror region (only
@@ -244,12 +268,12 @@ function M.attach(host, root_winid)
 	local function transcribe(entry)
 		local c = entry.node.content
 		entry.ns = entry.ns or vim.api.nvim_create_namespace("fibrous_inline_mirror_" .. entry.winid)
-		local last = vim.api.nvim_buf_line_count(host.bufnr) - 1
+		local last = vim.api.nvim_buf_line_count(target.bufnr) - 1
 		-- Clear the WHOLE namespace, not just the box rows: every canvas flush
 		-- is a full set_lines that RELOCATES existing marks out of the box,
 		-- where a ranged clear would miss them forever — they accumulate by the
 		-- hundreds per flush and frame times grow linearly.
-		vim.api.nvim_buf_clear_namespace(host.bufnr, entry.ns, 0, -1)
+		vim.api.nvim_buf_clear_namespace(target.bufnr, entry.ns, 0, -1)
 		local map = entry.mirror_map or {}
 		local ts = vim.bo[entry.bufnr].tabstop
 		local syn = vim.b[entry.bufnr].current_syntax
@@ -304,8 +328,8 @@ function M.attach(host, root_winid)
 			if y < 0 or y > last or s >= e then
 				return
 			end
-			local root_line = vim.api.nvim_buf_get_lines(host.bufnr, y, y + 1, false)[1] or ""
-			vim.api.nvim_buf_set_extmark(host.bufnr, entry.ns, y, width.cell_to_byte(root_line, c.x + s), {
+			local root_line = vim.api.nvim_buf_get_lines(target.bufnr, y, y + 1, false)[1] or ""
+			vim.api.nvim_buf_set_extmark(target.bufnr, entry.ns, y, width.cell_to_byte(root_line, c.x + s), {
 				end_col = width.cell_to_byte(root_line, c.x + e),
 				hl_group = hl,
 				priority = prio,
@@ -360,6 +384,12 @@ function M.attach(host, root_winid)
 	-- must be re-extracted no matter what the memo says.
 	local function reposition(entry, forced)
 		if not (vim.api.nvim_win_is_valid(root_winid) and vim.api.nvim_win_is_valid(entry.winid)) then
+			return
+		end
+		-- A nested manager's "root" is a container float, which can itself be
+		-- hidden (fully occluded in ITS parent): everything under it hides too.
+		if vim.api.nvim_win_get_config(root_winid).hide then
+			vim.api.nvim_win_set_config(entry.winid, { hide = true })
 			return
 		end
 		local c = entry.node.content
@@ -509,10 +539,10 @@ function M.attach(host, root_winid)
 		if not vim.api.nvim_win_is_valid(root_winid) then
 			return
 		end
-		if row < 0 or x < 0 or row >= vim.api.nvim_buf_line_count(host.bufnr) then
+		if row < 0 or x < 0 or row >= vim.api.nvim_buf_line_count(target.bufnr) then
 			return
 		end
-		local line = vim.api.nvim_buf_get_lines(host.bufnr, row, row + 1, false)[1] or ""
+		local line = vim.api.nvim_buf_get_lines(target.bufnr, row, row + 1, false)[1] or ""
 		if x >= width.str(line) then
 			return
 		end
@@ -666,13 +696,18 @@ function M.attach(host, root_winid)
 				end
 			end)
 		end
-		for _, key in ipairs({ "<C-d>", "<C-u>" }) do
-			map("n", key, function()
-				if vim.api.nvim_get_current_win() == entry.winid and vim.api.nvim_win_is_valid(root_winid) then
-					vim.api.nvim_set_current_win(root_winid)
-				end
-				vim.cmd("normal! " .. vim.api.nvim_replace_termcodes(key, true, false, true))
-			end)
+		-- Page motions hand off to the root so they are never trapped in a
+		-- one-line input — EXCEPT in a container, which is a scrolling region
+		-- in its own right: there they stay native (the float scrolls).
+		if entry.node.subwin ~= "container" then
+			for _, key in ipairs({ "<C-d>", "<C-u>" }) do
+				map("n", key, function()
+					if vim.api.nvim_get_current_win() == entry.winid and vim.api.nvim_win_is_valid(root_winid) then
+						vim.api.nvim_set_current_win(root_winid)
+					end
+					vim.cmd("normal! " .. vim.api.nvim_replace_termcodes(key, true, false, true))
+				end)
+			end
 		end
 	end
 
@@ -758,6 +793,12 @@ function M.attach(host, root_winid)
 			local props = entry.node.props or {}
 			if props.on_submit then
 				props.on_submit(buf_value(entry.bufnr))
+				-- clear_on_submit: the buffer is the source of truth after the seed,
+				-- so a chat-style "submit empties the input" must be done HERE — the
+				-- app has no handle on the buffer to clear it from on_submit.
+				if props.clear_on_submit and vim.api.nvim_buf_is_valid(entry.bufnr) then
+					vim.api.nvim_buf_set_lines(entry.bufnr, 0, -1, false, { "" })
+				end
 			elseif vim.api.nvim_get_mode().mode:find("i") then
 				-- No submit handler: a plain newline. "i" puts it BEFORE whatever is
 				-- still in the typeahead, "n" (noremap) keeps it from recursing here.
@@ -815,7 +856,11 @@ function M.attach(host, root_winid)
 	local function create(node)
 		local props = node.props or {}
 		local bufnr, owned
-		if node.subwin == "raw_buffer" and props.bufnr then
+		if node.subwin == "container" then
+			-- the container's buffer is the host's (a flush target, already
+			-- painted by the time sync runs); destroy retires it via drop_target
+			bufnr, owned = host.targets[node.fiber].bufnr, false
+		elseif node.subwin == "raw_buffer" and props.bufnr then
 			bufnr, owned = props.bufnr, false
 		else
 			bufnr, owned = vim.api.nvim_create_buf(false, true), true
@@ -832,7 +877,7 @@ function M.attach(host, root_winid)
 			width = math.max(node.content.w, 1),
 			height = math.max(node.content.h, 1),
 			style = "minimal",
-			zindex = 60, -- above the root float's 50
+			zindex = zindex, -- above this level's root (50 for the mount's float)
 			hide = true, -- reposition below decides visibility
 		})
 		-- text_input never wraps (rect math); raw_buffer is the native-wrapping
@@ -855,12 +900,44 @@ function M.attach(host, root_winid)
 		wire_mirror(entry)
 		if node.subwin == "text_input" then
 			wire_input(entry)
+			-- Creation-time escape hatch: hand the app the input's buffer so it
+			-- can wire buffer-local options/maps (completefunc, steer keymaps…).
+			-- Once — the buffer persists across re-renders; only a remount refires.
+			if props.on_create then
+				props.on_create(bufnr)
+			end
+		elseif node.subwin == "container" then
+			-- The container's own subwindows (inputs, deeper containers) get a
+			-- manager + interaction layer of their own, anchored to THIS float —
+			-- exactly the wiring the mount does for the root, one level down.
+			-- sync() descends into them with the child target's damage.
+			entry.child_target = host.targets[node.fiber]
+			entry.child_manager = M.attach(host, winid, {
+				target = entry.child_target,
+				mouse = opts.mouse,
+				zindex = zindex + 10,
+			})
+			entry.child_interact = interact.attach(host, winid, opts.mouse, entry.child_manager, entry.child_target)
+			-- Creation-time escape hatch, like text_input's — the container also
+			-- hands over its float, the app's handle for window work
+			-- (buffer-local keymaps, follow-scroll, focusing).
+			if props.on_create then
+				props.on_create(bufnr, winid)
+			end
 		end
 		return entry
 	end
 
 	local function destroy(entry)
 		entry.dead = true -- detaches the on_lines watcher on its next callback
+		-- Innermost first: a container's own widgets die before it does. Their
+		-- destroys run their own focus-strand exits, which land in THIS entry's
+		-- window — so the strand guard below still sees the focus and walks it
+		-- the rest of the way out.
+		if entry.child_manager then
+			entry.child_interact.teardown()
+			entry.child_manager.teardown()
+		end
 		-- Never strand the user's focus: a widget can be unmounted out from under
 		-- its own cursor (the TODO pattern — a submit handler inserts a sibling
 		-- before the input and the positional reconciler recreates it). Closing
@@ -883,11 +960,16 @@ function M.attach(host, root_winid)
 		if entry.mirrored then
 			restore_box(entry.mirrored)
 		end
-		if entry.ns and vim.api.nvim_buf_is_valid(host.bufnr) then
-			pcall(vim.api.nvim_buf_clear_namespace, host.bufnr, entry.ns, 0, -1)
+		if entry.ns and vim.api.nvim_buf_is_valid(target.bufnr) then
+			pcall(vim.api.nvim_buf_clear_namespace, target.bufnr, entry.ns, 0, -1)
 		end
 		if vim.api.nvim_win_is_valid(entry.winid) then
 			pcall(vim.api.nvim_win_close, entry.winid, true)
+		end
+		if entry.node.subwin == "container" then
+			-- the buffer is the host's flush target: retire both together
+			host.drop_target(entry.node.fiber)
+			return
 		end
 		if not vim.api.nvim_buf_is_valid(entry.bufnr) then
 			return
@@ -948,7 +1030,7 @@ function M.attach(host, root_winid)
 	-- mirror. `damage` is the flush's spliced row range (see `hit`).
 	local function sync(damage)
 		local seen = {}
-		for _, node in ipairs(host.subwins or {}) do
+		for _, node in ipairs(target.subwins or {}) do
 			local inst = node.fiber and node.fiber.instance
 			if inst then
 				seen[inst] = true
@@ -960,7 +1042,7 @@ function M.attach(host, root_winid)
 				floats[inst] = nil
 			end
 		end
-		for _, node in ipairs(host.subwins or {}) do
+		for _, node in ipairs(target.subwins or {}) do
 			local inst = node.fiber and node.fiber.instance
 			if inst then
 				local entry = floats[inst]
@@ -970,6 +1052,14 @@ function M.attach(host, root_winid)
 				end
 				entry.node = node
 				reposition(entry, hit(damage, node))
+				if entry.child_manager then
+					-- descend with the child target's OWN damage (accumulated on
+					-- the host — this level's splice says nothing about it); a
+					-- pure scroll here still repositions the child floats, whose
+					-- visible slices moved with the container's
+					entry.child_manager.sync(host.take_damage(node.fiber))
+					entry.child_interact.update()
+				end
 			end
 		end
 		update_shim()

@@ -24,6 +24,14 @@ M.row = { __host = "row" }
 M.text = { __host = "text" }
 M.text_input = { __host = "text_input" }
 M.raw_buffer = { __host = "raw_buffer" }
+-- A container boundary: a subwindow leaf whose CHILDREN render into the
+-- container's own buffer (a host flush target), shown in an always-on float
+-- over the boundary box — one fiber tree, N buffers. Children lay out as a
+-- col (gap/align/justify apply); `height`/`grow` make it a viewport over the
+-- content (props.mode = "scroll" (default) lets the buffer grow and the float
+-- scroll natively; "fixed" lays the content out at exactly the viewport
+-- height); without either it auto-sizes to its content.
+M.container = { __host = "container" }
 
 -- Copy `props` and overlay the node-level keys (text, role, theme, …).
 -- Styling passes through untouched as props.style.

@@ -207,6 +207,20 @@ function measure(node, avail_w)
 			node.lines, node.line_runs = split_text(text, ranges)
 		end
 		node.content_size = { w = max_line_width(node.lines), h = #node.lines }
+		-- An AUTO-sized container boundary sizes itself to its INNER tree,
+		-- measured here under the same constraint (the host lays the inner
+		-- tree out for real once this leaf's content box is final). A VIEWPORT
+		-- container (explicit height, or grow) never measures its content:
+		-- its size doesn't depend on it, and the measure would run at this
+		-- pass's available width — inside a row that differs from the final
+		-- laid-out width, so every flush would re-measure (re-WRAP) the whole
+		-- inner tree twice with flip-flopping widths, defeating the subtree
+		-- memo. (Viewport containers take their width from stretch/an explicit
+		-- width prop.)
+		if node.subwin == "container" and node.inner and not props.height and not props.grow then
+			measure(node.inner, content_avail)
+			node.content_size = { w = node.inner.size.w, h = node.inner.size.h }
+		end
 	elseif CONTAINERS[node.kind] then
 		local children = node.children or {}
 		local gap = props.gap or 0

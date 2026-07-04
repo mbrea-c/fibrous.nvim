@@ -176,7 +176,7 @@ function M.floating(component, props, opts)
 		width = g.width,
 		height = g.height,
 	})
-	manager = subwin.attach(host, winid)
+	manager = subwin.attach(host, winid, { mouse = opts.mouse })
 	interaction = interact.attach(host, winid, opts.mouse, manager)
 	local group = vim.api.nvim_create_augroup("FibrousInlineFloat_" .. winid, { clear = true })
 
@@ -303,7 +303,7 @@ function M.window(component, props, opts)
 		width = g.width,
 		height = g.height,
 	})
-	manager = subwin.attach(host, winid)
+	manager = subwin.attach(host, winid, { mouse = opts.mouse })
 	interaction = interact.attach(host, winid, opts.mouse, manager)
 	local group = vim.api.nvim_create_augroup("FibrousInlineSplit_" .. host_winid, { clear = true })
 

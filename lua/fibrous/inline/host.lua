@@ -6,6 +6,16 @@
 -- spans. A mount target (inline/mount.lua) shows that buffer in the root float
 -- and owns all window concerns; this module never touches windows.
 --
+-- Multi-container ("subwindow" rework): `container` boundaries split that
+-- one buffer into a TREE of flush targets while the fiber tree stays single.
+-- A container is a subwindow leaf in its parent's layout tree (border/
+-- background inline, a float covers the content box), and its children build
+-- into a separate layout tree flushed — with the identical incremental
+-- pipeline, all per-target state below — into the container's own buffer.
+-- Targets flush parent-first, so a child's constraint comes from its freshly
+-- laid-out boundary rect; subwin.lua shows each target in a float anchored to
+-- its parent's window, recursively.
+--
 -- Sizing is injected via `opts.get_size`, read at every flush so the mount
 -- target's window is the single source of truth. height = nil is scroll mode
 -- (canvas height = content height; the window is a viewport over the buffer),
@@ -45,7 +55,9 @@ local CONTAINERS = { col = true, row = true }
 -- text_input is a subwindow leaf: laid out (and its border/background painted)
 -- inline like any node, but its content box is covered by a real float that
 -- subwin.lua manages — the node carries `subwin` so the manager can find it.
-local LEAVES = { text = true, text_input = true, raw_buffer = true }
+-- container is the multi-buffer boundary: a subwindow leaf here, whose
+-- CHILDREN build into a separate tree flushed to the container's own buffer.
+local LEAVES = { text = true, text_input = true, raw_buffer = true, container = true }
 
 -- One namespace for all inline hosts; each host only ever clears its own buffer.
 local ns = vim.api.nvim_create_namespace("fibrous_inline")
@@ -140,6 +152,11 @@ local function build_node(fiber, ctx)
 		and not (prev.subwin == "raw_buffer" and not props.height and rb_count(props) ~= prev._rb_count)
 	then
 		prev._memo = true
+		if prev.inner then
+			-- honest: the memo hit means nothing under this fiber changed, so
+			-- the inner tree's layout/paint can skip wholesale too
+			prev.inner._memo = true
+		end
 		return prev
 	end
 
@@ -153,6 +170,28 @@ local function build_node(fiber, ctx)
 			end
 		end
 		node.children = children
+	elseif tag == "container" then
+		-- The boundary is a subwindow leaf in THIS tree (border/background
+		-- paint inline, a float covers the content box — like text_input), but
+		-- its children build into a SEPARATE tree, hung off the node: the host
+		-- lays it out and flushes it into the container's own buffer (a flush
+		-- target) once the boundary's content box is known. One fiber tree
+		-- throughout — dirtiness ticks, memoization and set_state cross the
+		-- boundary like any other edge.
+		node.kind = "text"
+		node.subwin = "container"
+		node.text = ""
+		local children = {}
+		for _, cf in ipairs(fiber.child_fibers or {}) do
+			local child = build_node(cf, ctx)
+			if child then
+				children[#children + 1] = child
+			end
+		end
+		local inner = new_node("col", { gap = props.gap, align = props.align, justify = props.justify }, fiber)
+		inner.children = children
+		attach_style(inner, ctx.states)
+		node.inner = inner
 	elseif tag == "text_input" or tag == "raw_buffer" then
 		-- Subwindow leaves measure as text (one content row unless props size
 		-- them); the float shows the real content, so nothing is painted in the
@@ -194,6 +233,16 @@ local function build_node(fiber, ctx)
 		if CONTAINERS[tag] then
 			node._prev = prev
 		end
+		if node.inner and prev.inner then
+			-- the inner root gets the same incremental-paint bookkeeping, so a
+			-- rebuilt boundary (one changed entry in a long list) descends in
+			-- the container's canvas instead of repainting it wholesale
+			if (fiber.self_tick or 0) <= ctx.last_tick then
+				node.inner._keep = true
+			end
+			node.inner._old_rect = prev.inner.rect
+			node.inner._prev = prev.inner
+		end
 	end
 	fiber._node = node
 	return node
@@ -218,9 +267,13 @@ end
 ---@class InlineHost : HostConfig
 ---@field bufnr integer   the host-owned scratch buffer mount targets display
 ---@field ns integer      extmark namespace of the highlight spans
----@field tree table|nil  the last laid-out tree (rects are buffer coordinates)
----@field subwins table[] laid-out subwindow nodes of the last flush (document order)
----@field canvas_lines string[]  the last painted canvas — the pre-mirror ground truth a subwin restores from
+---@field tree table|nil  the last laid-out ROOT tree (rects are buffer coordinates)
+---@field subwins table[] laid-out subwindow nodes of the root's last flush (document order)
+---@field canvas_lines string[]  the root's last painted canvas — the pre-mirror ground truth a subwin restores from
+---@field targets table<any, FlushTarget>  all flush targets: the root (keyed by the host) plus one per live container boundary (keyed by its fiber)
+---@field root_target FlushTarget  the root's target record (tree/subwins/canvas_lines above alias its fields)
+---@field take_damage fun(fiber: Fiber): { top: integer, bot: integer }|nil|false  consume a container target's accumulated damage
+---@field drop_target fun(fiber: Fiber)  retire a container target's buffer (its boundary is gone)
 ---@field set_state fun(fiber: Fiber, name: "hover"|"focus", on: boolean?)  record an interaction state (structural style overrides only)
 
 -- Construct a fresh inline HostConfig around its own scratch buffer.
@@ -244,20 +297,34 @@ function M.new(opts)
 	---@type InlineHost
 	local host
 
-	-- The previous frame's canvas: lines plus hl spans grouped per row. The
-	-- damage diff runs canvas-vs-canvas, never against the buffer — the buffer
-	-- legitimately diverges wherever subwin mirrors wrote over it, and those
-	-- rows must survive an unrelated splice.
-	---@type string[]|nil
-	local prev_lines = nil
-	---@type table[][]
-	local prev_hl_rows = {}
-	-- The persistent cell grid the previous frame was painted on. While the
-	-- width holds and the frame doesn't shrink, flushes repaint only changed
-	-- subtrees onto it (render.update) — taller frames grow it in place; a
-	-- width change or a shrink starts over with a fresh full paint.
-	---@type Canvas|nil
-	local canvas = nil
+	-- One flush target per buffer: the root plus one per live container
+	-- boundary. Each holds the retained per-buffer state of the incremental
+	-- pipeline:
+	--   prev_lines/prev_hl_rows  the previous frame's canvas — lines plus hl
+	--        spans grouped per row. The damage diff runs canvas-vs-canvas,
+	--        never against the buffer: the buffer legitimately diverges
+	--        wherever subwin mirrors wrote over it, and those rows must
+	--        survive an unrelated splice.
+	--   canvas  the persistent cell grid the previous frame was painted on.
+	--        While the width holds and the frame doesn't shrink, flushes
+	--        repaint only changed subtrees onto it (render.update) — taller
+	--        frames grow it in place; a width change or a shrink starts over
+	--        with a fresh full paint.
+	--   pending  damage accumulated since the subwin manager last consumed it
+	--        via host.take_damage ("all" | "none" | { top, bot }) — a
+	--        container's manager doesn't exist until its float does, so damage
+	--        must survive flushes nobody synced.
+	---@class FlushTarget
+	---@field bufnr integer
+	---@field tree table|nil       the target's last laid-out tree (buffer coordinates)
+	---@field subwins table[]      its laid-out subwindow leaves (document order)
+	---@field canvas_lines string[]  the last painted canvas — the pre-mirror ground truth
+	---@field pending "all"|"none"|{ top: integer, bot: integer }
+	---@field dead boolean|nil     the boundary is gone; drop_target retires the buffer
+
+	-- Keyed by the container's fiber; the root target is keyed by `host`.
+	---@type table<any, FlushTarget>
+	local targets = {}
 
 	---@param spans { row: integer, start_col: integer, end_col: integer, hl: string }[]
 	---@param nrows integer
@@ -299,12 +366,14 @@ function M.new(opts)
 
 	-- Can the whole flush be skipped? Only when nothing in the fiber tree
 	-- changed (root tree_tick — renders and set_state flips both bubble to
-	-- it), the size is the same, and no auto-sized raw_buffer's LIVE line
-	-- count drifted (buffers change without any fiber rendering).
+	-- it; container subtrees bubble through their boundary fiber), the size is
+	-- the same, and no auto-sized raw_buffer's LIVE line count drifted in ANY
+	-- target (buffers change without any fiber rendering).
 	---@param size { width: integer, height: integer|nil }
 	---@return boolean
 	local function clean_frame(size)
-		if not (prev_lines and host.tree and last_size) then
+		local root = targets[host]
+		if not (root.prev_lines and root.tree and last_size) then
 			return false
 		end
 		if (last_root.tree_tick or 0) > last_flush_tick then
@@ -313,91 +382,58 @@ function M.new(opts)
 		if size.width ~= last_size.width or size.height ~= last_size.height then
 			return false
 		end
-		for _, node in ipairs(host.subwins) do
-			if node._rb_count and rb_count(node.props or {}) ~= node._rb_count then
-				return false
+		for _, target in pairs(targets) do
+			for _, node in ipairs(target.subwins or {}) do
+				if node._rb_count and rb_count(node.props or {}) ~= node._rb_count then
+					return false
+				end
 			end
 		end
 		return true
 	end
 
-	-- Rebuild, lay out, paint and write the committed tree at the current size.
-	local function flush()
-		if not last_root or not vim.api.nvim_buf_is_valid(bufnr) then
+	-- Accumulate a flush's damage into the target's pending slot (consumed by
+	-- the subwin manager via host.take_damage).
+	---@param target FlushTarget
+	---@param damage { top: integer, bot: integer }|nil
+	local function note_damage(target, damage)
+		if damage == nil or target.pending == "all" then
 			return
 		end
-		local size = opts.get_size()
-		if clean_frame(size) then
-			-- identical tree at the identical size: the canvas cannot differ.
-			-- on_flush still runs — subwin float geometry is window state, not
-			-- canvas state (and damage nil tells it nothing changed underneath).
-			if opts.on_flush then
-				opts.on_flush(nil)
-			end
-			return
-		end
-
-		local ctx = { states = states, last_tick = last_flush_tick }
-		local tree = build_node(last_root, ctx)
-		local canvas_lines, hl_rows = {}, {}
-		local subwins = {}
-		if tree then
-			layout.compute(tree, { width = size.width, height = size.height })
-			local w, h = size.width, size.height or tree.size.h
-			if canvas and canvas.w == w and h >= canvas.h and prev_lines then
-				-- Incremental frame: repaint only changed subtrees on the
-				-- persistent canvas, then patch the retained line/span arrays for
-				-- the touched rows. Clean rows keep their very string/table
-				-- objects, so the splice diff below equates them by identity.
-				-- A TALLER frame (scroll mode appending at the tail) grows the
-				-- canvas in place rather than starting over; the gained rows are
-				-- virgin and always extracted (they exist in no retained array).
-				local grown_from = canvas.h
-				if h > canvas.h then
-					canvas:grow(h)
-				end
-				local dirty = render.update(canvas, tree)
-				for i = 1, h do
-					canvas_lines[i], hl_rows[i] = prev_lines[i], prev_hl_rows[i]
-				end
-				for y = grown_from, h - 1 do
-					dirty[#dirty + 1] = y -- may repeat a repainted row; extraction is idempotent
-				end
-				for _, y in ipairs(dirty) do
-					canvas_lines[y + 1] = canvas:line(y + 1)
-					hl_rows[y + 1] = canvas:row_spans(y + 1)
-				end
-			else
-				-- Size changed (or first paint): fresh canvas, full paint.
-				canvas = render.paint(tree, w, h)
-				canvas_lines = canvas:lines()
-				hl_rows = group_by_row(canvas:highlights(), h)
-			end
-			collect_subwins(tree, subwins)
+		if target.pending == "none" then
+			target.pending = { top = damage.top, bot = damage.bot }
 		else
-			canvas = nil
+			target.pending.top = math.min(target.pending.top, damage.top)
+			target.pending.bot = math.max(target.pending.bot, damage.bot)
 		end
-		host.tree = tree
-		host.subwins = subwins
-		last_flush_tick = Fiber.current_tick()
-		last_size = { width = size.width, height = size.height }
+	end
 
-		-- Minimal splice against the previous frame: equal head + equal tail
-		-- bracket the one range that gets written. Marks in the range are cleared
-		-- BEFORE set_lines (afterwards the edit would have relocated them out of
-		-- it); marks outside the range survive, shifting with the edit when the
-		-- row count changes.
+	-- Write `canvas_lines`/`hl_rows` into the target's buffer: the minimal
+	-- splice against the previous frame — equal head + equal tail bracket the
+	-- one range that gets written. Marks in the range are cleared BEFORE
+	-- set_lines (afterwards the edit would have relocated them out of it);
+	-- marks outside the range survive, shifting with the edit when the row
+	-- count changes. Returns the damage — nil when nothing changed, else
+	-- { top, bot } 0-based inclusive rows of the new frame (bot < top: pure
+	-- deletion at `top`).
+	---@param target FlushTarget
+	---@param canvas_lines string[]
+	---@param hl_rows table[][]
+	---@return { top: integer, bot: integer }|nil damage
+	local function splice(target, canvas_lines, hl_rows)
+		local buf = target.bufnr
+		local prev_lines, prev_hl_rows = target.prev_lines, target.prev_hl_rows
 		---@type { top: integer, bot: integer }|nil
 		local damage
 		if not prev_lines then
 			damage = { top = 0, bot = #canvas_lines - 1 }
-			vim.bo[bufnr].modifiable = true
-			vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, canvas_lines)
-			vim.bo[bufnr].modifiable = false
-			vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+			vim.bo[buf].modifiable = true
+			vim.api.nvim_buf_set_lines(buf, 0, -1, false, canvas_lines)
+			vim.bo[buf].modifiable = false
+			vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
 			for _, row in ipairs(hl_rows) do
 				for _, s in ipairs(row) do
-					vim.api.nvim_buf_set_extmark(bufnr, ns, s.row, s.start_col, {
+					vim.api.nvim_buf_set_extmark(buf, ns, s.row, s.start_col, {
 						end_col = s.end_col,
 						hl_group = s.hl,
 					})
@@ -419,17 +455,17 @@ function M.new(opts)
 					tail = tail + 1
 				end
 				local old_end, new_end = old_n - tail, new_n - tail -- exclusive
-				vim.api.nvim_buf_clear_namespace(bufnr, ns, head, old_end)
+				vim.api.nvim_buf_clear_namespace(buf, ns, head, old_end)
 				local slice = {}
 				for i = head + 1, new_end do
 					slice[#slice + 1] = canvas_lines[i]
 				end
-				vim.bo[bufnr].modifiable = true
-				vim.api.nvim_buf_set_lines(bufnr, head, old_end, false, slice)
-				vim.bo[bufnr].modifiable = false
+				vim.bo[buf].modifiable = true
+				vim.api.nvim_buf_set_lines(buf, head, old_end, false, slice)
+				vim.bo[buf].modifiable = false
 				for i = head + 1, new_end do
 					for _, s in ipairs(hl_rows[i]) do
-						vim.api.nvim_buf_set_extmark(bufnr, ns, s.row, s.start_col, {
+						vim.api.nvim_buf_set_extmark(buf, ns, s.row, s.start_col, {
 							end_col = s.end_col,
 							hl_group = s.hl,
 						})
@@ -438,11 +474,137 @@ function M.new(opts)
 				damage = { top = head, bot = new_end - 1 }
 			end
 		end
-		prev_lines, prev_hl_rows = canvas_lines, hl_rows
-		host.canvas_lines = canvas_lines
+		target.prev_lines, target.prev_hl_rows = canvas_lines, hl_rows
+		target.canvas_lines = canvas_lines
+		return damage
+	end
+
+	-- Paint the (already laid-out) tree and write it into the target's buffer.
+	---@param target FlushTarget
+	---@param tree table
+	---@param w integer
+	---@param h integer
+	---@return { top: integer, bot: integer }|nil damage
+	local function flush_target(target, tree, w, h)
+		local canvas = target.canvas
+		local canvas_lines, hl_rows = {}, {}
+		if canvas and canvas.w == w and h >= canvas.h and target.prev_lines then
+			-- Incremental frame: repaint only changed subtrees on the
+			-- persistent canvas, then patch the retained line/span arrays for
+			-- the touched rows. Clean rows keep their very string/table
+			-- objects, so the splice diff equates them by identity.
+			-- A TALLER frame (scroll mode appending at the tail) grows the
+			-- canvas in place rather than starting over; the gained rows are
+			-- virgin and always extracted (they exist in no retained array).
+			local grown_from = canvas.h
+			if h > canvas.h then
+				canvas:grow(h)
+			end
+			local dirty = render.update(canvas, tree)
+			for i = 1, h do
+				canvas_lines[i], hl_rows[i] = target.prev_lines[i], target.prev_hl_rows[i]
+			end
+			for y = grown_from, h - 1 do
+				dirty[#dirty + 1] = y -- may repeat a repainted row; extraction is idempotent
+			end
+			for _, y in ipairs(dirty) do
+				canvas_lines[y + 1] = canvas:line(y + 1)
+				hl_rows[y + 1] = canvas:row_spans(y + 1)
+			end
+		else
+			-- Size changed (or first paint): fresh canvas, full paint.
+			canvas = render.paint(tree, w, h)
+			target.canvas = canvas
+			canvas_lines = canvas:lines()
+			hl_rows = group_by_row(canvas:highlights(), h)
+		end
+		return splice(target, canvas_lines, hl_rows)
+	end
+
+	-- Rebuild, lay out, paint and write the committed tree at the current
+	-- size — the root target first, then every container target its tree
+	-- (transitively) holds, parent before child so a child's constraint comes
+	-- from its freshly laid-out boundary rect.
+	local function flush()
+		if not last_root or not vim.api.nvim_buf_is_valid(bufnr) then
+			return
+		end
+		local size = opts.get_size()
+		if clean_frame(size) then
+			-- identical tree at the identical size: no canvas can differ.
+			-- on_flush still runs — subwin float geometry is window state, not
+			-- canvas state (and damage nil tells it nothing changed underneath).
+			if opts.on_flush then
+				opts.on_flush(nil)
+			end
+			return
+		end
+
+		local ctx = { states = states, last_tick = last_flush_tick }
+		local tree = build_node(last_root, ctx)
+		local root_target = targets[host]
+		local seen = { [host] = true }
+
+		---@param key any     target key (the container fiber; `host` for the root)
+		---@param t_tree table  the target's tree (a container node's `inner`)
+		---@param cw integer  constraint width
+		---@param ch integer|nil  constraint height; nil = content height (scroll)
+		---@return { top: integer, bot: integer }|nil damage
+		local function process(key, t_tree, cw, ch)
+			local target = targets[key]
+			if not target then
+				local buf = vim.api.nvim_create_buf(false, true)
+				vim.bo[buf].modifiable = false
+				target = { bufnr = buf, pending = "all", subwins = {}, canvas_lines = {} }
+				targets[key] = target
+			end
+			layout.compute(t_tree, { width = cw, height = ch })
+			local damage = flush_target(target, t_tree, cw, ch or t_tree.size.h)
+			note_damage(target, damage)
+			target.tree = t_tree
+			local subs = {}
+			collect_subwins(t_tree, subs)
+			target.subwins = subs
+			for _, node in ipairs(subs) do
+				if node.inner then
+					seen[node.fiber] = true
+					local c = node.content
+					-- explicit "fixed" lays the content out at exactly the
+					-- viewport height (grow/justify fill it); default is scroll —
+					-- content height, the float a native viewport over it
+					local fixed = (node.props or {}).mode == "fixed"
+					process(node.fiber, node.inner, math.max(c.w, 1), fixed and math.max(c.h, 1) or nil)
+				end
+			end
+			return damage
+		end
+
+		---@type { top: integer, bot: integer }|nil
+		local root_damage
+		if tree then
+			root_damage = process(host, tree, size.width, size.height)
+		else
+			root_target.canvas = nil
+			root_target.tree = nil
+			root_target.subwins = {}
+			root_damage = splice(root_target, {}, {})
+		end
+		-- Boundaries gone from this flush: their buffers are retired by
+		-- whoever notices first — the subwin manager's destroy (drop_target)
+		-- or teardown.
+		for key, target in pairs(targets) do
+			if not seen[key] then
+				target.dead = true
+			end
+		end
+		host.tree = root_target.tree
+		host.subwins = root_target.subwins
+		host.canvas_lines = root_target.canvas_lines
+		last_flush_tick = Fiber.current_tick()
+		last_size = { width = size.width, height = size.height }
 
 		if opts.on_flush then
-			opts.on_flush(damage)
+			opts.on_flush(root_damage)
 		end
 	end
 
@@ -495,15 +657,54 @@ function M.new(opts)
 			end
 		end,
 
+		-- Consume the damage a target accumulated since its manager last
+		-- synced: nil = unknown/assume-all, false = nothing, else the merged
+		-- spliced row range (the same vocabulary SubwinManager.sync speaks).
+		take_damage = function(fiber)
+			local target = targets[fiber]
+			if not target then
+				return false
+			end
+			local p = target.pending
+			target.pending = "none"
+			if p == "all" then
+				return nil
+			end
+			if p == "none" then
+				return false
+			end
+			return p
+		end,
+
+		-- Retire a container's buffer once its boundary (and float) are gone.
+		drop_target = function(fiber)
+			local target = targets[fiber]
+			if not target then
+				return
+			end
+			targets[fiber] = nil
+			if vim.api.nvim_buf_is_valid(target.bufnr) then
+				pcall(vim.api.nvim_buf_delete, target.bufnr, { force = true })
+			end
+		end,
+
 		teardown = function()
 			last_root = nil
 			host.tree = nil
 			host.subwins = {}
-			if vim.api.nvim_buf_is_valid(bufnr) then
-				vim.api.nvim_buf_delete(bufnr, { force = true })
+			for key, target in pairs(targets) do
+				targets[key] = nil
+				if vim.api.nvim_buf_is_valid(target.bufnr) then
+					pcall(vim.api.nvim_buf_delete, target.bufnr, { force = true })
+				end
 			end
 		end,
 	}
+	-- The root's own flush target (keyed by the host itself); host.bufnr /
+	-- host.tree / host.subwins / host.canvas_lines stay as aliases of it.
+	targets[host] = { bufnr = bufnr, pending = "all", subwins = {}, canvas_lines = {} }
+	host.targets = targets
+	host.root_target = targets[host]
 	return host
 end
 

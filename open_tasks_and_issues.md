@@ -1585,6 +1585,62 @@ same-size mid-replace over memo'd entry components.
   windowing (mount last K entries + "older messages" expander), no framework
   support needed. Suite 285/0, docs 7/7.
 
+- [x] text_input app hooks for chat prompts (2026-07-04, driven by clanker's
+  R5 panel): `clear_on_submit = true` empties the buffer after on_submit (the
+  buffer is the post-seed source of truth, so only subwin can clear it);
+  `on_create(bufnr)` fires once at subwin creation so apps can wire
+  buffer-local options/maps (completefunc for slash commands, steer keymaps).
+  2 specs in input_spec; suite 287/0.
+
+- [x] **Multi-container: `ui.container` (2026-07-04).** One fiber tree, N
+  buffers — the reconciler is untouched; the boundary is a HOST-layer concept.
+  A container is a subwindow leaf in its parent's layout tree (border/bg paint
+  inline, float covers the content box, like text_input), whose children build
+  into a separate layout tree (`node.inner`) flushed into the container's own
+  buffer. Pieces:
+  - host.lua: per-buffer retained state (prev lines/spans, persistent canvas,
+    tree, subwins, pending damage) became FlushTarget records keyed by the
+    boundary fiber (root keyed by the host); flush processes targets
+    parent-first so a child's constraint is its fresh boundary rect. Damage
+    accumulates per target ("all"/"none"/range) and is consumed by the manager
+    via `host.take_damage`; `drop_target` retires a dead boundary's buffer.
+    Memoization crosses the boundary: a memo-hit boundary marks its inner root
+    `_memo` (layout + paint skip wholesale), a rebuilt one hands the inner root
+    the same `_keep`/`_old_rect`/`_prev` bookkeeping as any container node.
+  - layout.lua: a boundary leaf measures its inner tree under the same
+    constraint — auto-size is CORRECT (not raw_buffer's live-line-count hack);
+    explicit height/grow = viewport, props.mode "scroll" (default, buffer
+    grows + float scrolls natively) | "fixed" (content laid out at exactly the
+    viewport height, grow/justify fill it).
+  - subwin.lua: manager parameterized by target (attach opts { target, mouse,
+    zindex }); a container entry recursively attaches a nested manager +
+    interact to ITS float (zindex +10/level), syncs it with the child target's
+    damage, and tears it down innermost-first (focus walked out level by
+    level). Containers are policy "always" (a mirror can't carry nested
+    floats); page motions stay native inside them (they scroll); a hidden
+    (fully occluded) container hides everything under it.
+  - interact.lua: parameterized by target (hit-map on the target's tree, maps
+    on its buffer) — hover/activate/insert-entry work identically one level
+    down. Focus stays "the window the vim cursor is in": enter/exit hop one
+    boundary at a time through the existing enter_at/edge-exit machinery.
+  - `on_create(bufnr, winid)` fires once at container creation (like
+    text_input's, plus the float) — the app hook for buffer-local keymaps and
+    window work (follow-scroll, focusing); drove clanker's panel rework.
+  - Perf: VIEWPORT containers (height/grow) skip the inner measure — its size
+    doesn't depend on content, and measuring at the measure-pass width inside
+    a row (≠ final laid-out width) flip-flopped every inner node's `_mw` and
+    re-wrapped the whole inner tree twice per flush (clanker panel bench,
+    N=500: 10.7 → 3.1ms/stream-tick; the rest is the flat O(N) walks M4
+    documented). KNOWN CAVEAT: an AUTO container inside a row still measures
+    at the pass width and relayouts at the final one — same double-measure
+    pathology; use height/grow (or an explicit width) for containers in rows.
+  - tests/inline/container_spec.lua (11): own-buffer render + root mirror,
+    auto-size, viewport + fixed mode, per-target damage (unrelated updates
+    leave the container buffer's changedtick alone), nested input end-to-end,
+    <CR>-hop in / edge-hop out across two levels, on_create,
+    container-in-container, conditional removal (buffer retired, boundary
+    restored), scrolled reposition of nested floats, teardown. Suite 298/0.
+
 ### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
 
 - Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not

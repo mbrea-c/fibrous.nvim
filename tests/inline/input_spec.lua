@@ -114,6 +114,79 @@ describe("inline.input", function()
     handle.unmount()
   end)
 
+  it("clear_on_submit empties the buffer after on_submit fires", function()
+    local submitted = {}
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          {
+            comp = ui.text_input,
+            props = {
+              value = "abc",
+              height = 1,
+              clear_on_submit = true,
+              on_submit = function(v)
+                submitted[#submitted + 1] = v
+              end,
+            },
+          },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 10, height = 1 })
+    local sub = subwin_of(handle)
+
+    vim.api.nvim_set_current_win(sub)
+    press("<CR>")
+    -- on_submit saw the pre-clear value; the buffer is empty afterwards.
+    assert.same({ "abc" }, submitted)
+    assert.same({ "" }, vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(sub), 0, -1, false))
+
+    -- The cleared input keeps working: type fresh text, submit again.
+    press("inext")
+    press("<Esc><CR>")
+    assert.same({ "abc", "next" }, submitted)
+    assert.same({ "" }, vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(sub), 0, -1, false))
+
+    handle.unmount()
+  end)
+
+  it("on_create hands the app the input's buffer once, at creation", function()
+    local created = {}
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          {
+            comp = ui.text_input,
+            props = {
+              value = "",
+              height = 1,
+              on_create = function(bufnr)
+                created[#created + 1] = bufnr
+              end,
+            },
+          },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 10, height = 1 })
+    local sub = subwin_of(handle)
+
+    -- Fired exactly once, with the subwin's own buffer — the hook exists so
+    -- apps can wire buffer-local options/maps (completefunc, extra keymaps).
+    assert.same({ vim.api.nvim_win_get_buf(sub) }, created)
+
+    -- A prop change re-render must not re-fire it (the buffer persists).
+    handle.set_props({ tick = 1 })
+    assert.equal(1, #created)
+
+    handle.unmount()
+  end)
+
   it("a re-render triggered from on_change doesn't clobber the focused input", function()
     local function App(ctx)
       local text = ctx.use_state("")

@@ -75,19 +75,23 @@ end
 ---@field activate? boolean  click (<LeftRelease>) activates; default true
 ---@field follow? boolean    focus-follows-mouse via <MouseMove>; default false
 
--- Attach cursor interaction to `host` displayed in the root float `root_winid`.
+-- Attach cursor interaction to one of `host`'s flush targets, displayed in
+-- `root_winid` (the mount's root float by default; a container's float when
+-- the subwin manager recurses — then `target` is that container's).
 ---@param host InlineHost
 ---@param root_winid integer
 ---@param mouse? InlineMouseOpts|false  false disables all mouse maps
 ---@param subwins? SubwinManager  explicit-focus target for <CR>/click/insert keys
+---@param target? FlushTarget  which target's tree/buffer to interact with; default the root
 ---@return InteractHandle
-function M.attach(host, root_winid, mouse, subwins)
+function M.attach(host, root_winid, mouse, subwins, target)
   if mouse == false then
     mouse = { activate = false, follow = false }
   else
     mouse = vim.tbl_extend("keep", mouse or {}, { activate = true, follow = false })
   end
-  local bufnr = host.bufnr
+  target = target or host.root_target
+  local bufnr = target.bufnr
   local group = vim.api.nvim_create_augroup("FibrousInlineInteract_" .. root_winid, { clear = true })
 
   -- The root cursor as a buffer cell (row, x), both 0-indexed; nil when the
@@ -104,14 +108,14 @@ function M.attach(host, root_winid, mouse, subwins)
 
   -- The interactive node under the root window's cursor, or nil.
   local function node_under_cursor()
-    if not host.tree then
+    if not target.tree then
       return nil
     end
     local row, x = cursor_cell()
     if not row then
       return nil
     end
-    return hit(host.tree, x, row)
+    return hit(target.tree, x, row)
   end
 
   -- The node's hover override; every interactive node hovers, so no override
