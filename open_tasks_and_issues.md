@@ -1796,6 +1796,60 @@ same-size mid-replace over memo'd entry components.
   "opened during startup, the prompt is genuinely focused after VimEnter",
   driving a real child nvim). Suite 314/0.
 
+- [x] **One-keystroke activation across a container boundary (2026-07-05,
+  user request).** Before: pressing a button inside a container while focus
+  was on the parent took TWO `<CR>`s — the root's activate only offered the
+  cell to `subwins.enter_at`, which FOCUSED the container float and stopped;
+  the button press needed a second `<CR>` on the container's own layer.
+  Reason: each flush target (root, every container) has its own
+  `interact.attach` layer driven by ITS window's cursor, and the boundary was
+  entered explicitly (one level per `<CR>`). Fix: new `subwins.activate_at`
+  (subwin.lua) = `enter_at` (focus + land the cursor via the mirror_map
+  translation) THEN, if the entry is a container, delegate to its
+  `child_interact.activate(true)`. interact.lua's `<CR>`/click path calls
+  `activate_at` instead of `enter_at` (insert keys keep plain `enter_at`), and
+  the interact handle now exposes `activate` so a parent can delegate in.
+  Recurses through nesting (a container's activate calls its own
+  `activate_at`), so a button any depth down is one `<CR>`, and it does
+  press-AND-focus (focus stays in the container, per the user's ask). Over a
+  non-interactive cell it just focuses (identical to the old first `<CR>`), so
+  the "focus hops" stepping for plain labels is unchanged. Spec:
+  container_spec "<CR> over a button inside a container presses it AND focuses
+  the container (one press)". Suite 315/0; clanker 164/164 (the transcript's
+  tool-call headers are buttons in a container — now one `<CR>` from the root
+  toggles them; verified live). Keyboard `<Tab>` traversal stays island-scoped
+  by design.
+
+- [x] **Hover across the container boundary (2026-07-05, user request,
+  follow-up to the activation change).** Continuation of the same idea for the
+  continuous case: gliding the parent's cursor over a button in an UNFOCUSED
+  container now highlights it, without moving focus. Design (user's, chosen
+  over a cursor-independent `hover_at` paint): since each surface's hover reads
+  ITS OWN window's cursor and Neovim cursors are per-window, drive off the
+  parent's live cursor and NUDGE the (unfocused) container's own cursor to the
+  translated, always-visible cell (shared `translate()`, no scroll — same
+  landing `enter()` uses), then run the container's existing interaction so it
+  paints on the float the user sees. Verified `nvim_win_set_cursor` on a
+  non-current window and `nvim_win_call(winsaveview/winrestview)` do NOT
+  disturb the parent's visual selection / mode / curwin (the user's worry) —
+  so no `win_call` needed anyway (the translated line is always visible, so
+  set_cursor never scrolls). Wiring: `subwins.hover_at(row,x)` finds the
+  container under the cell, translates, nudges its cursor, calls its
+  `child_interact.update(true)`; recurses for nesting; tracks the hovered
+  entry to `clear_hover()` on leave. interact.lua's `update(propagate)` gained
+  a LIVENESS gate — hover only paints where the cursor is the live pointer
+  (this window current, or parent-driven); an unfocused, un-pointed container's
+  update() (which still runs every flush via sync) now CLEARS instead of
+  painting a phantom hover at its idle cursor (the bug that surfaced: a fresh
+  mount showed a stray button hover). `clear_hover` guards its relayout with
+  `syncing` against flush re-entry. Spec: container_spec "hover reaches into an
+  UNFOCUSED container… focus stays on the root" (hover appears on the container
+  buf, focus unchanged, clears on leave). Suite 316/0; clanker 164/164, bench
+  unchanged (append 1.16ms, toggle 10.7ms @ N=1000); verified live (root cursor
+  over the transcript's tool header highlights it, focus stays on the root,
+  clears on leave). NB button hover is the themed `FibrousButtonHover` fill
+  (hl-tier overlay), not `FibrousHover`.
+
 ### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
 
 - Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not

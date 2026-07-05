@@ -350,6 +350,59 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
+  it("hover reaches into an UNFOCUSED container: the root cursor over a button highlights it, focus stays on the root", function()
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "head" } },
+          {
+            comp = ui.container,
+            props = {},
+            children = {
+              { comp = ui.button, props = { label = "go", on_press = function() end } },
+            },
+          },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 4 })
+    local csub = subwin_of(handle.winid)
+    local cbuf = vim.api.nvim_win_get_buf(csub)
+
+    -- a button hovers structurally-adjacent via its themed fill hl overlay
+    local function hover_marks(bufnr)
+      local n = 0
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(bufnr, -1, 0, -1, { details = true })) do
+        if m[4].hl_group == "FibrousButtonHover" then
+          n = n + 1
+        end
+      end
+      return n
+    end
+
+    -- root focused, cursor NOT over the button yet (on the head label)
+    handle.focus()
+    vim.api.nvim_win_set_cursor(handle.winid, { 1, 0 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
+    assert.equal(0, hover_marks(cbuf))
+
+    -- navigate the cursor over the button (container's first row = root line 2)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 2 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
+    -- the button is highlighted in the CONTAINER's buffer, focus still the root
+    assert.is_true(hover_marks(cbuf) > 0)
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+
+    -- move off the button (back to the head label) → the container hover clears
+    vim.api.nvim_win_set_cursor(handle.winid, { 1, 0 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
+    assert.equal(0, hover_marks(cbuf))
+
+    handle.unmount()
+  end)
+
   it("on_create hands the app the container's buffer and float once, at creation", function()
     local created = {}
     local function App()

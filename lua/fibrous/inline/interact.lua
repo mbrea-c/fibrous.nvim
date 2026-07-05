@@ -76,8 +76,9 @@ local function hit(node, x, y)
 end
 
 ---@class InteractHandle
----@field update fun()    re-evaluate hover at the current cursor (called on CursorMoved and post-flush)
+---@field update fun(propagate?: boolean)  re-evaluate hover at the current cursor (CursorMoved / post-flush); `propagate` forces driving hover into child containers (nil = only when this window is current)
 ---@field activate fun(enter_subwins: boolean, via_click?: boolean)  run activation at the current cursor (roles + subwindow entry); a parent delegates into this after focusing the layer
+---@field clear_hover fun()  drop this layer's hover (and any it drives in nested containers)
 ---@field teardown fun()
 
 ---@class InlineMouseOpts
@@ -194,8 +195,48 @@ function M.attach(host, root_winid, mouse, subwins, target)
   local hovered_structural = false
   local syncing = false
 
-  local function update()
+  -- Drop this layer's hover (and any it drives in nested containers). Used when
+  -- this surface's cursor isn't the live pointer — an unfocused container the
+  -- parent isn't pointing at, or a parent pointer that has left the container.
+  local function clear_hover()
+    if hovered_fiber and hovered_structural then
+      host.set_state(hovered_fiber, "hover", nil)
+      -- `syncing` guards re-entry: a relayout re-runs flush → update(), and a
+      -- clear called mid-flush lets the ongoing flush do the repaint instead.
+      if not syncing then
+        syncing = true
+        host.relayout()
+        syncing = false
+      end
+    end
+    hovered_fiber = nil
+    hovered_structural = false
+    if vim.api.nvim_buf_is_valid(bufnr) then
+      vim.api.nvim_buf_clear_namespace(bufnr, ns_hover, 0, -1)
+    end
+    if subwins and subwins.clear_hover then
+      subwins.clear_hover()
+    end
+  end
+
+  -- Re-evaluate hover at this window's cursor and paint it. Hover only makes
+  -- sense where the cursor is the LIVE pointer: this window is current, or a
+  -- parent drove us here (`propagate`). Otherwise — an unfocused container's
+  -- update() during a flush — the cursor is stale, so we show nothing (else a
+  -- container would paint a phantom hover wherever its idle cursor happened to
+  -- sit). `propagate`: true/false forces liveness (hover_at delegates true so a
+  -- root-driven hover reaches nested containers); nil derives it from focus.
+  ---@param propagate? boolean
+  local function update(propagate)
     if syncing or not vim.api.nvim_buf_is_valid(bufnr) then
+      return
+    end
+    local live = propagate
+    if live == nil then
+      live = vim.api.nvim_win_is_valid(root_winid) and vim.api.nvim_get_current_win() == root_winid
+    end
+    if not live then
+      clear_hover()
       return
     end
     local node
@@ -224,6 +265,13 @@ function M.attach(host, root_winid, mouse, subwins, target)
       syncing = false
     end
     paint(node)
+
+    if subwins and subwins.hover_at then
+      local row, x = cursor_cell()
+      if row then
+        subwins.hover_at(row, x)
+      end
+    end
   end
 
   -- The target's Tab stops in document order: every role-carrying node plus
@@ -393,6 +441,9 @@ function M.attach(host, root_winid, mouse, subwins, target)
     -- (container) layer after focusing it — the recursive half of
     -- `subwins.activate_at`.
     activate = activate,
+    -- Exposed so a parent's subwin manager can drop this layer's hover when its
+    -- pointer leaves the container (the clear half of `subwins.hover_at`).
+    clear_hover = clear_hover,
     teardown = function()
       pcall(vim.api.nvim_del_augroup_by_id, group)
       if saved_mousemoveevent ~= nil then

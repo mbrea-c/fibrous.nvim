@@ -52,6 +52,8 @@ local M = {}
 ---@field sync fun(damage?: { top: integer, bot: integer }|false)  reconcile floats against host.subwins and reposition them; damage = the flush's spliced rows (false: none, nil: assume all)
 ---@field enter_at fun(row: integer, x: integer, insert?: boolean): boolean  focus the subwindow at root cell (row, x), in insert mode when `insert` and the policy allows; false if none there
 ---@field activate_at fun(row: integer, x: integer, via_click?: boolean): boolean  focus the subwindow at (row, x) AND run its interaction once (press a role / hop deeper) — one-keystroke activation across the boundary; false if none there
+---@field hover_at fun(row: integer, x: integer)  parent-driven hover: nudge the (unfocused) container at (row, x) to paint hover under the parent's pointer, without moving focus
+---@field clear_hover fun()  drop any parent-driven container hover
 ---@field teardown fun()  destroy all floats/buffers and the autocmds
 
 ---@param bufnr integer
@@ -615,6 +617,31 @@ function M.attach(host, root_winid, opts)
 		return entry.node.subwin == "text_input"
 	end
 
+	-- Translate a root-buffer cell (row, x) into the (lnum, display cell) of the
+	-- float buffer it overlays. Land where the user is LOOKING: the mirror's row
+	-- map records, per box row, exactly which buffer line and starting cell it
+	-- shows — the one true translation once the widget has scroll state of its
+	-- own (base, leftcol) or wraps (one buffer line across several rows, where
+	-- base + row-offset arithmetic teleports by one line per wrapped row). The
+	-- arithmetic fallback covers blank padding rows and a not-yet-mirrored
+	-- widget. Always a VISIBLE line, so a set_cursor to it never scrolls the
+	-- float. Shared by enter() (focus landing) and hover_at (parent-driven
+	-- hover).
+	---@param entry table  a subwindow float entry
+	---@param row integer  root-buffer row (0-indexed)
+	---@param x integer  root-buffer display cell (0-indexed)
+	---@return integer lnum  1-indexed line in the float's buffer
+	---@return integer cell  display cell within that line
+	local function translate(entry, row, x)
+		local c = entry.node.content
+		local count = vim.api.nvim_buf_line_count(entry.bufnr)
+		local m = entry.mirror_map and entry.mirror_map[row - c.y + 1]
+		if m and m.lnum <= count then
+			return m.lnum, m.cell0 + math.max(x - c.x, 0)
+		end
+		return math.min(math.max((entry.base or 1) + (row - c.y), 1), count), (entry.leftcol or 0) + math.max(x - c.x, 0)
+	end
+
 	-- Focus `entry`'s float, placing its cursor at root-buffer cell (row, x)
 	-- translated into the float's content (clamped to its lines). `insert`
 	-- (the click path) also starts insert mode when the policy allows. A
@@ -632,24 +659,7 @@ function M.attach(host, root_winid, opts)
 		if vim.api.nvim_win_get_config(entry.winid).hide then
 			return false
 		end
-		local c = entry.node.content
-		-- Land where the user is LOOKING: the mirror's row map records, per
-		-- box row, exactly which buffer line and starting cell it shows — the
-		-- one true translation once the widget has scroll state of its own
-		-- (base, leftcol) or wraps (one buffer line across several rows, where
-		-- base + row-offset arithmetic teleports by one line per wrapped row).
-		-- The arithmetic fallback covers blank padding rows and a widget that
-		-- has not mirrored yet.
-		local count = vim.api.nvim_buf_line_count(entry.bufnr)
-		local m = entry.mirror_map and entry.mirror_map[row - c.y + 1]
-		local lnum, cell
-		if m and m.lnum <= count then
-			lnum = m.lnum
-			cell = m.cell0 + math.max(x - c.x, 0)
-		else
-			lnum = math.min(math.max((entry.base or 1) + (row - c.y), 1), count)
-			cell = (entry.leftcol or 0) + math.max(x - c.x, 0)
-		end
+		local lnum, cell = translate(entry, row, x)
 		local line = vim.api.nvim_buf_get_lines(entry.bufnr, lnum - 1, lnum, false)[1] or ""
 		vim.api.nvim_set_current_win(entry.winid)
 		vim.api.nvim_win_set_cursor(entry.winid, { lnum, width.cell_to_byte(line, cell) })
@@ -1204,11 +1214,62 @@ function M.attach(host, root_winid, opts)
 		return false
 	end
 
+	-- The container currently showing parent-driven hover (its cursor nudged to
+	-- follow the parent's pointer), so it can be cleared when the pointer leaves.
+	---@type table|nil
+	local hovered_hover_entry
+
+	-- Drop any parent-driven hover: tell the tracked container's own interaction
+	-- layer to clear (which recurses into its nested containers).
+	local function clear_hover()
+		if hovered_hover_entry and not hovered_hover_entry.dead and hovered_hover_entry.child_interact then
+			hovered_hover_entry.child_interact.clear_hover()
+		end
+		hovered_hover_entry = nil
+	end
+
+	-- Parent-driven hover across the boundary: the parent's cursor is over the
+	-- container at (row, x) but focus stays on the parent, so the container's own
+	-- (unfocused) cursor never tracks it. We nudge that cursor to the translated,
+	-- always-visible cell (no scroll — see translate) WITHOUT focusing the float,
+	-- then run the container's own interaction so it paints hover on the float
+	-- the user actually sees. Only containers carry an interaction layer; a bare
+	-- text_input/raw_buffer has no roles to hover. Recurses: the delegated
+	-- update() propagates into deeper containers.
+	---@param row integer  parent-buffer row (0-indexed)
+	---@param x integer  parent-buffer display cell (0-indexed)
+	local function hover_at(row, x)
+		---@type table|nil
+		local target
+		for _, entry in pairs(floats) do
+			if entry.child_interact and vim.api.nvim_win_is_valid(entry.winid) then
+				local r = entry.node.rect or entry.node.content
+				if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
+					target = entry
+					break
+				end
+			end
+		end
+		if hovered_hover_entry and hovered_hover_entry ~= target then
+			clear_hover()
+		end
+		if target then
+			local lnum, cell = translate(target, row, x)
+			local line = vim.api.nvim_buf_get_lines(target.bufnr, lnum - 1, lnum, false)[1] or ""
+			pcall(vim.api.nvim_win_set_cursor, target.winid, { lnum, width.cell_to_byte(line, cell) })
+			target.child_interact.update(true) -- propagate: drive deeper containers too
+			hovered_hover_entry = target
+		end
+	end
+
 	return {
 		sync = sync,
 		enter_at = enter_at,
 		activate_at = activate_at,
+		hover_at = hover_at,
+		clear_hover = clear_hover,
 		teardown = function()
+			hovered_hover_entry = nil
 			for _, entry in pairs(floats) do
 				destroy(entry) -- before the augroup goes: destroy clears per-buffer autocmds through it
 			end
