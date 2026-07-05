@@ -19,6 +19,14 @@
 --              i/I/a/A/o/O over a subwindow focus it and replay the key
 --              inside, so "type here" costs one keystroke. <Space> stays
 --              role-only (it is too common a motion to swallow into editors).
+--   tab        <Tab>/<S-Tab> cycle the cursor through the target's
+--              interactive nodes (roles + text_inputs) in DOCUMENT order
+--              (pre-order — a column's stops finish before the next column
+--              starts), wrapping at the ends. Landing is just a cursor move:
+--              hover repaints, activation stays on <CR>, and subwindows are
+--              still entered explicitly, never by traversal. Cycling is per
+--              flush target — inside a container, its own interact layer
+--              cycles the container's stops.
 --   mouse      Neovim's own mouse=nvi handling moves the cursor on click, so
 --              hover already follows clicks with no code here. On top of that
 --              (tracker task 10, `opts.mouse`):
@@ -217,6 +225,77 @@ function M.attach(host, root_winid, mouse, subwins, target)
     paint(node)
   end
 
+  -- The target's Tab stops in document order: every role-carrying node plus
+  -- text_input subwindow leaves (form fields are reachable by keyboard; a
+  -- container leaf's children live in ANOTHER target's tree, so a container
+  -- is not a stop here — its own interact layer cycles them).
+  local function stops()
+    local out = {}
+    local function walk(node)
+      if (node.props and node.props.role) or node.subwin == "text_input" then
+        out[#out + 1] = node
+      end
+      for _, child in ipairs(node.children or {}) do
+        walk(child)
+      end
+    end
+    if target.tree then
+      walk(target.tree)
+    end
+    return out
+  end
+
+  -- Move the cursor to the next (+1) / previous (-1) stop, wrapping. From a
+  -- stop, strictly document-order cyclic; from an inert cell, the first stop
+  -- spatially past the cursor in reading order (fall back to wrapping).
+  local function cycle(dir)
+    local list = stops()
+    if #list == 0 then
+      return
+    end
+    local row, x = cursor_cell()
+    if not row then
+      return
+    end
+
+    local current
+    for i, node in ipairs(list) do
+      local r = node.rect
+      if x >= r.x and x < r.x + r.w and row >= r.y and row < r.y + r.h then
+        current = i -- keep the last match: deeper in document order
+      end
+    end
+
+    local idx
+    if current then
+      idx = (current + dir - 1) % #list + 1
+    elseif dir == 1 then
+      for i, node in ipairs(list) do
+        local c = node.content
+        if c.y > row or (c.y == row and c.x > x) then
+          idx = i
+          break
+        end
+      end
+      idx = idx or 1
+    else
+      for i = #list, 1, -1 do
+        local c = list[i].content
+        if c.y < row or (c.y == row and c.x < x) then
+          idx = i
+          break
+        end
+      end
+      idx = idx or #list
+    end
+
+    local c = list[idx].content
+    local y = math.max(c.y, 0)
+    local line = vim.api.nvim_buf_get_lines(bufnr, y, y + 1, false)[1] or ""
+    pcall(vim.api.nvim_win_set_cursor, root_winid, { y + 1, cell_to_byte(line, c.x) })
+    update()
+  end
+
   -- `enter_subwins`: <CR> and clicks focus a subwindow under the cursor;
   -- <Space> passes false and only activates roles. `via_click`: clicks enter
   -- text fields in INSERT mode (subwin.lua's click_insert policy) — a
@@ -253,6 +332,16 @@ function M.attach(host, root_winid, mouse, subwins, target)
   vim.keymap.set("n", "<Space>", function()
     activate(false)
   end, { buffer = bufnr, nowait = true, desc = "fibrous: activate" })
+  -- <Tab> shadows <C-i> (jumplist-forward) inside the canvas buffer — the
+  -- usual trade for UI buffers.
+  maps[#maps + 1] = "<Tab>"
+  vim.keymap.set("n", "<Tab>", function()
+    cycle(1)
+  end, { buffer = bufnr, nowait = true, desc = "fibrous: next interactive" })
+  maps[#maps + 1] = "<S-Tab>"
+  vim.keymap.set("n", "<S-Tab>", function()
+    cycle(-1)
+  end, { buffer = bufnr, nowait = true, desc = "fibrous: previous interactive" })
   if mouse.activate then
     maps[#maps + 1] = "<LeftRelease>"
     vim.keymap.set("n", "<LeftRelease>", function()

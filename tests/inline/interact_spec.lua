@@ -261,4 +261,95 @@ describe("inline.interact", function()
       assert.is_false((au.group_name or ""):find("FibrousInlineInteract", 1, true) ~= nil)
     end
   end)
+
+  describe("tab navigation", function()
+    -- col: label / button A / label / checkbox B / button C.
+    -- Buttons shrink-wrap with bracket chrome, so their content starts at
+    -- cell 2 ("[ A ]"); the checkbox mark is content, so its content is x 0.
+    local function FormApp()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "title" } },
+          { comp = ui.button, props = { label = "A", style = { _hover = { hl = "Search" } } } },
+          { comp = ui.label, props = { text = "mid" } },
+          { comp = ui.checkbox, props = { label = "B" } },
+          { comp = ui.button, props = { label = "C" } },
+        },
+      }
+    end
+
+    it("<Tab> cycles forward through interactive nodes in document order, wrapping", function()
+      local handle = mount.floating(FormApp, {}, { width = 12, height = 6 })
+      move_cursor(handle, 1, 0) -- the inert title
+
+      press(handle, "<Tab>")
+      assert.same({ 2, 2 }, vim.api.nvim_win_get_cursor(handle.winid))
+      -- Landing on a stop hovers it immediately.
+      assert.equal(1, #marks_with(handle.bufnr, "Search"))
+
+      press(handle, "<Tab>")
+      assert.same({ 4, 0 }, vim.api.nvim_win_get_cursor(handle.winid))
+      press(handle, "<Tab>")
+      assert.same({ 5, 2 }, vim.api.nvim_win_get_cursor(handle.winid))
+      press(handle, "<Tab>")
+      assert.same({ 2, 2 }, vim.api.nvim_win_get_cursor(handle.winid)) -- wrapped
+      handle.unmount()
+    end)
+
+    it("<S-Tab> cycles backward, wrapping", function()
+      local handle = mount.floating(FormApp, {}, { width = 12, height = 6 })
+      move_cursor(handle, 2, 2) -- on button A
+
+      press(handle, "<S-Tab>")
+      assert.same({ 5, 2 }, vim.api.nvim_win_get_cursor(handle.winid)) -- wrapped to C
+      press(handle, "<S-Tab>")
+      assert.same({ 4, 0 }, vim.api.nvim_win_get_cursor(handle.winid))
+      handle.unmount()
+    end)
+
+    it("an off-stop cursor tabs to the next stop past it", function()
+      local handle = mount.floating(FormApp, {}, { width = 12, height = 6 })
+      move_cursor(handle, 3, 0) -- "mid", between A and B
+
+      press(handle, "<Tab>")
+      assert.same({ 4, 0 }, vim.api.nvim_win_get_cursor(handle.winid))
+      handle.unmount()
+    end)
+
+    it("a text_input is a stop: the cursor lands on it without entering it", function()
+      local function App()
+        return {
+          comp = ui.col,
+          props = {},
+          children = {
+            { comp = ui.button, props = { label = "A" } },
+            { comp = ui.text_input, props = {} },
+          },
+        }
+      end
+      local handle = mount.floating(App, {}, { width = 12, height = 5 })
+      move_cursor(handle, 1, 2)
+
+      press(handle, "<Tab>")
+      local pos = vim.api.nvim_win_get_cursor(handle.winid)
+      assert.is_true(pos[1] > 1)
+      -- Landed, not entered: subwindows are focused explicitly, never by
+      -- traversal.
+      assert.equal(handle.winid, vim.api.nvim_get_current_win())
+      handle.unmount()
+    end)
+
+    it("with no interactive nodes <Tab> is a no-op", function()
+      local function App()
+        return { comp = ui.label, props = { text = "just text" } }
+      end
+      local handle = mount.floating(App, {}, { width = 12, height = 2 })
+      move_cursor(handle, 1, 0)
+      press(handle, "<Tab>")
+      assert.same({ 1, 0 }, vim.api.nvim_win_get_cursor(handle.winid))
+      handle.unmount()
+    end)
+  end)
 end)

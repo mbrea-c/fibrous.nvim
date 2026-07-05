@@ -1686,6 +1686,21 @@ same-size mid-replace over memo'd entry components.
   the measuring constraint" (the nested-row shape; the col-stretch shape was
   already green). Suite 302/0.
 
+- [x] **Tab navigation (2026-07-05, user request).** `<Tab>`/`<S-Tab>`
+  (NORMAL mode only, buffer-local on each flush target) cycle the cursor
+  through the target's interactive nodes — role carriers plus text_input
+  subwindow leaves — in DOCUMENT order (pre-order: a column's stops finish
+  before the next column starts), wrapping at the ends. Landing is just a
+  cursor move: hover repaints via the existing update(), activation stays on
+  <CR>/<Space>, and subwindows are still entered explicitly, never by
+  traversal (the cursor lands ON the input; i/<CR> enters). From an inert
+  cell, forward goes to the first stop spatially past the cursor in reading
+  order. Cycling is per flush target by construction (a container leaf's
+  children live in another target's tree; the container's own interact layer
+  — same code — cycles them). NB `<Tab>` shadows `<C-i>` jumplist-forward
+  inside canvas buffers, the usual UI-buffer trade. Specs: interact_spec +5.
+  Suite 307/0.
+
 ### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
 
 - Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not
