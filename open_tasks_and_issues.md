@@ -1850,6 +1850,19 @@ same-size mid-replace over memo'd entry components.
   clears on leave). NB button hover is the themed `FibrousButtonHover` fill
   (hl-tier overlay), not `FibrousHover`.
 
+- [x] **Hover/activation clamped onto the last line from a container's dead
+  space (2026-07-05, user bug).** When a container box is taller than its
+  content, the blank padding rows below the last line had no `mirror_map`
+  entry, so `translate()`'s fallback CLAMPED them (`math.min(…, count)`) onto
+  the last content line — a parent cursor over that dead space hovered, and
+  `<CR>` activated, the last line's button. Fix: `translate` now returns a
+  third `content` boolean (false for box rows past the buffer's end; lnum still
+  clamps so a focus can land). `hover_at` treats dead space as no target
+  (clears, no paint); `activate_at` still focuses the container but skips the
+  press when `content` is false. Spec: container_spec "dead space past a
+  container's content never hovers or activates its last line" (control: the
+  real button row still hovers). Suite 317/0; clanker 164/164.
+
 ### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
 
 - Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not

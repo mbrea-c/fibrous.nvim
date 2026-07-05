@@ -403,6 +403,69 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
+  it("dead space past a container's content never hovers or activates its last line", function()
+    -- container box is TALLER than its content (rows below the last line are
+    -- blank padding). A parent cursor over that dead space must NOT clamp onto
+    -- the last content line — hover and <CR> there do nothing, even though the
+    -- last line holds a button.
+    local pressed = 0
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "top" } },
+          {
+            comp = ui.container,
+            props = { height = 4 }, -- 2 content rows + 2 blank padding rows
+            children = {
+              { comp = ui.label, props = { text = "head" } },
+              {
+                comp = ui.button,
+                props = {
+                  label = "go",
+                  on_press = function()
+                    pressed = pressed + 1
+                  end,
+                },
+              },
+            },
+          },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 6 })
+    local csub = subwin_of(handle.winid)
+    local cbuf = vim.api.nvim_win_get_buf(csub)
+    local function hover_marks()
+      local n = 0
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(cbuf, -1, 0, -1, { details = true })) do
+        if m[4].hl_group == "FibrousButtonHover" then
+          n = n + 1
+        end
+      end
+      return n
+    end
+
+    handle.focus()
+    -- root layout: top=line1, [container: head=line2, [go]=line3, dead=4,5]
+    -- control: the real button row DOES hover
+    vim.api.nvim_win_set_cursor(handle.winid, { 3, 2 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
+    assert.is_true(hover_marks() > 0)
+
+    -- the bug: a dead row (root line 5) must NOT hover the last content line
+    vim.api.nvim_win_set_cursor(handle.winid, { 5, 1 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
+    assert.equal(0, hover_marks())
+
+    -- ...nor activate it
+    press("<CR>")
+    assert.equal(0, pressed)
+
+    handle.unmount()
+  end)
+
   it("on_create hands the app the container's buffer and float once, at creation", function()
     local created = {}
     local function App()

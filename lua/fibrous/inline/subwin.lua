@@ -618,28 +618,57 @@ function M.attach(host, root_winid, opts)
 	end
 
 	-- Translate a root-buffer cell (row, x) into the (lnum, display cell) of the
-	-- float buffer it overlays. Land where the user is LOOKING: the mirror's row
-	-- map records, per box row, exactly which buffer line and starting cell it
-	-- shows — the one true translation once the widget has scroll state of its
-	-- own (base, leftcol) or wraps (one buffer line across several rows, where
-	-- base + row-offset arithmetic teleports by one line per wrapped row). The
-	-- arithmetic fallback covers blank padding rows and a not-yet-mirrored
-	-- widget. Always a VISIBLE line, so a set_cursor to it never scrolls the
-	-- float. Shared by enter() (focus landing) and hover_at (parent-driven
-	-- hover).
+	-- float buffer it overlays. Land where the user is LOOKING.
+	--
+	-- A SHOWN, NOWRAP float (a container, or a revealed input) is the source of
+	-- truth for what's on screen, and its scroll can move WITHOUT a mirror
+	-- refresh — follow-mode (and any code) scrolls the float via a deferred
+	-- set_cursor after sync ran, so the cached `base`/`mirror_map` go stale. Read
+	-- the float's LIVE topline instead: the box's display row `row - c.y` sits at
+	-- buffer line `topline + (row - c.y) - clip` (clip = rows occluded off the
+	-- top). A stale base gave a constant row offset AND, being an off-screen
+	-- line, made the set_cursor scroll the float to reveal it. The mirror map is
+	-- still the fallback for a hidden or WRAPPING float (raw_buffer), where box
+	-- row ≠ buffer line.
+	--
+	-- `content` is false when (row, x) is in the float's BLANK PADDING — box rows
+	-- past the last buffer line, when the box is taller than its content. The
+	-- lnum still clamps to a real (last) line so a focus can land, but
+	-- hover/activation use `content` to NOT act: a pointer over the dead space
+	-- below the text must not clamp onto — and press — the last line's button.
 	---@param entry table  a subwindow float entry
 	---@param row integer  root-buffer row (0-indexed)
 	---@param x integer  root-buffer display cell (0-indexed)
-	---@return integer lnum  1-indexed line in the float's buffer
+	---@return integer lnum  1-indexed line in the float's buffer (clamped)
 	---@return integer cell  display cell within that line
+	---@return boolean content  whether the cell is over real content (not padding)
 	local function translate(entry, row, x)
 		local c = entry.node.content
 		local count = vim.api.nvim_buf_line_count(entry.bufnr)
-		local m = entry.mirror_map and entry.mirror_map[row - c.y + 1]
-		if m and m.lnum <= count then
-			return m.lnum, m.cell0 + math.max(x - c.x, 0)
+		local cell = (entry.leftcol or 0) + math.max(x - c.x, 0)
+
+		if vim.api.nvim_win_is_valid(entry.winid) and not vim.api.nvim_win_get_config(entry.winid).hide and not vim.wo[entry.winid].wrap then
+			local info = vim.fn.getwininfo(entry.winid)[1]
+			if info then
+				local lnum = info.topline + (row - c.y) - (entry.clip or 0)
+				if lnum >= 1 and lnum <= count then
+					return lnum, cell, true
+				end
+				return math.min(math.max(lnum, 1), count), cell, false
+			end
 		end
-		return math.min(math.max((entry.base or 1) + (row - c.y), 1), count), (entry.leftcol or 0) + math.max(x - c.x, 0)
+
+		if entry.mirror_map then
+			local m = entry.mirror_map[row - c.y + 1]
+			if m and m.lnum <= count then
+				return m.lnum, m.cell0 + math.max(x - c.x, 0), true
+			end
+			-- mirrored, but no map entry for this box row → blank padding below
+			-- the content; clamp to the last line for focus, flag as dead space.
+			return count, cell, false
+		end
+		local raw = (entry.base or 1) + (row - c.y)
+		return math.min(math.max(raw, 1), count), cell, raw >= 1 and raw <= count
 	end
 
 	-- Focus `entry`'s float, placing its cursor at root-buffer cell (row, x)
@@ -1199,13 +1228,16 @@ function M.attach(host, root_winid, opts)
 	-- container has an interaction layer to delegate to; a text_input/raw_buffer
 	-- is just focused (its enter IS the whole action). Recurses through nesting:
 	-- the container's activate calls its OWN activate_at, so a button any number
-	-- of containers deep is one <CR>.
+	-- of containers deep is one <CR>. Over the float's blank padding (past its
+	-- content) we still focus it but DON'T press — the cursor there clamps onto
+	-- the last line, which must not be activated from the dead space below it.
 	local function activate_at(row, x, via_click)
 		for _, entry in pairs(floats) do
 			local r = entry.node.rect or entry.node.content
 			if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
+				local _, _, content = translate(entry, row, x)
 				local ok = enter(entry, row, x, via_click)
-				if ok and entry.child_interact then
+				if ok and content and entry.child_interact then
 					entry.child_interact.activate(true, via_click)
 				end
 				return ok
@@ -1241,11 +1273,17 @@ function M.attach(host, root_winid, opts)
 	local function hover_at(row, x)
 		---@type table|nil
 		local target
+		local lnum, cell
 		for _, entry in pairs(floats) do
 			if entry.child_interact and vim.api.nvim_win_is_valid(entry.winid) then
 				local r = entry.node.rect or entry.node.content
 				if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
-					target = entry
+					-- over the float's blank padding (past its content) counts as
+					-- "no target": don't hover the last line the cursor clamps to.
+					local l, cl, content = translate(entry, row, x)
+					if content then
+						target, lnum, cell = entry, l, cl
+					end
 					break
 				end
 			end
@@ -1254,7 +1292,6 @@ function M.attach(host, root_winid, opts)
 			clear_hover()
 		end
 		if target then
-			local lnum, cell = translate(target, row, x)
 			local line = vim.api.nvim_buf_get_lines(target.bufnr, lnum - 1, lnum, false)[1] or ""
 			pcall(vim.api.nvim_win_set_cursor, target.winid, { lnum, width.cell_to_byte(line, cell) })
 			target.child_interact.update(true) -- propagate: drive deeper containers too
