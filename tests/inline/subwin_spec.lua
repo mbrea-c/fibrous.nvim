@@ -535,6 +535,39 @@ describe("inline.subwin", function()
       return buf
     end
 
+    it("box writes never corrupt canvas highlight marks (gravity inversion)", function()
+      -- A full-width hl'd label and an input SWAP rows: restore_box rewrites
+      -- the input's OLD rows — now the label's row. A set_text replacement
+      -- covering a mark's exact extent INVERTS it via gravity (start has
+      -- right gravity, end doesn't): start lands at the edit end, end at the
+      -- edit start, and the highlight silently disappears until the next
+      -- repaint of that row.
+      local function App(_, props)
+        local label = { comp = text, props = { text = { { ("#"):rep(20), hl = "Search" } } } }
+        local input = { comp = text_input, props = { height = 2 } }
+        local children = props.swapped and { input, label } or { label, input }
+        return { comp = col, props = {}, children = children }
+      end
+      local handle = mount.floating(App, { swapped = false }, { width = 20, height = 4 })
+
+      local function search_marks()
+        local out = {}
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+          if m[4].hl_group == "Search" then
+            out[#out + 1] = { row = m[2], col = m[3], end_row = m[4].end_row or m[2], end_col = m[4].end_col }
+          end
+        end
+        return out
+      end
+
+      assert.same({ { row = 0, col = 0, end_row = 0, end_col = 20 } }, search_marks())
+
+      handle.set_props({ swapped = true })
+      assert.same({ { row = 2, col = 0, end_row = 2, end_col = 20 } }, search_marks())
+
+      handle.unmount()
+    end)
+
     it("mirrors the visible slice into the root canvas, padded to the box", function()
       local buf = make_buf()
       local handle = mount.floating(editor_app(buf), {}, { width = 6, height = 6 })

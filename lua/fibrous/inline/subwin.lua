@@ -158,6 +158,37 @@ function M.attach(host, root_winid, opts)
 	-- render="focus" widget is unfocused. A flush blanks the box only when its
 	-- damage reaches it (host splices, it no longer repaints wholesale);
 	-- sync() re-mirrors exactly then.
+	-- Re-derive the canvas highlight marks for rows [y0, y1] from the host's
+	-- retained ground truth. mirror()/restore_box() rewrite row content via
+	-- set_text, and a replacement covering a mark's exact extent INVERTS it
+	-- through gravity (the start has right gravity, the end doesn't): the
+	-- start lands at the edit's end, the end at its start, and the highlight
+	-- silently disappears until the next splice repaints that row. Marks are
+	-- cheap; re-adding the touched rows is exact.
+	local function repaint_row_marks(y0, y1)
+		local buf, rows = target.bufnr, target.prev_hl_rows
+		if not rows or not vim.api.nvim_buf_is_valid(buf) then
+			return
+		end
+		y0 = math.max(y0, 0)
+		y1 = math.min(y1, vim.api.nvim_buf_line_count(buf) - 1)
+		if y1 < y0 then
+			return
+		end
+		vim.api.nvim_buf_clear_namespace(buf, host.ns, y0, y1 + 1)
+		for y = y0, y1 do
+			for _, s in ipairs(rows[y + 1] or {}) do
+				-- strict=false: a mirrored row's byte length may run short of the
+				-- canvas ground truth (cell-equal, byte-different) — clamp.
+				vim.api.nvim_buf_set_extmark(buf, host.ns, s.row, s.start_col, {
+					end_col = s.end_col,
+					hl_group = s.hl,
+					strict = false,
+				})
+			end
+		end
+	end
+
 	local function mirror(entry)
 		if not vim.api.nvim_buf_is_valid(target.bufnr) or not vim.api.nvim_buf_is_valid(entry.bufnr) then
 			return
@@ -222,6 +253,7 @@ function M.attach(host, root_winid, opts)
 			end
 		end
 		vim.bo[target.bufnr].modifiable = false
+		repaint_row_marks(c.y, c.y + c.h - 1)
 		-- what we painted over, so the box can be restored when it moves or dies
 		entry.mirrored = { x = c.x, y = c.y, w = c.w, h = c.h }
 	end
@@ -251,6 +283,7 @@ function M.attach(host, root_winid, opts)
 			end
 		end
 		vim.bo[target.bufnr].modifiable = false
+		repaint_row_marks(b.y, b.y + b.h - 1)
 	end
 
 	-- Copy the sub buffer's queryable highlights onto the mirror region (only

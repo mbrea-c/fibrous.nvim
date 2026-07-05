@@ -1735,6 +1735,28 @@ same-size mid-replace over memo'd entry components.
   order for an existing float (a fresh float at the same z behaves
   correctly) — diagnose stacking with fresh floats only.
 
+- [x] **Mark gravity inversion under box writes (2026-07-05, user bug:
+  "widget highlights sometimes disappear until the next update while
+  resizing the OS window").** Root cause was NOT the splice — its set_lines
+  relocation shifts tail marks cleanly (verified by instrumenting
+  set_lines/set_text/clear_namespace inside the live demo and snapshotting
+  marks after every edit). The killer is mirror()/restore_box(): they
+  rewrite moved widget boxes via nvim_buf_set_text, and a replacement that
+  covers a canvas mark's EXACT extent inverts it through gravity — the
+  start (right gravity) lands at the edit's end, the end (no gravity) at
+  its start ⇒ `start=210,end=0` spans that render nothing until the next
+  splice repaints the row. Resizes trigger it constantly because boxes
+  move every relayout. Fix: `repaint_row_marks(y0,y1)` in subwin.lua —
+  after any mirror/restore write, clear host.ns on the touched rows and
+  re-add from `target.prev_hl_rows` (ground truth), `strict=false` since a
+  mirrored row's byte length may run short of the canvas line. Spec:
+  subwin_spec "box writes never corrupt canvas highlight marks" (label and
+  input swap rows; restore_box rewrites the label's row). Suite 312/0;
+  clanker bench unchanged (stream tick 0.83ms @ N=1000). Diagnosis
+  technique worth keeping: run the demo inside a :terminal of a headless
+  host (real PTY resizes), monkeypatch the buffer-edit API to log
+  edit→markset transitions.
+
 ### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
 
 - Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not
