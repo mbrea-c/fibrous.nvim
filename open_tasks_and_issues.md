@@ -1757,6 +1757,45 @@ same-size mid-replace over memo'd entry components.
   host (real PTY resizes), monkeypatch the buffer-edit API to log
   edit→markset transitions.
 
+- [x] **Byte-divergent mark misplacement in `repaint_row_marks` (2026-07-05,
+  follow-up to the gravity fix; user bug: "incorrect extmarks especially
+  when resizing horizontally").** The gravity fix re-placed marks at their
+  CANVAS byte offsets (`prev_hl_rows.start_col/end_col`), but a mirror write
+  can change the row's byte layout — multibyte widget content (box-drawing
+  markdown, `─╭╮`) over single-byte canvas cells, or vice versa. So a mark
+  BESIDE a mirrored box (e.g. a sidebar checkbox sharing rows with the
+  transcript container box) lands at a stale byte offset and paints the
+  wrong cells or vanishes. Horizontal resize is the trigger: it moves the
+  container box, so restore_box/mirror rewrite rows the sidebar marks live
+  on. Fix: when the current line diverges from the canvas ground truth,
+  translate each span's byte cols THROUGH DISPLAY CELLS onto the actual line
+  (`width.cell_to_byte(cur_line, width.str(canvas:sub(1, col)))`). Spec:
+  subwin_spec "box writes keep marks beside the box cell-faithful
+  (byte-divergent mirror)" — a 10-cell input swapped to 3-cell/9-byte
+  multibyte content, TAG label to its right stays at cell 10. Verified live
+  with a CELL-AWARE invariant (marks must sit on UTF-8 boundaries AND cover
+  the same display cells as the canvas span) — held through horizontal
+  resize storms that the old raw-byte invariant reported "clean" for
+  (because the buggy code placed marks at the very canvas offsets that check
+  compared against). Suite 314/0; bench unchanged (append 1.9ms, toggle
+  14.1ms @ N=1000 — the extra per-row get_lines is free).
+
+- [x] **Stranded `_focus` accent on startup (2026-07-05, user bug: "the
+  prompt shows focused (blue border) when the panel is created even though
+  the cursor isn't in it; focusing then unfocusing clears it").** subwin.lua
+  drove `_focus` off WinEnter/WinLeave on the float's buffer, but focus can
+  leave a float WITHOUT a WinLeave: nvim's own startup re-enters the first
+  window AFTER `-u init` sourcing with autocmds suppressed (also any
+  `:noautocmd wincmd`), so a focus grab during init strands the style ON.
+  Fix: a manager-level WinEnter (not buffer-scoped) tracks the currently
+  focused entry and reconciles — the first genuine window entry anywhere
+  clears a stale accent. Spec: style_state_spec "a stale focus accent heals
+  once any window is entered normally" (focus a float, yank focus back under
+  `eventignore=all`, assert the accent survives, then `:new` clears it). The
+  clanker side ALSO defers its own focus grab past VimEnter (panel_spec
+  "opened during startup, the prompt is genuinely focused after VimEnter",
+  driving a real child nvim). Suite 314/0.
+
 ### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
 
 - Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not

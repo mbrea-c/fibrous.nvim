@@ -568,6 +568,50 @@ describe("inline.subwin", function()
       handle.unmount()
     end)
 
+    it("box writes keep marks beside the box cell-faithful (byte-divergent mirror)", function()
+      -- A mirror write can change the row's BYTE layout (multibyte widget
+      -- content over single-byte canvas cells). Marks re-derived from the
+      -- canvas ground truth after the write must be translated through CELLS
+      -- onto the actual line, or every mark to the right of the box lands at
+      -- a stale byte offset — highlights visibly shifted off their text.
+      local row = { __host = "row" }
+      local function App()
+        return {
+          comp = row,
+          props = {},
+          children = {
+            { comp = text_input, props = { width = 10 } },
+            { comp = text, props = { text = { { "TAG", hl = "Search" } } } },
+          },
+        }
+      end
+      local handle = mount.floating(App, {}, { width = 20, height = 1 })
+
+      local function search_mark()
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+          if m[4].hl_group == "Search" then
+            return { row = m[2], col = m[3], end_col = m[4].end_col }
+          end
+        end
+      end
+
+      -- canvas bytes: 10 single-byte cells of input interior, then TAG
+      assert.same({ row = 0, col = 10, end_col = 13 }, search_mark())
+
+      -- multibyte widget content: 3 cells, 9 bytes — the mirrored row's byte
+      -- layout now diverges from the canvas ground truth
+      local sub = subwin_of(handle)
+      vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(sub), 0, -1, false, { "───" })
+      vim.wait(500, function()
+        return (lines_of(handle.bufnr)[1] or ""):find("───", 1, true) ~= nil
+      end)
+
+      -- TAG still starts at cell 10 = byte 9 + 7 + 1 → col 16 on the new line
+      assert.same({ row = 0, col = 16, end_col = 19 }, search_mark())
+
+      handle.unmount()
+    end)
+
     it("mirrors the visible slice into the root canvas, padded to the box", function()
       local buf = make_buf()
       local handle = mount.floating(editor_app(buf), {}, { width = 6, height = 6 })

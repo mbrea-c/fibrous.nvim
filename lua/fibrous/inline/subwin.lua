@@ -166,7 +166,7 @@ function M.attach(host, root_winid, opts)
 	-- silently disappears until the next splice repaints that row. Marks are
 	-- cheap; re-adding the touched rows is exact.
 	local function repaint_row_marks(y0, y1)
-		local buf, rows = target.bufnr, target.prev_hl_rows
+		local buf, rows, lines = target.bufnr, target.prev_hl_rows, target.prev_lines
 		if not rows or not vim.api.nvim_buf_is_valid(buf) then
 			return
 		end
@@ -177,14 +177,30 @@ function M.attach(host, root_winid, opts)
 		end
 		vim.api.nvim_buf_clear_namespace(buf, host.ns, y0, y1 + 1)
 		for y = y0, y1 do
-			for _, s in ipairs(rows[y + 1] or {}) do
-				-- strict=false: a mirrored row's byte length may run short of the
-				-- canvas ground truth (cell-equal, byte-different) — clamp.
-				vim.api.nvim_buf_set_extmark(buf, host.ns, s.row, s.start_col, {
-					end_col = s.end_col,
-					hl_group = s.hl,
-					strict = false,
-				})
+			local spans = rows[y + 1]
+			if spans and #spans > 0 then
+				-- Ground-truth span positions are CANVAS bytes, but mirror writes
+				-- change the row's byte layout (multibyte widget cells over
+				-- single-byte canvas cells and vice versa) — placing them raw
+				-- shifts every mark beside the box off its text. Translate
+				-- through display cells whenever the line diverged.
+				local canvas_line = lines and lines[y + 1]
+				local cur_line = vim.api.nvim_buf_get_lines(buf, y, y + 1, false)[1] or ""
+				local diverged = canvas_line ~= nil and cur_line ~= canvas_line
+				for _, s in ipairs(spans) do
+					local start_col, end_col = s.start_col, s.end_col
+					if diverged then
+						start_col = width.cell_to_byte(cur_line, width.str(canvas_line:sub(1, start_col)))
+						end_col = width.cell_to_byte(cur_line, width.str(canvas_line:sub(1, end_col)))
+					end
+					-- strict=false: a mirrored row's byte length may still run short
+					-- of the translated extent (cell-equal, byte-different) — clamp.
+					vim.api.nvim_buf_set_extmark(buf, host.ns, s.row, start_col, {
+						end_col = end_col,
+						hl_group = s.hl,
+						strict = false,
+					})
+				end
 			end
 		end
 	end
@@ -852,6 +868,24 @@ function M.attach(host, root_winid, opts)
 		host.relayout()
 	end
 
+	-- The entry currently holding the focus state, so a desync can be healed:
+	-- focus can leave a float WITHOUT WinLeave firing (nvim's own startup
+	-- re-enters the first window between `-u init` sourcing and VimEnter;
+	-- plugins switch windows under `:noautocmd`), which would strand the
+	-- _focus style ON. The manager-level WinEnter below reconciles on the
+	-- next genuine window entry anywhere.
+	local focused_entry
+	vim.api.nvim_create_autocmd("WinEnter", {
+		group = group,
+		callback = function()
+			local e = focused_entry
+			if e and vim.api.nvim_get_current_win() ~= e.winid then
+				focused_entry = nil
+				set_focus(e, false)
+			end
+		end,
+	})
+
 	-- WinEnter/WinLeave fire for any window showing the buffer (a raw_buffer's
 	-- may be open elsewhere), so both check that OUR float is the one involved.
 	local function wire_focus(entry)
@@ -860,6 +894,7 @@ function M.attach(host, root_winid, opts)
 			buffer = entry.bufnr,
 			callback = function()
 				if vim.api.nvim_get_current_win() == entry.winid then
+					focused_entry = entry
 					set_focus(entry, true)
 					-- A hidden float CAN be entered (<C-w>w cycling, direct API) and
 					-- would be edited invisibly; any focus path must reveal it.
@@ -872,6 +907,7 @@ function M.attach(host, root_winid, opts)
 			buffer = entry.bufnr,
 			callback = function()
 				if vim.api.nvim_get_current_win() == entry.winid then
+					focused_entry = nil
 					set_focus(entry, false)
 					-- reposition skips focused floats (typing must not be yanked
 					-- around), so edits made while focused settle into the mirror now.

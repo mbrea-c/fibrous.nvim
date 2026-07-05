@@ -205,6 +205,41 @@ describe("inline.style focus state", function()
     handle.unmount()
   end)
 
+  it("a stale focus accent heals once any window is entered normally", function()
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "head" } },
+          { comp = ui.text_input, props = { style = { border = true } } },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 4 })
+    local float = subwin_float()
+    vim.api.nvim_set_current_win(float)
+    assert.is_true(#marks_with(handle.bufnr, "FibrousBorderFocus") > 0)
+
+    -- Focus yanked away with autocmds suppressed — what nvim's own startup
+    -- does after sourcing `-u init` (re-enters the first window before
+    -- VimEnter), and what plugins' `:noautocmd wincmd` switches do. No
+    -- WinLeave fires, so the focus state is stranded ON.
+    local ei = vim.o.eventignore
+    vim.o.eventignore = "all"
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.o.eventignore = ei
+    assert.is_true(#marks_with(handle.bufnr, "FibrousBorderFocus") > 0)
+
+    -- The first genuine WinEnter anywhere must reconcile: the entry's float
+    -- is not the current window, so the accent clears.
+    vim.cmd("new")
+    assert.same({}, marks_with(handle.bufnr, "FibrousBorderFocus"))
+
+    vim.cmd("close")
+    handle.unmount()
+  end)
+
   it("focusing a text_input float applies _focus; unfocusing clears it", function()
     local function App()
       return {
