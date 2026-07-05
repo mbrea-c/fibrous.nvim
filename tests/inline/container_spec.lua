@@ -466,6 +466,49 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
+  it("hover tracks the container's LIVE scroll (no offset, no scroll) when the float scrolled since the last sync", function()
+    -- follow-mode (and any code) scrolls a container float via a deferred
+    -- set_cursor AFTER sync captured the mirror base — so base goes stale. The
+    -- parent-driven hover must read the float's live topline, or it lands on a
+    -- line offset by the scroll amount AND, being off-screen, its set_cursor
+    -- scrolls the float to reveal it.
+    local function App()
+      local kids = {}
+      for i = 1, 8 do
+        kids[i] = { comp = ui.label, props = { text = "line" .. i } }
+      end
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "top" } },
+          { comp = ui.container, props = { height = 3 }, children = kids },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 6 })
+    local csub = subwin_of(handle.winid)
+
+    handle.focus()
+    -- scroll the float to the bottom, like follow-mode, WITHOUT a parent sync
+    vim.api.nvim_win_set_cursor(csub, { 8, 0 })
+    vim.api.nvim_win_call(csub, function()
+      vim.cmd("normal! zb")
+    end)
+    local topline = vim.fn.getwininfo(csub)[1].topline
+    assert.is_true(topline > 1) -- it really did scroll off the top
+
+    -- hover over the float's TOP visible row (root line 2 = the container's
+    -- content top): must map to the live topline, and must not move the scroll
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 1 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
+
+    assert.equal(topline, vim.api.nvim_win_get_cursor(csub)[1]) -- landed on the live line
+    assert.equal(topline, vim.fn.getwininfo(csub)[1].topline) -- and didn't scroll the float
+
+    handle.unmount()
+  end)
+
   it("on_create hands the app the container's buffer and float once, at creation", function()
     local created = {}
     local function App()
