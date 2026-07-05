@@ -33,10 +33,10 @@ local function move_cursor(handle, row, col)
   vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
 end
 
--- The subwindow float (zindex 60, above the root's 50).
+-- The subwindow float (one z-level above the floating mount's root: 51).
 local function subwin_float()
   for _, w in ipairs(vim.api.nvim_list_wins()) do
-    if vim.api.nvim_win_get_config(w).zindex == 60 then
+    if vim.api.nvim_win_get_config(w).zindex == 51 then
       return w
     end
   end

@@ -1700,6 +1700,26 @@ same-size mid-replace over memo'd entry components.
   — same code — cycles them). NB `<Tab>` shadows `<C-i>` jumplist-forward
   inside canvas buffers, the usual UI-buffer trade. Specs: interact_spec +5.
   Suite 307/0.
+- [x] **Stacking policy + modal chrome (2026-07-05, user request).** Every
+  float used to sit at/above nvim's default (roots 50, subwin levels 60 +10
+  per nesting), so a pane-anchored app's containers COVERED any genuine
+  float — clanker's session modal rendered behind the transcript. New
+  policy: pane-anchored mounts (window/split) are page furniture, root
+  zindex 10 and +1 per subwindow level, keeping the whole stack below 50;
+  float mounts root at 50 (level with other plugins' popups), +1 per level;
+  `opts.zindex` overrides the root everywhere and levels always derive
+  root+1. Plus two mount.floating opts for modal-shaped apps:
+  - `border` — passed through to the root float (persists across relayout).
+  - `backdrop` — Snacks-style editor dim: ONE full-screen non-focusable
+    scratch float one z-level below the root (`FibrousBackdrop` default hl,
+    bg=#000000 + winblend; `backdrop = <n>` sets the blend, true = 60; needs
+    termguicolors to blend rather than block). Lifecycle rides the mount's:
+    resized in sync(), closed as an attachment teardown — no autocmds of its
+    own. Deliberately NOT a "Modal" widget: modal remains an app-level
+    pattern; fibrous provides the primitives.
+  Specs: mount_spec +4 (stacking, zindex override, backdrop lifecycle,
+  border persistence); style_state_spec's subwin finder updated (60 → 51).
+  Suite 311/0.
 
 ### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
 

@@ -228,3 +228,93 @@ describe("inline.mount", function()
     handle.unmount()
   end)
 end)
+
+-- Stacking policy + modal chrome. Pane-anchored mounts (window/split) are
+-- page furniture: their whole float stack sits BELOW nvim's default float
+-- zindex (50), so genuine floats — float-mounted fibrous apps, any other
+-- plugin's popups — always render above them. Float mounts root at the
+-- default 50, and every subwindow level stacks root+1.
+describe("inline.mount stacking and modal chrome", function()
+  local ui = require("fibrous.inline.components")
+
+  -- An app whose single child is a container; on_create captures its float.
+  local function container_app(captured)
+    return function()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          {
+            comp = ui.container,
+            props = {
+              grow = 1,
+              on_create = function(bufnr, winid)
+                captured.bufnr, captured.winid = bufnr, winid
+              end,
+            },
+            children = { { comp = ui.label, props = { text = "inside" } } },
+          },
+        },
+      }
+    end
+  end
+
+  it("pane-anchored mounts stack below the float default; float mounts at it", function()
+    local origin = vim.api.nvim_get_current_win()
+    local paned = {}
+    local split_handle = mount.split(container_app(paned), {}, { split = { size = 30 } })
+    assert.equal(10, vim.api.nvim_win_get_config(split_handle.winid).zindex)
+    assert.equal(11, vim.api.nvim_win_get_config(paned.winid).zindex)
+
+    local floated = {}
+    local float_handle = mount.floating(container_app(floated), {}, { width = 20, height = 5 })
+    assert.equal(50, vim.api.nvim_win_get_config(float_handle.winid).zindex)
+    assert.equal(51, vim.api.nvim_win_get_config(floated.winid).zindex)
+
+    float_handle.unmount()
+    split_handle.unmount()
+    vim.api.nvim_set_current_win(origin)
+  end)
+
+  it("opts.zindex overrides the root; subwindow levels follow it", function()
+    local captured = {}
+    local handle = mount.floating(container_app(captured), {}, { width = 20, height = 5, zindex = 200 })
+    assert.equal(200, vim.api.nvim_win_get_config(handle.winid).zindex)
+    assert.equal(201, vim.api.nvim_win_get_config(captured.winid).zindex)
+    handle.unmount()
+  end)
+
+  it("backdrop: a dimming float behind the root, torn down with the mount", function()
+    local before = #vim.api.nvim_list_wins()
+    local handle = mount.floating(Hello, {}, { width = 10, height = 3, backdrop = true })
+
+    local backdrop
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      local cfg = vim.api.nvim_win_get_config(w)
+      if cfg.zindex == 49 then
+        backdrop = { winid = w, cfg = cfg }
+      end
+    end
+    assert.is_not_nil(backdrop)
+    -- covers the whole editor, can't take focus
+    assert.equal(vim.o.columns, backdrop.cfg.width)
+    assert.equal(vim.o.lines, backdrop.cfg.height)
+    assert.is_false(backdrop.cfg.focusable)
+    assert.truthy(vim.wo[backdrop.winid].winhighlight:find("FibrousBackdrop", 1, true))
+
+    handle.unmount()
+    assert.is_false(vim.api.nvim_win_is_valid(backdrop.winid))
+    assert.equal(before, #vim.api.nvim_list_wins())
+  end)
+
+  it("border: passed through to the root float and kept across relayout", function()
+    local handle = mount.floating(Hello, {}, { width = 10, height = 3, border = "rounded" })
+    local cfg = vim.api.nvim_win_get_config(handle.winid)
+    assert.is_true(type(cfg.border) == "table")
+
+    handle.relayout()
+    cfg = vim.api.nvim_win_get_config(handle.winid)
+    assert.is_true(type(cfg.border) == "table")
+    handle.unmount()
+  end)
+end)

@@ -104,7 +104,7 @@ end
 ---@class SubwinAttachOpts
 ---@field target? FlushTarget  the flush target this manager serves; default the host's root. A container entry spawns a nested manager over ITS target, anchored to the container's float — the same wiring, one level down.
 ---@field mouse? InlineMouseOpts|false  threaded into nested containers' interaction layers
----@field zindex? integer  this level's float zindex (default 60); each nesting level stacks +10 so children always cover their container
+---@field zindex? integer  this level's float zindex; the mounts pass root+1 (see InlineWindowMountOpts for the stacking policy) and each nesting level stacks +1 so children always cover their container. Default 60 for standalone attaches.
 
 -- Attach a manager to one of `host`'s flush targets, whose buffer is shown in
 -- `root_winid` (the mount's root float, or — one level down — a container's
@@ -877,7 +877,7 @@ function M.attach(host, root_winid, opts)
 			width = math.max(node.content.w, 1),
 			height = math.max(node.content.h, 1),
 			style = "minimal",
-			zindex = zindex, -- above this level's root (50 for the mount's float)
+			zindex = zindex, -- one above this level's root (the mount's, or a container's)
 			hide = true, -- reposition below decides visibility
 		})
 		-- text_input never wraps (rect math); raw_buffer is the native-wrapping
@@ -915,7 +915,7 @@ function M.attach(host, root_winid, opts)
 			entry.child_manager = M.attach(host, winid, {
 				target = entry.child_target,
 				mouse = opts.mouse,
-				zindex = zindex + 10,
+				zindex = zindex + 1,
 			})
 			entry.child_interact = interact.attach(host, winid, opts.mouse, entry.child_manager, entry.child_target)
 			-- Creation-time escape hatch, like text_input's — the container also

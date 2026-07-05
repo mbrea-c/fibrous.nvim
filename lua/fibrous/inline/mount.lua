@@ -165,6 +165,9 @@ end
 ---@field col? integer      default centered
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
+---@field zindex? integer   root float zindex (default 50, nvim's float default); subwindow levels stack root+1
+---@field border? string|string[]  nvim_open_win border for the root float
+---@field backdrop? boolean|integer  dim the editor behind the app: a full-screen, non-focusable float one z-level below the root (FibrousBackdrop + winblend; a number IS the blend, true = 60). Needs termguicolors to blend rather than block.
 
 -- Mount `component` as a standalone floating application.
 ---@param component Component
@@ -174,6 +177,7 @@ end
 function M.floating(component, props, opts)
 	opts = opts or {}
 	local scroll = opts.mode == "scroll"
+	local zindex = opts.zindex or 50
 
 	-- Explicit opts pin the geometry; defaults track the editor size (VimResized
 	-- re-derives them through this same function).
@@ -209,18 +213,43 @@ function M.floating(component, props, opts)
 			end
 		end,
 	})
+	-- The backdrop: one full-editor, non-focusable scratch float one z-level
+	-- BELOW the root, dimming everything behind the app. Its whole lifecycle
+	-- rides the mount's: resized in sync(), closed as an attachment teardown.
+	local backdrop_win
+	if opts.backdrop then
+		local blend = type(opts.backdrop) == "number" and opts.backdrop or 60
+		vim.api.nvim_set_hl(0, "FibrousBackdrop", { bg = "#000000", default = true })
+		local backdrop_bufnr = vim.api.nvim_create_buf(false, true)
+		vim.bo[backdrop_bufnr].bufhidden = "wipe"
+		backdrop_win = vim.api.nvim_open_win(backdrop_bufnr, false, {
+			relative = "editor",
+			row = 0,
+			col = 0,
+			width = vim.o.columns,
+			height = vim.o.lines,
+			style = "minimal",
+			focusable = false,
+			zindex = zindex - 1,
+		})
+		vim.wo[backdrop_win].winhighlight = "Normal:FibrousBackdrop"
+		vim.wo[backdrop_win].winblend = blend
+	end
+
 	local winid = open_root_float(host.bufnr, {
 		relative = "editor",
 		row = g.row,
 		col = g.col,
 		width = g.width,
 		height = g.height,
+		zindex = zindex,
+		border = opts.border,
 	})
 	local group = vim.api.nvim_create_augroup("FibrousInlineFloat_" .. winid, { clear = true })
 	if not scroll then
 		pin_view(winid, group)
 	end
-	manager = subwin.attach(host, winid, { mouse = opts.mouse })
+	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1 })
 	interaction = interact.attach(host, winid, opts.mouse, manager)
 
 	local function sync()
@@ -232,10 +261,27 @@ function M.floating(component, props, opts)
 			width = cur.width,
 			height = cur.height,
 		})
+		if backdrop_win and vim.api.nvim_win_is_valid(backdrop_win) then
+			vim.api.nvim_win_set_config(backdrop_win, {
+				relative = "editor",
+				row = 0,
+				col = 0,
+				width = vim.o.columns,
+				height = vim.o.lines,
+			})
+		end
 		host.relayout()
 	end
 
-	local handle = wire(component, props, host, winid, group, { manager, interaction }, sync, function() end)
+	local close_backdrop = {
+		teardown = function()
+			if backdrop_win and vim.api.nvim_win_is_valid(backdrop_win) then
+				pcall(vim.api.nvim_win_close, backdrop_win, true)
+			end
+		end,
+	}
+	local handle =
+		wire(component, props, host, winid, group, { manager, interaction, close_backdrop }, sync, function() end)
 	return handle
 end
 
@@ -243,6 +289,7 @@ end
 ---@field split? SplitOpts   direction/position/size of the host pane; default vertical/left/40
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
+---@field zindex? integer   root float zindex (default 10 — see M.window)
 
 -- Open a native split pane and return its winid. The pane holds a throwaway
 -- scratch buffer; the root float over it does the real drawing.
@@ -284,7 +331,8 @@ function M.split(component, props, opts)
 	local host_winid = open_host_pane(opts.split or {})
 	vim.api.nvim_set_current_win(origin_winid)
 
-	local handle = M.window(component, props, { winid = host_winid, mode = opts.mode, mouse = opts.mouse })
+	local handle =
+		M.window(component, props, { winid = host_winid, mode = opts.mode, mouse = opts.mouse, zindex = opts.zindex })
 
 	return handle
 end
@@ -293,6 +341,7 @@ end
 ---@field winid integer which window to mount on
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
+---@field zindex? integer  root float zindex; default 10. Pane-anchored apps are page furniture — the whole stack (root + subwindow levels, +1 each) stays below nvim's float default (50), so genuine floats (float-mounted fibrous apps, other plugins' popups) always render above them.
 
 -- Mount `component` over a native split pane.
 ---@param component Component
@@ -302,6 +351,7 @@ end
 function M.window(component, props, opts)
 	opts = opts or {}
 	local scroll = opts.mode == "scroll"
+	local zindex = opts.zindex or 10
 	-- Resolve winid = 0 ("current window") to a concrete id NOW: it is read
 	-- again long after mount (geometry syncs, WinClosed pattern, validity
 	-- guards), when the current window may be the root float itself.
@@ -345,12 +395,13 @@ function M.window(component, props, opts)
 		col = 0,
 		width = g.width,
 		height = g.height,
+		zindex = zindex,
 	})
 	local group = vim.api.nvim_create_augroup("FibrousInlineSplit_" .. host_winid, { clear = true })
 	if not scroll then
 		pin_view(winid, group)
 	end
-	manager = subwin.attach(host, winid, { mouse = opts.mouse })
+	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1 })
 	interaction = interact.attach(host, winid, opts.mouse, manager)
 
 	-- The pane is reachable by <C-w>-navigation (floats are not part of the
