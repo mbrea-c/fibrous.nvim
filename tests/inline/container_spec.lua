@@ -308,6 +308,48 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
+  it("<CR> over a button inside a container presses it AND focuses the container (one press)", function()
+    local pressed = 0
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "head" } },
+          {
+            comp = ui.container,
+            props = {},
+            children = {
+              {
+                comp = ui.button,
+                props = {
+                  label = "go",
+                  on_press = function()
+                    pressed = pressed + 1
+                  end,
+                },
+              },
+            },
+          },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 4 })
+    local csub = subwin_of(handle.winid)
+
+    -- focus on the ROOT, cursor navigated over the button (container's first
+    -- row is root line 2; `[ go ]` starts at col 0, so col 2 is inside it)
+    handle.focus()
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 2 })
+
+    press("<CR>")
+    -- one press: the button fired, and focus crossed into the container
+    assert.equal(1, pressed)
+    assert.equal(csub, vim.api.nvim_get_current_win())
+
+    handle.unmount()
+  end)
+
   it("on_create hands the app the container's buffer and float once, at creation", function()
     local created = {}
     local function App()

@@ -77,6 +77,7 @@ end
 
 ---@class InteractHandle
 ---@field update fun()    re-evaluate hover at the current cursor (called on CursorMoved and post-flush)
+---@field activate fun(enter_subwins: boolean, via_click?: boolean)  run activation at the current cursor (roles + subwindow entry); a parent delegates into this after focusing the layer
 ---@field teardown fun()
 
 ---@class InlineMouseOpts
@@ -296,14 +297,18 @@ function M.attach(host, root_winid, mouse, subwins, target)
     update()
   end
 
-  -- `enter_subwins`: <CR> and clicks focus a subwindow under the cursor;
+  -- `enter_subwins`: <CR> and clicks act on a subwindow under the cursor;
   -- <Space> passes false and only activates roles. `via_click`: clicks enter
   -- text fields in INSERT mode (subwin.lua's click_insert policy) — a
   -- pointer user may have no keyboard; <CR> users have `i` right there.
+  -- `activate_at` focuses the subwindow AND runs its own interaction once, so
+  -- a button in a container is pressed in ONE <CR> (focus crosses in, the
+  -- container's layer presses the role or hops into a nested subwindow) — no
+  -- more "one <CR> to enter, one to act" at each level.
   local function activate(enter_subwins, via_click)
     if enter_subwins and subwins then
       local row, x = cursor_cell()
-      if row and subwins.enter_at(row, x, via_click) then
+      if row and subwins.activate_at(row, x, via_click) then
         return
       end
     end
@@ -384,6 +389,10 @@ function M.attach(host, root_winid, mouse, subwins, target)
 
   return {
     update = update,
+    -- Exposed so a parent's subwin manager can delegate activation into this
+    -- (container) layer after focusing it — the recursive half of
+    -- `subwins.activate_at`.
+    activate = activate,
     teardown = function()
       pcall(vim.api.nvim_del_augroup_by_id, group)
       if saved_mousemoveevent ~= nil then

@@ -51,6 +51,7 @@ local M = {}
 ---@class SubwinManager
 ---@field sync fun(damage?: { top: integer, bot: integer }|false)  reconcile floats against host.subwins and reposition them; damage = the flush's spliced rows (false: none, nil: assume all)
 ---@field enter_at fun(row: integer, x: integer, insert?: boolean): boolean  focus the subwindow at root cell (row, x), in insert mode when `insert` and the policy allows; false if none there
+---@field activate_at fun(row: integer, x: integer, via_click?: boolean): boolean  focus the subwindow at (row, x) AND run its interaction once (press a role / hop deeper) — one-keystroke activation across the boundary; false if none there
 ---@field teardown fun()  destroy all floats/buffers and the autocmds
 
 ---@param bufnr integer
@@ -1182,9 +1183,31 @@ function M.attach(host, root_winid, opts)
 		return false
 	end
 
+	-- Like enter_at, but also RUNS the entered subwindow's own interaction once
+	-- it has focus — so <CR>/click over a button inside a container presses it
+	-- in a single keystroke instead of "one to enter, one to press". Only a
+	-- container has an interaction layer to delegate to; a text_input/raw_buffer
+	-- is just focused (its enter IS the whole action). Recurses through nesting:
+	-- the container's activate calls its OWN activate_at, so a button any number
+	-- of containers deep is one <CR>.
+	local function activate_at(row, x, via_click)
+		for _, entry in pairs(floats) do
+			local r = entry.node.rect or entry.node.content
+			if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
+				local ok = enter(entry, row, x, via_click)
+				if ok and entry.child_interact then
+					entry.child_interact.activate(true, via_click)
+				end
+				return ok
+			end
+		end
+		return false
+	end
+
 	return {
 		sync = sync,
 		enter_at = enter_at,
+		activate_at = activate_at,
 		teardown = function()
 			for _, entry in pairs(floats) do
 				destroy(entry) -- before the augroup goes: destroy clears per-buffer autocmds through it
