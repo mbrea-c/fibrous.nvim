@@ -288,6 +288,12 @@ describe("inline.mount stacking and modal chrome", function()
     local before = #vim.api.nvim_list_wins()
     local handle = mount.floating(Hello, {}, { width = 10, height = 3, backdrop = true })
 
+    -- The backdrop sits one z-level below the root, covering EVERYTHING
+    -- behind the app. nvim's compositor can't blend floats through a
+    -- winblend float, so lower floats (docked fibrous apps included) are
+    -- hidden outright while normal windows dim — obscuring the page
+    -- furniture is the intended modal effect (user decision over leaving
+    -- it visible-but-undimmed below the backdrop).
     local backdrop
     for _, w in ipairs(vim.api.nvim_list_wins()) do
       local cfg = vim.api.nvim_win_get_config(w)

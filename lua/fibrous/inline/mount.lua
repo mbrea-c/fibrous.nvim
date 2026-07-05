@@ -167,7 +167,7 @@ end
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
 ---@field zindex? integer   root float zindex (default 50, nvim's float default); subwindow levels stack root+1
 ---@field border? string|string[]  nvim_open_win border for the root float
----@field backdrop? boolean|integer  dim the editor behind the app: a full-screen, non-focusable float one z-level below the root (FibrousBackdrop + winblend; a number IS the blend, true = 60). Needs termguicolors to blend rather than block.
+---@field backdrop? boolean|integer  dim the editor behind the app: a full-screen, non-focusable float one z-level below the root (FibrousBackdrop + winblend; a number IS the blend, true = 60). NB nvim's compositor can't blend floats through a winblend float: normal windows behind the backdrop DIM, floats behind it (pane-anchored fibrous apps included) are hidden outright — the intended modal effect. Needs termguicolors to blend rather than block.
 
 -- Mount `component` as a standalone floating application.
 ---@param component Component
@@ -214,8 +214,13 @@ function M.floating(component, props, opts)
 		end,
 	})
 	-- The backdrop: one full-editor, non-focusable scratch float one z-level
-	-- BELOW the root, dimming everything behind the app. Its whole lifecycle
+	-- below the root, covering everything behind the app. Its whole lifecycle
 	-- rides the mount's: resized in sync(), closed as an attachment teardown.
+	-- NB the compositor can't blend floats through a winblend float — lower
+	-- floats (pane-anchored fibrous apps included) are HIDDEN outright while
+	-- normal windows dim. Obscuring the page furniture is the intended modal
+	-- effect (decided over the alternative — backdrop below the furniture,
+	-- which left it visible but undimmed).
 	local backdrop_win
 	if opts.backdrop then
 		local blend = type(opts.backdrop) == "number" and opts.backdrop or 60

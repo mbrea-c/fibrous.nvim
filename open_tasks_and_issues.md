@@ -1711,15 +1711,29 @@ same-size mid-replace over memo'd entry components.
   root+1. Plus two mount.floating opts for modal-shaped apps:
   - `border` — passed through to the root float (persists across relayout).
   - `backdrop` — Snacks-style editor dim: ONE full-screen non-focusable
-    scratch float one z-level below the root (`FibrousBackdrop` default hl,
-    bg=#000000 + winblend; `backdrop = <n>` sets the blend, true = 60; needs
-    termguicolors to blend rather than block). Lifecycle rides the mount's:
-    resized in sync(), closed as an attachment teardown — no autocmds of its
-    own. Deliberately NOT a "Modal" widget: modal remains an app-level
-    pattern; fibrous provides the primitives.
+    scratch float (`FibrousBackdrop` default hl, bg=#000000 + winblend;
+    `backdrop = <n>` sets the blend, true = 60; needs termguicolors to
+    blend rather than block). Lifecycle rides the mount's: resized in
+    sync(), closed as an attachment teardown — no autocmds of its own.
+    Deliberately NOT a "Modal" widget: modal remains an app-level pattern;
+    fibrous provides the primitives.
   Specs: mount_spec +4 (stacking, zindex override, backdrop lifecycle,
   border persistence); style_state_spec's subwin finder updated (60 → 51).
   Suite 311/0.
+  FOLLOW-UP (same day, user bug report — "panel blanked out under the
+  modal"): diagnosed against the composed screen (demo in a :terminal of a
+  headless host): nvim's compositor does NOT blend floats through a
+  winblend float — anything below it is hidden and the blend samples the
+  BASE GRID only. Two candidate placements: (a) backdrop UNDER the
+  pane-anchored stacks (z=5) — normal windows dim, page furniture stays
+  visible but undimmed; (b) backdrop one z-level below the root (49) —
+  normal windows dim, page furniture is OBSCURED outright. Shipped (a)
+  first; USER DECISION reverted to (b): a modal should obscure the panel,
+  not float over a bright one. So: backdrop z = root-1, floats beneath it
+  disappear by design, documented on the opt. Also learned:
+  `nvim_win_set_config` zindex changes don't re-sort the compositor's draw
+  order for an existing float (a fresh float at the same z behaves
+  correctly) — diagnose stacking with fresh floats only.
 
 ### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
 
