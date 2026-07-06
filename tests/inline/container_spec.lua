@@ -509,6 +509,51 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
+  it("hovering an unfocused container never scrolls it, whatever the global scrolloff", function()
+    -- The parent-driven hover nudges the (unfocused) container's cursor to
+    -- follow the pointer. With the user's global 'scrolloff' set, landing that
+    -- cursor on a top/bottom visible line would drag the view to keep the
+    -- margin — scrolling the transcript out from under the reader. The float
+    -- pins its own scrolloff/sidescrolloff to 0 so a hover can never move it.
+    local function App()
+      local kids = {}
+      for i = 1, 8 do
+        kids[i] = { comp = ui.label, props = { text = "line" .. i } }
+      end
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "top" } },
+          { comp = ui.container, props = { height = 3 }, children = kids },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 6 })
+    local csub = subwin_of(handle.winid)
+
+    handle.focus()
+    -- scroll a middle slice into view (room to scroll either way)
+    vim.api.nvim_win_call(csub, function()
+      vim.fn.winrestview({ topline = 4, lnum = 4, col = 0 })
+    end)
+    handle.relayout()
+    local topline = vim.fn.getwininfo(csub)[1].topline
+    assert.is_true(topline > 1)
+
+    -- with a nonzero global scrolloff, an unpinned window scrolls to keep the
+    -- margin above the cursor the hover parks on the top visible line
+    local saved = vim.o.scrolloff
+    vim.o.scrolloff = 5
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 1 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
+    local after = vim.fn.getwininfo(csub)[1].topline
+    vim.o.scrolloff = saved
+
+    assert.equal(topline, after)
+    handle.unmount()
+  end)
+
   it("on_create hands the app the container's buffer and float once, at creation", function()
     local created = {}
     local function App()

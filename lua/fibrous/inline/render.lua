@@ -278,6 +278,9 @@ end
 --   * anything else → repaint root: its old and new areas are blanked,
 --     ancestor backgrounds restored over them, then the subtree painted
 --     exactly like a full paint would.
+-- A descending container also emits a blank-only root (old area, no new node)
+-- for each child whose fiber it dropped this frame: nothing repaints those
+-- cells otherwise, so they would keep last frame's glyphs.
 -- Repaint roots are collected first and applied blank-all-then-paint-all, so
 -- one root's vacated area can't clobber another's fresh paint. Sibling rects
 -- never overlap (the box model has no negative margins), which is what makes
@@ -322,6 +325,29 @@ function M.update(c, tree)
 			if bg then
 				bgs = vim.list_extend({ { rect = rect, hl = bg } }, bgs)
 			end
+			-- A child present last frame but gone now (the positional reconciler
+			-- dropped its fiber — e.g. the TODO submit replaces the trailing input
+			-- with a checkbox and remounts the input one row down) leaves its old
+			-- cells orphaned: the surviving children only repaint their own,
+			-- possibly narrower, rects and this container is descending rather than
+			-- repainting wholesale. Blank each removed child's old box (a repaint
+			-- root with no new node — blank + ancestor-bg restore, nothing painted).
+			-- `_drop` (set by the build only when the reconciler actually dropped a
+			-- child fiber) gates this O(children) diff: an append/stream-only list —
+			-- the transcript hot path — never enters it.
+			if node._drop and prev and prev.children then
+				local kept = {}
+				for _, child in ipairs(node.children or {}) do
+					if child.fiber then
+						kept[child.fiber] = true
+					end
+				end
+				for _, pchild in ipairs(prev.children) do
+					if pchild.fiber and not kept[pchild.fiber] and pchild.rect then
+						roots[#roots + 1] = { bgs = bgs, old = pchild.rect }
+					end
+				end
+			end
 			for _, child in ipairs(node.children or {}) do
 				walk(child, bgs)
 			end
@@ -341,9 +367,11 @@ function M.update(c, tree)
 		end
 	end
 	for _, r in ipairs(roots) do
-		c:blank_rect(r.node.rect)
-		mark_rows(r.node.rect)
-		if r.old and not rects_equal(r.old, r.node.rect) then
+		if r.node then
+			c:blank_rect(r.node.rect)
+			mark_rows(r.node.rect)
+		end
+		if r.old and (not r.node or not rects_equal(r.old, r.node.rect)) then
 			c:blank_rect(r.old)
 			mark_rows(r.old)
 		end
@@ -353,7 +381,9 @@ function M.update(c, tree)
 	for _, r in ipairs(roots) do
 		for i = #r.bgs, 1, -1 do -- outermost background first
 			local bg = r.bgs[i]
-			c:hl_rect(intersect(bg.rect, r.node.rect), bg.hl)
+			if r.node then
+				c:hl_rect(intersect(bg.rect, r.node.rect), bg.hl)
+			end
 			if r.old then
 				c:hl_rect(intersect(bg.rect, r.old), bg.hl)
 			end
@@ -361,7 +391,9 @@ function M.update(c, tree)
 	end
 	-- ...phase 3: paint each changed subtree, exactly as a full paint would.
 	for _, r in ipairs(roots) do
-		visit(c, r.node)
+		if r.node then -- a blank-only root (removed child's box) has no node to paint
+			visit(c, r.node)
+		end
 	end
 
 	local out = {}

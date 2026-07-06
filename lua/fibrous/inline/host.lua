@@ -230,8 +230,13 @@ local function build_node(fiber, ctx)
 			node._keep = true
 		end
 		node._old_rect = prev.rect
+		-- `_drop`: the reconciler dropped a child fiber under this node this frame
+		-- (a positional replace or a trailing removal). render.update scans for the
+		-- removed children's orphaned cells only when it is set — the transcript
+		-- append/stream path drops nothing and pays nothing.
 		if CONTAINERS[tag] then
 			node._prev = prev
+			node._drop = fiber._child_dropped or nil
 		end
 		if node.inner and prev.inner then
 			-- the inner root gets the same incremental-paint bookkeeping, so a
@@ -242,8 +247,10 @@ local function build_node(fiber, ctx)
 			end
 			node.inner._old_rect = prev.inner.rect
 			node.inner._prev = prev.inner
+			node.inner._drop = fiber._child_dropped or nil
 		end
 	end
+	fiber._child_dropped = nil -- consumed into the node(s) built this frame
 	fiber._node = node
 	return node
 end

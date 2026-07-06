@@ -155,6 +155,9 @@ function M.reconcile_children(parent, specs, env)
 		else
 			if existing then
 				M.unmount_fiber(existing, env)
+				-- a positionally-dropped fiber: the incremental painter must blank
+				-- its old cells (a same-or-larger new child at this index won't).
+				parent._child_dropped = true
 			end
 			local fiber = M.create_fiber(spec, env)
 			fiber.parent = parent
@@ -164,6 +167,7 @@ function M.reconcile_children(parent, specs, env)
 	end
 	for i = #specs + 1, #old do
 		M.unmount_fiber(old[i], env)
+		parent._child_dropped = true -- trailing removal, same reason
 	end
 	parent.child_fibers = next_children
 end

@@ -210,6 +210,45 @@ describe("inline.host damage tracking", function()
 		root:unmount()
 	end)
 
+	it("replacing a widget with a narrower sibling clears the cells it vacated", function()
+		-- The TODO pattern: a bordered widget is the last child; a state change
+		-- inserts a NARROWER sibling at its index, so the positional reconciler
+		-- unmounts the widget's fiber (type change) and remounts it one row down.
+		-- The incremental painter must blank the removed widget's old box — the
+		-- new narrow sibling covers only part of it, and the parent col descends
+		-- (chrome intact) rather than repainting wholesale. Reference: a fresh
+		-- full paint straight at the target state.
+		local function make(initial)
+			local setter
+			local function App(ctx)
+				local s = ctx.use_state(initial)
+				setter = s
+				local children = { { comp = text, props = { text = "head" } } }
+				for i = 1, s.get() do
+					children[#children + 1] = { comp = text, props = { text = "item" .. i } }
+				end
+				children[#children + 1] = { comp = text_input, props = { style = { border = true } } }
+				return { comp = col, props = { gap = 1 }, children = children }
+			end
+			local host = inline_host.new({
+				get_size = function()
+					return { width = 12, height = 12 }
+				end,
+			})
+			local root = runtime.create_root(App, {}, { host = host }):render()
+			return host, root, setter
+		end
+
+		local h1, r1, set1 = make(0)
+		set1.set(1) -- shift the bordered input down, a narrow text takes its old row
+
+		local h2, r2 = make(1) -- the same tree, painted from scratch
+		assert.same(lines_of(h2.bufnr), lines_of(h1.bufnr))
+
+		r1:unmount()
+		r2:unmount()
+	end)
+
 	it("on_flush reports the damage: full on first paint, the row range after, nil on no change", function()
 		local damages = {}
 		local setter

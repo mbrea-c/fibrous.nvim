@@ -992,6 +992,14 @@ function M.attach(host, root_winid, opts)
 		-- text_input never wraps (rect math); raw_buffer is the native-wrapping
 		-- escape hatch and wraps unless told not to.
 		vim.wo[winid].wrap = node.subwin == "raw_buffer" and props.wrap ~= false
+		-- Pin the scroll margins to 0 (window-local, overriding the user's global
+		-- 'scrolloff'/'sidescrolloff'): a container's cursor is nudged to follow
+		-- the parent's pointer during unfocused hover (hover_at), and a nonzero
+		-- margin would drag the view to keep space around that cursor — scrolling
+		-- the content out from under the reader. translate already lands the
+		-- cursor on a visible line; this keeps the land from moving the view.
+		vim.wo[winid].scrolloff = 0
+		vim.wo[winid].sidescrolloff = 0
 
 		local entry = { bufnr = bufnr, winid = winid, node = node, owned = owned, maps = {} }
 		map_motions(entry)

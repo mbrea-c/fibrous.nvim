@@ -15,21 +15,50 @@
 ## Bugs
 
 - [x] Relayout (e.g. resize) clears visual selection
+
   - Fixed: neutralized nui's cursor-wiggle relayout workaround (no window switch
     / cursor move on relayout). Was pinned by
     `tests/mount/relayout_preserves_mode_spec.lua` (deleted with the nui host,
     2026-07-03).
+
 - Split pane synchronization issues
+
   - [x] When mounted on a pane, closing the floats with `:q` leaves the pane
     open — resolved by the inline mount (`wire()`'s WinClosed on the root float
     closes the pane in `on_teardown`); pinned 2026-07-03 by the mount_spec test
     ":q on the root float tears down the app AND its pane".
+
 - [x] Pre-existing suite failures (2, nui-host relayout specs; confirmed on a
   clean tree 2026-07-02, unrelated to the inline host work):
   `relayout_no_sync_redraw_spec` (expected 0 redraws, got 4) and
   `relayout_preserves_mode_spec` (visual mode dropped to normal) — likely an
   nvim-version behavior change; both guarded the old nui host and were deleted
   with it (task 9 migration, 2026-07-03). Suite fully green since.
+
+- [x] In fibrous-docs playground TODO list widgets, when submitting part of the
+  text box remains (I imagine damage tracking misses it?). It's kind of like the
+  input box is "left behind"; the new checkbox is painted over part of it
+  - Root cause: the incremental canvas painter (`render.update`) blanked the old
+    rect only of nodes still in the tree (`_old_rect`). A REMOVED child — the
+    positional reconciler drops the trailing input's fiber and remounts it one
+    row down, a narrower checkbox taking its old index — left its cells orphaned:
+    surviving siblings only repaint their own (smaller) rects and the parent col
+    descends (chrome intact) instead of repainting wholesale. Fixed: a
+    descending container now emits a blank-only repaint root (old area, no new
+    node) for each child whose fiber it dropped this frame. The O(children) diff
+    is gated by a `_drop` flag the reconciler sets only when it actually drops a
+    child fiber, so the transcript append/stream hot path pays nothing
+    (bench-transcript: stream 0.64ms, replace 0.60ms, append 0.85ms — all at or
+    below the pre-fix baseline). Pinned by `damage_spec` "replacing a widget with
+    a narrower sibling clears the cells it vacated" (incremental update must equal
+    a from-scratch paint). Suite 320/0.
+
+- [x] Hovering an UNFOCUSED container (e.g. weave's transcript) scrolled it when
+  the user had a nonzero global `scrolloff` — the parent-driven hover nudges the
+  container's cursor to follow the pointer, and the margin dragged the view.
+  Fixed in `subwin.create`: float windows pin `scrolloff`/`sidescrolloff` to 0
+  (window-local). Pinned by `container_spec` "hovering an unfocused container
+  never scrolls it, whatever the global scrolloff".
 
 ## Website / WASM playground (`website_design.md`)
 
@@ -460,59 +489,56 @@ Incremental build plan (each step has a runnable smoke check under headless
   cell; >8px movement disqualifies the tap.
 - [x] Mobile follow-ups from the touch spike — DONE (2026-07-04), all in Tier
   2's `web/` (ships to the site via the fibrous-docs flake pin):
-  - **Virtual keyboard**: `#kbd`, a visually-hidden textarea IME relay.
-    Physical keys are handled document-level via keyToNvim (preventDefault
-    also stops the textarea mutating — nothing delivers twice); soft keyboards
-    bypass keydown (keyCode 229) and speak input/composition events, decoded
-    against a one-char sentinel (so backspace always has something to delete)
-    and forwarded as nvim_input text (`<` → `<lt>`, newlines → `<CR>`). On
-    coarse-pointer devices focus (= keyboard visibility) follows the guest
-    mode via a renderer.onMode hook. Viewport meta
-    `interactive-widget=resizes-content` \+ `100dvh` sizing means the keyboard
-    shrinks the viewport and the grid re-fits above it through the normal
-    resize path.
+  - **Virtual keyboard**: `#kbd`, a visually-hidden textarea IME relay. Physical
+    keys are handled document-level via keyToNvim (preventDefault also stops the
+    textarea mutating — nothing delivers twice); soft keyboards bypass keydown
+    (keyCode 229) and speak input/composition events, decoded against a one-char
+    sentinel (so backspace always has something to delete) and forwarded as
+    nvim_input text (`<` → `<lt>`, newlines → `<CR>`). On coarse-pointer devices
+    focus (= keyboard visibility) follows the guest mode via a renderer.onMode
+    hook. Viewport meta `interactive-widget=resizes-content` + `100dvh` sizing
+    means the keyboard shrinks the viewport and the grid re-fits above it
+    through the normal resize path.
   - **Android OSK fix** (2026-07-04, real-device bug report): the original
-    mode-following was broken two ways. (1) Its summon regex included
-    `replace`, but nvim's ui_flush fakes `mode_change("replace")` whenever the
-    cursor sits behind a higher-zindex float (the same artifact cursorshim.lua
-    counters in fibrous-docs) — scrolling the float-heavy fibrous UI emitted
-    replace/normal bursts, and since Android only raises the OSK on focus
-    within the transient-activation window after a touch, the keyboard
-    appeared erratically mid-scroll and flickered. (2) Chicken-and-egg: taps
-    leave the guest in normal mode and you can't press `i` without a keyboard,
-    so the OSK never came up on purpose. Fix: focus policy extracted into
-    DOM-free `web/keyboard.js` (node-tested, 9 specs, in
-    checks.web-mouse-unit) — only `insert|cmdline|terminal` summon, only
-    `normal|visual|operator` dismiss (debounced 200ms), everything else
-    (crucially `replace`) is NEUTRAL; a visible ⌨ button (`#kbdbtn`,
-    coarse-pointer only) summons inside a real tap gesture and PINS the
-    keyboard through normal-mode navigation until tapped again; canvas taps
-    re-summon when the guest is in an insert-ish mode (recovers from
-    back-button dismissal). Still needs a real-device pass.
+    mode-following was broken two ways. (1) Its summon regex included `replace`,
+    but nvim's ui_flush fakes `mode_change("replace")` whenever the cursor sits
+    behind a higher-zindex float (the same artifact cursorshim.lua counters in
+    fibrous-docs) — scrolling the float-heavy fibrous UI emitted replace/normal
+    bursts, and since Android only raises the OSK on focus within the
+    transient-activation window after a touch, the keyboard appeared erratically
+    mid-scroll and flickered. (2) Chicken-and-egg: taps leave the guest in
+    normal mode and you can't press `i` without a keyboard, so the OSK never
+    came up on purpose. Fix: focus policy extracted into DOM-free
+    `web/keyboard.js` (node-tested, 9 specs, in checks.web-mouse-unit) — only
+    `insert|cmdline|terminal` summon, only `normal|visual|operator` dismiss
+    (debounced 200ms), everything else (crucially `replace`) is NEUTRAL; a
+    visible ⌨ button (`#kbdbtn`, coarse-pointer only) summons inside a real tap
+    gesture and PINS the keyboard through normal-mode navigation until tapped
+    again; canvas taps re-summon when the guest is in an insert-ish mode
+    (recovers from back-button dismissal). Still needs a real-device pass.
 - [x] Click-to-insert — DONE (2026-07-04), fibrous-side completion of the OSK
   story: clicking a text field enters it in INSERT mode, GUI-style (a pointer
-  user may have no keyboard; on mobile insert mode is also what summons the
-  OSK via mode-following). `<CR>` deliberately keeps normal-mode entry —
-  whoever pressed it has a keyboard and `i` is right there. Two halves in
-  subwin.lua behind one `click_insert(entry)` policy (text_input default on,
-  raw_buffer default off, `insert_on_click` prop overrides): the root
-  `<LeftRelease>` → `activate(true, true)` → `enter_at(row, x, insert)` path
-  (the default render="focus" case — the click lands on the mirror), and a
-  normal-mode-only `<LeftRelease>` map on each float buffer (visible
-  render="always" floats take clicks natively; n-mode-only means a
-  drag-selection's release, visual mode by then, never fires it). Clicks past
-  EOL append (`startinsert!`; enter_at compares the cell to the line width,
-  the native map uses `getmousepos().coladd`). 7 specs in subwin_spec
-  ("click to insert"); the docs playground editor opts in with
-  `insert_on_click = true` on its raw_buffer.
-- [x] Mirror/entry desync on scrolled widgets — DONE (2026-07-04, reported
-  from the playground: focusing an editor "teleports" the cursor). Three bugs
-  of one family in subwin.lua, all "translated through buffer coordinates
-  where screen coordinates were meant":
+  user may have no keyboard; on mobile insert mode is also what summons the OSK
+  via mode-following). `<CR>` deliberately keeps normal-mode entry — whoever
+  pressed it has a keyboard and `i` is right there. Two halves in subwin.lua
+  behind one `click_insert(entry)` policy (text_input default on, raw_buffer
+  default off, `insert_on_click` prop overrides): the root `<LeftRelease>` →
+  `activate(true, true)` → `enter_at(row, x, insert)` path (the default
+  render="focus" case — the click lands on the mirror), and a normal-mode-only
+  `<LeftRelease>` map on each float buffer (visible render="always" floats take
+  clicks natively; n-mode-only means a drag-selection's release, visual mode by
+  then, never fires it). Clicks past EOL append (`startinsert!`; enter_at
+  compares the cell to the line width, the native map uses
+  `getmousepos().coladd`). 7 specs in subwin_spec ("click to insert"); the docs
+  playground editor opts in with `insert_on_click = true` on its raw_buffer.
+- [x] Mirror/entry desync on scrolled widgets — DONE (2026-07-04, reported from
+  the playground: focusing an editor "teleports" the cursor). Three bugs of one
+  family in subwin.lua, all "translated through buffer coordinates where screen
+  coordinates were meant":
   - `enter()` mapped root cell → buffer line as `row - c.y + 1`, assuming the
     widget shows its buffer from line 1 — wrong by `base - 1` once the widget
-    has scroll state of its own (which is exactly what the mirror renders
-    from); same for the column vs the widget's own `leftcol`. Now composes
+    has scroll state of its own (which is exactly what the mirror renders from);
+    same for the column vs the widget's own `leftcol`. Now composes
     `entry.base`/`entry.leftcol` (and the click-to-insert past-EOL check uses
     the composed cell).
   - `exit_dir()` had the mirror image: horizontal exits kept the BUFFER row
@@ -522,60 +548,59 @@ Incremental build plan (each step has a runnable smoke check under headless
     branch, but a page scroll resizes a FOCUSED float too (set_config always
     runs) and nvim re-anchors its topline around the cursor. The leave-time
     reconstruction `base = topline - clip` then subtracted a stale clip — a
-    phantom scroll the mirror rendered (the next unfocused reposition
-    cancelled the error again, which is why it looked intermittent). Clip
-    bookkeeping now tracks the applied geometry unconditionally; the view
-    itself is still never touched while focused.
-  4 specs in subwin_spec ("entry/exit through a scrolled widget"). Spec
-  gotcha discovered on the way: a red spec aborts before its
-  `handle.unmount()`, so mounts leak into later specs — the winid-pattern
-  assertion in "WinScrolled resync is wired" fails for any red spec ABOVE it
-  in the file; heals at green.
+    phantom scroll the mirror rendered (the next unfocused reposition cancelled
+    the error again, which is why it looked intermittent). Clip bookkeeping now
+    tracks the applied geometry unconditionally; the view itself is still never
+    touched while focused. 4 specs in subwin_spec ("entry/exit through a
+    scrolled widget"). Spec gotcha discovered on the way: a red spec aborts
+    before its `handle.unmount()`, so mounts leak into later specs — the
+    winid-pattern assertion in "WinScrolled resync is wired" fails for any red
+    spec ABOVE it in the file; heals at green.
 - [x] WRAP teleport ("directly going `i` teleports a few lines", 2026-07-04):
   the fourth member of the family, and the one the playground actually hits —
   raw_buffer WRAPS by default (the playground editor passes no `wrap`), and
   under wrap one buffer line occupies several box rows, so `enter()`'s
-  base-arithmetic row→line mapping is off by one line per wrapped row above
-  the cursor (any code line wider than the editor content — guaranteed on
-  narrow viewports where the editor squeezes below 80). Fix: `enter()` and
-  `exit_dir()` translate through `entry.mirror_map` — the per-box-row
-  {lnum, cell0} record mirror() already builds, i.e. literally "land where
-  the mirror says the user is looking" — with the base/leftcol arithmetic
-  kept as fallback for blank padding rows and never-mirrored widgets. 2 more
-  specs (wrapped entry, wrapped horizontal exit); suite 267/0. Known
-  remaining divergence (accepted, pre-existing): a top-clipped WRAPPED
-  widget's REVEAL composes `topline = base + clip` in buffer lines while the
-  clip is display rows — the revealed float can show a slightly different
-  slice than the mirror did; the cursor still lands on the mirror-correct
-  line (set_cursor re-scrolls the float to it).
+  base-arithmetic row→line mapping is off by one line per wrapped row above the
+  cursor (any code line wider than the editor content — guaranteed on narrow
+  viewports where the editor squeezes below 80). Fix: `enter()` and `exit_dir()`
+  translate through `entry.mirror_map` — the per-box-row {lnum, cell0} record
+  mirror() already builds, i.e. literally "land where the mirror says the user
+  is looking" — with the base/leftcol arithmetic kept as fallback for blank
+  padding rows and never-mirrored widgets. 2 more specs (wrapped entry, wrapped
+  horizontal exit); suite 267/0. Known remaining divergence (accepted,
+  pre-existing): a top-clipped WRAPPED widget's REVEAL composes
+  `topline = base + clip` in buffer lines while the clip is display rows — the
+  revealed float can show a slightly different slice than the mirror did; the
+  cursor still lands on the mirror-correct line (set_cursor re-scrolls the float
+  to it).
   - **Momentum/fling scrolling**: in the DOM-free mouse adapter (TDD'd, 13/13
     node tests): touchmove samples a smoothed velocity; releasing above 0.25
-    px/ms keeps scrolling with v(t) = v₀·e^(−t/325ms) integrated in closed
-    form per animation frame (frame pacing can't change the distance),
-    draining px into wheel ticks at the release cell. A finger during a fling
-    stops it and is consumed (no accidental click); touchcancel (pinch start)
-    abandons the gesture. `now`/`schedule` are injectable — the unit tests
-    drive a fake clock.
-  - **Pinch-zoom**: two fingers rescale the font px (clamped 8–40, live) via
-    the new renderer.setFontPx (re-measures cells, resizes + redraws the
-    canvas), mutates the adapter's cell metrics in place, and debounce-fires
+    px/ms keeps scrolling with v(t) = v₀·e^(−t/325ms) integrated in closed form
+    per animation frame (frame pacing can't change the distance), draining px
+    into wheel ticks at the release cell. A finger during a fling stops it and
+    is consumed (no accidental click); touchcancel (pinch start) abandons the
+    gesture. `now`/`schedule` are injectable — the unit tests drive a fake
+    clock.
+  - **Pinch-zoom**: two fingers rescale the font px (clamped 8–40, live) via the
+    new renderer.setFontPx (re-measures cells, resizes + redraws the canvas),
+    mutates the adapter's cell metrics in place, and debounce-fires
     `nvim_ui_try_resize` so the grid re-fits the viewport at the new density.
 - [x] Loading indicator — DONE (2026-07-04): `#loader` overlay (logo, gradient
   progress bar, status line); nvim.wasm + tarball downloads stream through a
   counting TransformStream (Content-Length-aware — determinate bar when known,
-  shimmer + byte count when not), compile/unpack phases shimmer; hidden when
-  the editor goes live.
+  shimmer + byte count when not), compile/unpack phases shimmer; hidden when the
+  editor goes live.
 - [ ] Keyboard-theft mitigation: design navigation around Vim primitives
   (leader, arrows, buffer-local hotkeys) — avoid browser-reserved
   `Ctrl+W`/`Ctrl+N`
 - [x] Viewport stabilization CSS — DONE (2026-07-04): `touch-action: none`,
   `user-select: none` (+ webkit variants), `overscroll-behavior: none`,
   tap-highlight suppression on html/body/#gridwrap/#grid;
-  `maximum-scale=1, user-scalable=no` in the viewport meta (the guest owns
-  pinch now).
-- [x] Unsupported-browser UX — DONE (2026-07-04): the JSPI printout replaced
-  by a styled `#nosupport` card: Chrome/Edge/Chromium 137+ or Firefox 152+
-  work out of the box, Firefox 139–151 needs
+  `maximum-scale=1, user-scalable=no` in the viewport meta (the guest owns pinch
+  now).
+- [x] Unsupported-browser UX — DONE (2026-07-04): the JSPI printout replaced by
+  a styled `#nosupport` card: Chrome/Edge/Chromium 137+ or Firefox 152+ work out
+  of the box, Firefox 139–151 needs
   `javascript.options.wasm_js_promise_integration` in about:config + full
   restart, Safari unsupported; the headless `nvim --version` proof-of-life
   streams into the card.
@@ -1446,8 +1471,8 @@ shrinking to nothing on narrow (mobile) viewports.
     sibling can still absorb the re-share (the naive clamp-everything would
     overflow);
   - cross-axis stretch: capped by max (min needs nothing — measure floors it).
-  Bench: pure layout+paint 1.63 → ~1.70ms (+4%) on the everything-fresh path
-  only; memoized frames skip layout entirely. Suite 247/0.
+    Bench: pure layout+paint 1.63 → ~1.70ms (+4%) on the everything-fresh path
+    only; memoized frames skip layout entirely. Suite 247/0.
 - [x] J2. **Docs: full-width separators** — the hardcoded `string.rep("─", 100)`
   label replaced by an empty col with only a top border: stretches to the page
   width (default cross-axis align), border chars draw the rule at any size.
@@ -1466,18 +1491,18 @@ shrinking to nothing on narrow (mobile) viewports.
 - [x] K1. **Bundled fonts for the wasm site** (user: JuliaMono, appearance must
   not depend on system fonts; flake-configurable). `mkNvimWasmWeb` grew
   `font.faces = [ { file, weight?, style? } ]`: faces copy into the webroot's
-  `fonts/` and land in config.json; `web/main.js` FontFace-loads them BEFORE
-  the renderer exists (cell metrics come from measureText — measuring against
-  a fallback font would bake the wrong cell size into the session). A failed
-  face falls back to the monospace stack. fibrous-docs sets JuliaMono px 17:
-  raw TTFs are ~3.3 MB PER FACE, so a `webfont` derivation pyftsubsets each
-  face (Latin, punctuation, arrows, math, box drawing/blocks/shapes,
-  powerline) into woff2 — Regular+Bold+Italic total ~280 KB (verified: 1073
-  glyphs/face, all site codepoints present). Swap `pkgs.julia-mono` for e.g.
-  iosevka-bin in the docs flake to change the face.
-- [x] K2. **Flat style props REMOVED** (user: "no users yet — just rip it
-  out", upgrading the planned deprecation sweep). props.style is now the one
-  styling vocabulary: `hl` = fill, `text_hl` = foreground, `border_hl`,
+  `fonts/` and land in config.json; `web/main.js` FontFace-loads them BEFORE the
+  renderer exists (cell metrics come from measureText — measuring against a
+  fallback font would bake the wrong cell size into the session). A failed face
+  falls back to the monospace stack. fibrous-docs sets JuliaMono px 17: raw TTFs
+  are ~3.3 MB PER FACE, so a `webfont` derivation pyftsubsets each face (Latin,
+  punctuation, arrows, math, box drawing/blocks/shapes, powerline) into woff2 —
+  Regular+Bold+Italic total ~280 KB (verified: 1073 glyphs/face, all site
+  codepoints present). Swap `pkgs.julia-mono` for e.g. iosevka-bin in the docs
+  flake to change the face.
+- [x] K2. **Flat style props REMOVED** (user: "no users yet — just rip it out",
+  upgrading the planned deprecation sweep). props.style is now the one styling
+  vocabulary: `hl` = fill, `text_hl` = foreground, `border_hl`,
   border/padding/margin, `_hover`/`_focus`. The removed flat props (`hl`,
   `text_hl`, `bg`, `border`, `padding`, `margin`, `hover_hl`) ERROR loudly in
   style.normalize rather than silently doing nothing — component `hl` used to
@@ -1486,11 +1511,11 @@ shrinking to nothing on narrow (mobile) viewports.
   (node_props is a plain copy). Raw layout trees are untouched: box.resolve
   still reads border/padding/margin off props (the engine's input format, not
   the component API), and render.lua still reads raw-tree props.hl/text_hl.
-  - TDD: removal-error specs in style_spec + components_spec (originally
-    written red as warn-once-shim specs; the user then chose removal);
-    flat-sugar specs rewritten in style-table form.
-  - Migrated: every host-path spec (the error made stragglers test failures —
-    34 red → 247/0 green), bench/run.lua, all examples/, fibrous-docs webapp
+  - TDD: removal-error specs in style_spec + components_spec (originally written
+    red as warn-once-shim specs; the user then chose removal); flat-sugar specs
+    rewritten in style-table form.
+  - Migrated: every host-path spec (the error made stragglers test failures — 34
+    red → 247/0 green), bench/run.lua, all examples/, fibrous-docs webapp
     modules + the playground demo code strings + the "boxes" demo prose (the
     demos now TEACH the style vocabulary). Docs suite 7/7; homepage bench
     unchanged (relayout 0.05ms — memo intact).
@@ -1499,105 +1524,108 @@ shrinking to nothing on narrow (mobile) viewports.
 
 - [x] L1. **`ui.animation`** (user-proposed API, kept as designed):
   `{ duration, value = fun(progress): string|Span[], fps? = 30, play? }`.
-  progress lives in [0, 1) — elapsed time modulo duration, an implicit loop
+  progress lives in \[0, 1) — elapsed time modulo duration, an implicit loop
   (bounce = a triangle wave inside value). Design points:
   - Component, not hook: every frame is a subtree-scoped leaf update — the
     memoized fast path (~0.1ms native), instead of re-rendering the consumer.
   - Frame 0 renders synchronously at mount (deterministic, no timer needed).
   - The uv timer calls value() each tick but commits ONLY when the returned
-    spans differ (vim.deep_equal) — buffer writes scale with visible motion,
-    not fps; a dot sitting between cell boundaries costs nothing.
-  - The latest value closure lives in a use_ref, so inline closures don't
-    re-arm the timer; deps (duration, fps normalized, play) do re-arm it.
-  - Cleanup stops+closes the timer with a `stopped` guard (a scheduled fire
-    can be in flight at unmount); value() errors inside the timer stop it and
+    spans differ (vim.deep_equal) — buffer writes scale with visible motion, not
+    fps; a dot sitting between cell boundaries costs nothing.
+  - The latest value closure lives in a use_ref, so inline closures don't re-arm
+    the timer; deps (duration, fps normalized, play) do re-arm it.
+  - Cleanup stops+closes the timer with a `stopped` guard (a scheduled fire can
+    be in flight at unmount); value() errors inside the timer stop it and
     vim.notify once instead of spamming at 30fps (mount-time errors propagate
     normally, so error boundaries catch them).
-  - TDD: tests/inline/animation_spec.lua, 7 specs (sync frame 0, advance +
-    loop wrap, same-value ticks commit nothing via changedtick, unmount stops
-    the timer, play = false freezes, style passthrough, arg validation).
-    Suite 254/0.
-- [x] L2. Docs playground section "Animations": the bouncing-dot bar
-  (duration 1.3s triangle wave) + a slow fps=4 percentage readout; prose
-  explains the frame-diff + scoped-commit economics. home_spec TITLES updated;
-  docs suite 7/7.
+  - TDD: tests/inline/animation_spec.lua, 7 specs (sync frame 0, advance + loop
+    wrap, same-value ticks commit nothing via changedtick, unmount stops the
+    timer, play = false freezes, style passthrough, arg validation). Suite
+    254/0.
+- [x] L2. Docs playground section "Animations": the bouncing-dot bar (duration
+  1.3s triangle wave) + a slow fps=4 percentage readout; prose explains the
+  frame-diff + scoped-commit economics. home_spec TITLES updated; docs suite
+  7/7.
 - [x] L3. Bench scenario "animation": async by nature, so instead of ms/op it
   measures os.clock() CPU over vim.wait(1000) with ONE live animation in the
-  N=100 page, against an idle-loop baseline. Native numbers: idle loop ~0.5
-  ms CPU/s; bouncing dot at 30fps ~21 ms CPU/s at 29 commits/s (~0.7 ms per
+  N=100 page, against an idle-loop baseline. Native numbers: idle loop ~0.5 ms
+  CPU/s; bouncing dot at 30fps ~21 ms CPU/s at 29 commits/s (~0.7 ms per
   committed frame — span flatten + run attribution + scoped commit + timer
-  dispatch, vs 0.12 ms for the bare label-text scoped update); static frame
-  ~2.5 ms CPU/s at 0 commits — the diff-skip saves ~18 ms/s, leaving only
-  30×(value() + deep_equal + dispatch).
+  dispatch, vs 0.12 ms for the bare label-text scoped update); static frame ~2.5
+  ms CPU/s at 0 commits — the diff-skip saves ~18 ms/s, leaving only 30×(value()
+  \+ deep_equal + dispatch).
 
 ### Transcript-scale perf: render bailout + paint descend + canvas growth (2026-07-04, late night)
 
-Driven by remote-clanker.nvim (the ACP client rewrite in `~/src/remote-clanker.nvim`,
-whose transcript is ONE long col of per-entry components): before this round,
-ANY entries mutation at N=1000 entries cost ~50ms — the reconciler re-rendered
-all N children (no bailout), which stamped every fiber dirty and defeated all
-the I1–I4 memo tiers; and in scroll mode every append changed the canvas
-height, discarding the canvas for a full fresh paint. `make bench-transcript`
+Driven by weave.nvim (the ACP client rewrite in `~/src/weave.nvim`, whose
+transcript is ONE long col of per-entry components): before this round, ANY
+entries mutation at N=1000 entries cost ~50ms — the reconciler re-rendered all N
+children (no bailout), which stamped every fiber dirty and defeated all the
+I1–I4 memo tiers; and in scroll mode every append changed the canvas height,
+discarding the canvas for a full fresh paint. `make bench-transcript`
 (bench/transcript.lua, NEW) pins the workload: mount / append / stream-tick /
 same-size mid-replace over memo'd entry components.
 
 - [x] M1. **Reconciler render bailout** (reconciler.lua, VNode `memo = true`):
-  React.memo semantics, per call site. On positional reuse with the same comp,
-  a memo'd FUNCTION component whose props are SHALLOW-equal to the fiber's
-  current props skips render_fiber entirely — subtree untouched, ticks
-  untouched, so host build memo (fiber._node) holds through the parent's
-  re-render. Function components only: a bailed fiber keeps stale
-  children_specs, safe solely because function fibers re-derive children from
-  `rendered` (a host fiber would freeze its children — pinned by the "ignored
-  on host primitives" spec). Own set_state is unaffected (schedules the fiber
-  itself). Composes with the store discipline: reassign arrays, keep unchanged
-  entry OBJECTS reference-stable, build fresh `{ entry = e }` props per render
-  (shallow compare absorbs the fresh table). 9 specs in
-  tests/reactive/memo_bailout_spec.lua (skip/effect-skip, value change, key
-  removal, non-memo default, own-state, subtree skip, tick preservation, type
-  switch, host guard).
+  React.memo semantics, per call site. On positional reuse with the same comp, a
+  memo'd FUNCTION component whose props are SHALLOW-equal to the fiber's current
+  props skips render_fiber entirely — subtree untouched, ticks untouched, so
+  host build memo (fiber.\_node) holds through the parent's re-render. Function
+  components only: a bailed fiber keeps stale children_specs, safe solely
+  because function fibers re-derive children from `rendered` (a host fiber would
+  freeze its children — pinned by the "ignored on host primitives" spec). Own
+  set_state is unaffected (schedules the fiber itself). Composes with the store
+  discipline: reassign arrays, keep unchanged entry OBJECTS reference-stable,
+  build fresh `{ entry = e }` props per render (shallow compare absorbs the
+  fresh table). 9 specs in tests/reactive/memo_bailout_spec.lua
+  (skip/effect-skip, value change, key removal, non-memo default, own-state,
+  subtree skip, tick preservation, type switch, host guard).
+
 - [x] M2. **Container chrome-descend** (render.update + host.build_node
   `_prev`): a container rebuilt BECAUSE IT RE-RENDERED (the list committing a
   new children array) used to become a repaint root — full blank + repaint of
   every entry, O(N) cells, even when N-1 children were `_memo` at their old
   rects. Now build stashes the previous incarnation on rebuilt containers
-  (`_prev`, consumed on every paint path so old nodes never chain), and the
-  walk descends when the rect is unchanged and `chrome_equal`: same bg, same
-  border (sides/chars/corners/hl/title), same border_hl, and NO CHILD LOST —
-  removals still repaint wholesale because only the parent's blanket blank
-  cleans a vanished child's cells (pinned by the "lost trailing child" spec).
+  (`_prev`, consumed on every paint path so old nodes never chain), and the walk
+  descends when the rect is unchanged and `chrome_equal`: same bg, same border
+  (sides/chars/corners/hl/title), same border_hl, and NO CHILD LOST — removals
+  still repaint wholesale because only the parent's blanket blank cleans a
+  vanished child's cells (pinned by the "lost trailing child" spec).
+
 - [x] M3. **Canvas growth** (Canvas:grow + host + growth-descend): scroll-mode
   frames that only get TALLER grow the canvas in place (blank rows appended)
   instead of discarding it; host patches retained arrays with update()'s dirty
   rows plus the virgin grown rows. A CHROME-LESS container whose rect grew
   strictly downward (same x/y/w) descends — old cells right, new area virgin;
   any chrome rejects (bottom border/bg stretch — pinned by the bordered-growth
-  spec). Width change or shrink → full fresh paint as before. Host-level
-  guards: damage_spec "appending splices only the appended rows" (one write,
-  mark ids above survive), memo_spec fresh-mount oracle through two grows.
-- [x] M4. **Numbers** (native, width 100, ~3.5 lines/entry): N=1000 —
-  append 53.9 → 1.0ms, stream tick 47.1 → 0.68ms, same-size mid-replace
-  48.9 → 0.62ms; mount 46ms (one-time). N=4000 — all ops ~10-12ms: the
-  remainder is flat O(N) walks with tiny constants (spec building in the list
-  component ~12%, build/layout ~30%, reconcile ~6%, splice scan ~9% — jit.p,
-  no hotspot). Verdict: fine under the transcript's 40ms-debounce coalescing;
-  if truly monstrous sessions ever hurt, the escape hatch is app-level
-  windowing (mount last K entries + "older messages" expander), no framework
-  support needed. Suite 285/0, docs 7/7.
+  spec). Width change or shrink → full fresh paint as before. Host-level guards:
+  damage_spec "appending splices only the appended rows" (one write, mark ids
+  above survive), memo_spec fresh-mount oracle through two grows.
 
-- [x] text_input app hooks for chat prompts (2026-07-04, driven by clanker's
-  R5 panel): `clear_on_submit = true` empties the buffer after on_submit (the
+- [x] M4. **Numbers** (native, width 100, ~3.5 lines/entry): N=1000 — append
+  53.9 → 1.0ms, stream tick 47.1 → 0.68ms, same-size mid-replace 48.9 → 0.62ms;
+  mount 46ms (one-time). N=4000 — all ops ~10-12ms: the remainder is flat O(N)
+  walks with tiny constants (spec building in the list component ~12%,
+  build/layout ~30%, reconcile ~6%, splice scan ~9% — jit.p, no hotspot).
+  Verdict: fine under the transcript's 40ms-debounce coalescing; if truly
+  monstrous sessions ever hurt, the escape hatch is app-level windowing (mount
+  last K entries + "older messages" expander), no framework support needed.
+  Suite 285/0, docs 7/7.
+
+- [x] text_input app hooks for chat prompts (2026-07-04, driven by weave's R5
+  panel): `clear_on_submit = true` empties the buffer after on_submit (the
   buffer is the post-seed source of truth, so only subwin can clear it);
-  `on_create(bufnr)` fires once at subwin creation so apps can wire
-  buffer-local options/maps (completefunc for slash commands, steer keymaps).
-  2 specs in input_spec; suite 287/0.
+  `on_create(bufnr)` fires once at subwin creation so apps can wire buffer-local
+  options/maps (completefunc for slash commands, steer keymaps). 2 specs in
+  input_spec; suite 287/0.
 
 - [x] **Multi-container: `ui.container` (2026-07-04).** One fiber tree, N
-  buffers — the reconciler is untouched; the boundary is a HOST-layer concept.
-  A container is a subwindow leaf in its parent's layout tree (border/bg paint
+  buffers — the reconciler is untouched; the boundary is a HOST-layer concept. A
+  container is a subwindow leaf in its parent's layout tree (border/bg paint
   inline, float covers the content box, like text_input), whose children build
   into a separate layout tree (`node.inner`) flushed into the container's own
   buffer. Pieces:
+
   - host.lua: per-buffer retained state (prev lines/spans, persistent canvas,
     tree, subwins, pending damage) became FlushTarget records keyed by the
     boundary fiber (root keyed by the host); flush processes targets
@@ -1609,264 +1637,276 @@ same-size mid-replace over memo'd entry components.
     the same `_keep`/`_old_rect`/`_prev` bookkeeping as any container node.
   - layout.lua: a boundary leaf measures its inner tree under the same
     constraint — auto-size is CORRECT (not raw_buffer's live-line-count hack);
-    explicit height/grow = viewport, props.mode "scroll" (default, buffer
-    grows + float scrolls natively) | "fixed" (content laid out at exactly the
+    explicit height/grow = viewport, props.mode "scroll" (default, buffer grows
+    \+ float scrolls natively) | "fixed" (content laid out at exactly the
     viewport height, grow/justify fill it).
   - subwin.lua: manager parameterized by target (attach opts { target, mouse,
     zindex }); a container entry recursively attaches a nested manager +
     interact to ITS float (zindex +10/level), syncs it with the child target's
-    damage, and tears it down innermost-first (focus walked out level by
-    level). Containers are policy "always" (a mirror can't carry nested
-    floats); page motions stay native inside them (they scroll); a hidden
-    (fully occluded) container hides everything under it.
-  - interact.lua: parameterized by target (hit-map on the target's tree, maps
-    on its buffer) — hover/activate/insert-entry work identically one level
-    down. Focus stays "the window the vim cursor is in": enter/exit hop one
-    boundary at a time through the existing enter_at/edge-exit machinery.
+    damage, and tears it down innermost-first (focus walked out level by level).
+    Containers are policy "always" (a mirror can't carry nested floats); page
+    motions stay native inside them (they scroll); a hidden (fully occluded)
+    container hides everything under it.
+  - interact.lua: parameterized by target (hit-map on the target's tree, maps on
+    its buffer) — hover/activate/insert-entry work identically one level down.
+    Focus stays "the window the vim cursor is in": enter/exit hop one boundary
+    at a time through the existing enter_at/edge-exit machinery.
   - `on_create(bufnr, winid)` fires once at container creation (like
     text_input's, plus the float) — the app hook for buffer-local keymaps and
-    window work (follow-scroll, focusing); drove clanker's panel rework.
+    window work (follow-scroll, focusing); drove weave's panel rework.
   - Perf: VIEWPORT containers (height/grow) skip the inner measure — its size
-    doesn't depend on content, and measuring at the measure-pass width inside
-    a row (≠ final laid-out width) flip-flopped every inner node's `_mw` and
-    re-wrapped the whole inner tree twice per flush (clanker panel bench,
-    N=500: 10.7 → 3.1ms/stream-tick; the rest is the flat O(N) walks M4
-    documented). KNOWN CAVEAT: an AUTO container inside a row still measures
-    at the pass width and relayouts at the final one — same double-measure
-    pathology; use height/grow (or an explicit width) for containers in rows.
+    doesn't depend on content, and measuring at the measure-pass width inside a
+    row (≠ final laid-out width) flip-flopped every inner node's `_mw` and
+    re-wrapped the whole inner tree twice per flush (weave panel bench, N=500:
+    10.7 → 3.1ms/stream-tick; the rest is the flat O(N) walks M4 documented).
+    KNOWN CAVEAT: an AUTO container inside a row still measures at the pass
+    width and relayouts at the final one — same double-measure pathology; use
+    height/grow (or an explicit width) for containers in rows.
   - tests/inline/container_spec.lua (11): own-buffer render + root mirror,
-    auto-size, viewport + fixed mode, per-target damage (unrelated updates
-    leave the container buffer's changedtick alone), nested input end-to-end,
-    <CR>-hop in / edge-hop out across two levels, on_create,
-    container-in-container, conditional removal (buffer retired, boundary
-    restored), scrolled reposition of nested floats, teardown. Suite 298/0.
+    auto-size, viewport + fixed mode, per-target damage (unrelated updates leave
+    the container buffer's changedtick alone), nested input end-to-end, <CR>-hop
+    in / edge-hop out across two levels, on_create, container-in-container,
+    conditional removal (buffer retired, boundary restored), scrolled reposition
+    of nested floats, teardown. Suite 298/0.
 
 - [x] **Mount shell fixes from panel dogfooding (2026-07-04, user bug
   reports).** Two "the background is reachable" holes in the split/window
   mounts, both fixed in mount.lua:
+
   - **Pane focus forwarding:** `<C-w>`-navigation only sees layout windows, so
     `<C-w>l` into the app landed on the blank scratch PANE behind the root
     float. A WinEnter autocmd forwards any focus the pane receives into the
     float (guarded on float validity, so teardown races are no-ops).
   - **Fixed-mode view pinning:** nvim scrolls any window until its last line
-    hits the top even when the buffer fits, so the fixed-mode root canvas
-    (which IS the viewport) could be scrolled into blank space. `pin_view`
-    snaps topline/leftcol back on WinScrolled, wired BEFORE subwin.attach so
-    the manager's resync (definition order) sees the restored view — no float
-    swim. Scroll-mode mounts are untouched (the window is a real viewport).
-    GOTCHA (second user report, "wheel scroll can stick"): the restore must be
-    DEFERRED (vim.schedule), not inline — a view change made inside the
-    WinScrolled autocmd is invisible to nvim's per-window scroll checkpoint,
-    so an inline restore leaves the checkpoint at the scrolled topline and the
-    next wheel notch landing on that same topline fires NO event (pin never
-    runs, root stuck scrolled). Deferred, the restore is itself an observed
-    scroll and the checkpoint tracks. Reproduced + verified against a live
-    `--headless --listen` demo (real WinScrolled cadence, nvim_input_mouse
-    wheel bursts): root pinned through 20 notches, transcript container still
-    scrolls natively.
-  - Also pinned by spec while chasing a clanker cursor-jump report: a splice
-    under a window cursor does NOT move it (fold-toggle pattern spec in
-    container_spec — fibrous was already correct; the jump was clanker's
-    follow-mode autoscroll firing on visibility-only store mutations).
+    hits the top even when the buffer fits, so the fixed-mode root canvas (which
+    IS the viewport) could be scrolled into blank space. `pin_view` snaps
+    topline/leftcol back on WinScrolled, wired BEFORE subwin.attach so the
+    manager's resync (definition order) sees the restored view — no float swim.
+    Scroll-mode mounts are untouched (the window is a real viewport). GOTCHA
+    (second user report, "wheel scroll can stick"): the restore must be DEFERRED
+    (vim.schedule), not inline — a view change made inside the WinScrolled
+    autocmd is invisible to nvim's per-window scroll checkpoint, so an inline
+    restore leaves the checkpoint at the scrolled topline and the next wheel
+    notch landing on that same topline fires NO event (pin never runs, root
+    stuck scrolled). Deferred, the restore is itself an observed scroll and the
+    checkpoint tracks. Reproduced + verified against a live
+    `--headless --listen` demo (real WinScrolled cadence, nvim_input_mouse wheel
+    bursts): root pinned through 20 notches, transcript container still scrolls
+    natively.
+  - Also pinned by spec while chasing a weave cursor-jump report: a splice under
+    a window cursor does NOT move it (fold-toggle pattern spec in container_spec
+    — fibrous was already correct; the jump was weave's follow-mode autoscroll
+    firing on visibility-only store mutations).
   - Specs: mount_spec +2 (pane forwarding; fixed pins/scroll survives — NB
     WinScrolled never fires in headless -l, the spec delivers it via
     nvim_exec_autocmds), container_spec +1. Suite 301/0.
 
 - [x] **Layout: an explicit `width` pins the measuring constraint (2026-07-04,
-  found reworking clanker's sidebar).** measure() only let `max_width` tighten
-  the constraint — a fixed-width col late in a ROW measured its subtree at the
-  row's remaining space, and since the position pass only re-wraps
-  col-STRETCHED text, a wrapping paragraph inside a nested row kept its
-  over-wide measure and painted clipped at the canvas edge (sidebar task rows:
-  icon + paragraph). Now `props.width` REPLACES the incoming constraint
-  (border-box, margins added back), so the subtree measures and wraps at the
-  width the node actually gets — this also makes the wrap memo stable inside
-  rows and makes the documented "explicit width" workaround for the
-  AUTO-container-in-row caveat actually work. Spec: "an explicit width pins
-  the measuring constraint" (the nested-row shape; the col-stretch shape was
-  already green). Suite 302/0.
+  found reworking weave's sidebar).** measure() only let `max_width` tighten the
+  constraint — a fixed-width col late in a ROW measured its subtree at the row's
+  remaining space, and since the position pass only re-wraps col-STRETCHED text,
+  a wrapping paragraph inside a nested row kept its over-wide measure and
+  painted clipped at the canvas edge (sidebar task rows: icon + paragraph). Now
+  `props.width` REPLACES the incoming constraint (border-box, margins added
+  back), so the subtree measures and wraps at the width the node actually gets —
+  this also makes the wrap memo stable inside rows and makes the documented
+  "explicit width" workaround for the AUTO-container-in-row caveat actually
+  work. Spec: "an explicit width pins the measuring constraint" (the nested-row
+  shape; the col-stretch shape was already green). Suite 302/0.
 
-- [x] **Tab navigation (2026-07-05, user request).** `<Tab>`/`<S-Tab>`
-  (NORMAL mode only, buffer-local on each flush target) cycle the cursor
-  through the target's interactive nodes — role carriers plus text_input
-  subwindow leaves — in DOCUMENT order (pre-order: a column's stops finish
-  before the next column starts), wrapping at the ends. Landing is just a
-  cursor move: hover repaints via the existing update(), activation stays on
-  <CR>/<Space>, and subwindows are still entered explicitly, never by
-  traversal (the cursor lands ON the input; i/<CR> enters). From an inert
-  cell, forward goes to the first stop spatially past the cursor in reading
-  order. Cycling is per flush target by construction (a container leaf's
-  children live in another target's tree; the container's own interact layer
-  — same code — cycles them). NB `<Tab>` shadows `<C-i>` jumplist-forward
-  inside canvas buffers, the usual UI-buffer trade. Specs: interact_spec +5.
-  Suite 307/0.
-- [x] **Stacking policy + modal chrome (2026-07-05, user request).** Every
-  float used to sit at/above nvim's default (roots 50, subwin levels 60 +10
-  per nesting), so a pane-anchored app's containers COVERED any genuine
-  float — clanker's session modal rendered behind the transcript. New
-  policy: pane-anchored mounts (window/split) are page furniture, root
-  zindex 10 and +1 per subwindow level, keeping the whole stack below 50;
-  float mounts root at 50 (level with other plugins' popups), +1 per level;
-  `opts.zindex` overrides the root everywhere and levels always derive
-  root+1. Plus two mount.floating opts for modal-shaped apps:
+- [x] **Tab navigation (2026-07-05, user request).** `<Tab>`/`<S-Tab>` (NORMAL
+  mode only, buffer-local on each flush target) cycle the cursor through the
+  target's interactive nodes — role carriers plus text_input subwindow leaves —
+  in DOCUMENT order (pre-order: a column's stops finish before the next column
+  starts), wrapping at the ends. Landing is just a cursor move: hover repaints
+  via the existing update(), activation stays on <CR>/<Space>, and subwindows
+  are still entered explicitly, never by traversal (the cursor lands ON the
+  input; i/<CR> enters). From an inert cell, forward goes to the first stop
+  spatially past the cursor in reading order. Cycling is per flush target by
+  construction (a container leaf's children live in another target's tree; the
+  container's own interact layer — same code — cycles them). NB `<Tab>` shadows
+  `<C-i>` jumplist-forward inside canvas buffers, the usual UI-buffer trade.
+  Specs: interact_spec +5. Suite 307/0.
+
+- [x] **Stacking policy + modal chrome (2026-07-05, user request).** Every float
+  used to sit at/above nvim's default (roots 50, subwin levels 60 +10 per
+  nesting), so a pane-anchored app's containers COVERED any genuine float —
+  weave's session modal rendered behind the transcript. New policy:
+  pane-anchored mounts (window/split) are page furniture, root zindex 10 and +1
+  per subwindow level, keeping the whole stack below 50; float mounts root at 50
+  (level with other plugins' popups), +1 per level; `opts.zindex` overrides the
+  root everywhere and levels always derive root+1. Plus two mount.floating opts
+  for modal-shaped apps:
+
   - `border` — passed through to the root float (persists across relayout).
-  - `backdrop` — Snacks-style editor dim: ONE full-screen non-focusable
-    scratch float (`FibrousBackdrop` default hl, bg=#000000 + winblend;
-    `backdrop = <n>` sets the blend, true = 60; needs termguicolors to
-    blend rather than block). Lifecycle rides the mount's: resized in
-    sync(), closed as an attachment teardown — no autocmds of its own.
-    Deliberately NOT a "Modal" widget: modal remains an app-level pattern;
-    fibrous provides the primitives.
-  Specs: mount_spec +4 (stacking, zindex override, backdrop lifecycle,
-  border persistence); style_state_spec's subwin finder updated (60 → 51).
-  Suite 311/0.
-  FOLLOW-UP (same day, user bug report — "panel blanked out under the
-  modal"): diagnosed against the composed screen (demo in a :terminal of a
-  headless host): nvim's compositor does NOT blend floats through a
-  winblend float — anything below it is hidden and the blend samples the
-  BASE GRID only. Two candidate placements: (a) backdrop UNDER the
-  pane-anchored stacks (z=5) — normal windows dim, page furniture stays
-  visible but undimmed; (b) backdrop one z-level below the root (49) —
-  normal windows dim, page furniture is OBSCURED outright. Shipped (a)
-  first; USER DECISION reverted to (b): a modal should obscure the panel,
-  not float over a bright one. So: backdrop z = root-1, floats beneath it
-  disappear by design, documented on the opt. Also learned:
-  `nvim_win_set_config` zindex changes don't re-sort the compositor's draw
-  order for an existing float (a fresh float at the same z behaves
-  correctly) — diagnose stacking with fresh floats only.
+  - `backdrop` — Snacks-style editor dim: ONE full-screen non-focusable scratch
+    float (`FibrousBackdrop` default hl, bg=#000000 + winblend; `backdrop = <n>`
+    sets the blend, true = 60; needs termguicolors to blend rather than block).
+    Lifecycle rides the mount's: resized in sync(), closed as an attachment
+    teardown — no autocmds of its own. Deliberately NOT a "Modal" widget: modal
+    remains an app-level pattern; fibrous provides the primitives. Specs:
+    mount_spec +4 (stacking, zindex override, backdrop lifecycle, border
+    persistence); style_state_spec's subwin finder updated (60 → 51). Suite
+    311/0. FOLLOW-UP (same day, user bug report — "panel blanked out under the
+    modal"): diagnosed against the composed screen (demo in a :terminal of a
+    headless host): nvim's compositor does NOT blend floats through a winblend
+    float — anything below it is hidden and the blend samples the BASE GRID
+    only. Two candidate placements: (a) backdrop UNDER the pane-anchored stacks
+    (z=5) — normal windows dim, page furniture stays visible but undimmed; (b)
+    backdrop one z-level below the root (49) — normal windows dim, page
+    furniture is OBSCURED outright. Shipped (a) first; USER DECISION reverted to
+    (b): a modal should obscure the panel, not float over a bright one. So:
+    backdrop z = root-1, floats beneath it disappear by design, documented on
+    the opt. Also learned: `nvim_win_set_config` zindex changes don't re-sort
+    the compositor's draw order for an existing float (a fresh float at the same
+    z behaves correctly) — diagnose stacking with fresh floats only.
 
-- [x] **Mark gravity inversion under box writes (2026-07-05, user bug:
-  "widget highlights sometimes disappear until the next update while
-  resizing the OS window").** Root cause was NOT the splice — its set_lines
-  relocation shifts tail marks cleanly (verified by instrumenting
-  set_lines/set_text/clear_namespace inside the live demo and snapshotting
-  marks after every edit). The killer is mirror()/restore_box(): they
-  rewrite moved widget boxes via nvim_buf_set_text, and a replacement that
-  covers a canvas mark's EXACT extent inverts it through gravity — the
-  start (right gravity) lands at the edit's end, the end (no gravity) at
-  its start ⇒ `start=210,end=0` spans that render nothing until the next
-  splice repaints the row. Resizes trigger it constantly because boxes
-  move every relayout. Fix: `repaint_row_marks(y0,y1)` in subwin.lua —
-  after any mirror/restore write, clear host.ns on the touched rows and
-  re-add from `target.prev_hl_rows` (ground truth), `strict=false` since a
-  mirrored row's byte length may run short of the canvas line. Spec:
-  subwin_spec "box writes never corrupt canvas highlight marks" (label and
-  input swap rows; restore_box rewrites the label's row). Suite 312/0;
-  clanker bench unchanged (stream tick 0.83ms @ N=1000). Diagnosis
-  technique worth keeping: run the demo inside a :terminal of a headless
-  host (real PTY resizes), monkeypatch the buffer-edit API to log
+- [x] **Mark gravity inversion under box writes (2026-07-05, user bug: "widget
+  highlights sometimes disappear until the next update while resizing the OS
+  window").** Root cause was NOT the splice — its set_lines relocation shifts
+  tail marks cleanly (verified by instrumenting
+  set_lines/set_text/clear_namespace inside the live demo and snapshotting marks
+  after every edit). The killer is mirror()/restore_box(): they rewrite moved
+  widget boxes via nvim_buf_set_text, and a replacement that covers a canvas
+  mark's EXACT extent inverts it through gravity — the start (right gravity)
+  lands at the edit's end, the end (no gravity) at its start ⇒ `start=210,end=0`
+  spans that render nothing until the next splice repaints the row. Resizes
+  trigger it constantly because boxes move every relayout. Fix:
+  `repaint_row_marks(y0,y1)` in subwin.lua — after any mirror/restore write,
+  clear host.ns on the touched rows and re-add from `target.prev_hl_rows`
+  (ground truth), `strict=false` since a mirrored row's byte length may run
+  short of the canvas line. Spec: subwin_spec "box writes never corrupt canvas
+  highlight marks" (label and input swap rows; restore_box rewrites the label's
+  row). Suite 312/0; weave bench unchanged (stream tick 0.83ms @ N=1000).
+  Diagnosis technique worth keeping: run the demo inside a :terminal of a
+  headless host (real PTY resizes), monkeypatch the buffer-edit API to log
   edit→markset transitions.
 
 - [x] **Byte-divergent mark misplacement in `repaint_row_marks` (2026-07-05,
-  follow-up to the gravity fix; user bug: "incorrect extmarks especially
-  when resizing horizontally").** The gravity fix re-placed marks at their
-  CANVAS byte offsets (`prev_hl_rows.start_col/end_col`), but a mirror write
-  can change the row's byte layout — multibyte widget content (box-drawing
-  markdown, `─╭╮`) over single-byte canvas cells, or vice versa. So a mark
-  BESIDE a mirrored box (e.g. a sidebar checkbox sharing rows with the
-  transcript container box) lands at a stale byte offset and paints the
-  wrong cells or vanishes. Horizontal resize is the trigger: it moves the
-  container box, so restore_box/mirror rewrite rows the sidebar marks live
-  on. Fix: when the current line diverges from the canvas ground truth,
-  translate each span's byte cols THROUGH DISPLAY CELLS onto the actual line
+  follow-up to the gravity fix; user bug: "incorrect extmarks especially when
+  resizing horizontally").** The gravity fix re-placed marks at their CANVAS
+  byte offsets (`prev_hl_rows.start_col/end_col`), but a mirror write can change
+  the row's byte layout — multibyte widget content (box-drawing markdown, `─╭╮`)
+  over single-byte canvas cells, or vice versa. So a mark BESIDE a mirrored box
+  (e.g. a sidebar checkbox sharing rows with the transcript container box) lands
+  at a stale byte offset and paints the wrong cells or vanishes. Horizontal
+  resize is the trigger: it moves the container box, so restore_box/mirror
+  rewrite rows the sidebar marks live on. Fix: when the current line diverges
+  from the canvas ground truth, translate each span's byte cols THROUGH DISPLAY
+  CELLS onto the actual line
   (`width.cell_to_byte(cur_line, width.str(canvas:sub(1, col)))`). Spec:
   subwin_spec "box writes keep marks beside the box cell-faithful
-  (byte-divergent mirror)" — a 10-cell input swapped to 3-cell/9-byte
-  multibyte content, TAG label to its right stays at cell 10. Verified live
-  with a CELL-AWARE invariant (marks must sit on UTF-8 boundaries AND cover
-  the same display cells as the canvas span) — held through horizontal
-  resize storms that the old raw-byte invariant reported "clean" for
-  (because the buggy code placed marks at the very canvas offsets that check
-  compared against). Suite 314/0; bench unchanged (append 1.9ms, toggle
-  14.1ms @ N=1000 — the extra per-row get_lines is free).
+  (byte-divergent mirror)" — a 10-cell input swapped to 3-cell/9-byte multibyte
+  content, TAG label to its right stays at cell 10. Verified live with a
+  CELL-AWARE invariant (marks must sit on UTF-8 boundaries AND cover the same
+  display cells as the canvas span) — held through horizontal resize storms that
+  the old raw-byte invariant reported "clean" for (because the buggy code placed
+  marks at the very canvas offsets that check compared against). Suite 314/0;
+  bench unchanged (append 1.9ms, toggle 14.1ms @ N=1000 — the extra per-row
+  get_lines is free).
 
-- [x] **Stranded `_focus` accent on startup (2026-07-05, user bug: "the
-  prompt shows focused (blue border) when the panel is created even though
-  the cursor isn't in it; focusing then unfocusing clears it").** subwin.lua
-  drove `_focus` off WinEnter/WinLeave on the float's buffer, but focus can
-  leave a float WITHOUT a WinLeave: nvim's own startup re-enters the first
-  window AFTER `-u init` sourcing with autocmds suppressed (also any
-  `:noautocmd wincmd`), so a focus grab during init strands the style ON.
-  Fix: a manager-level WinEnter (not buffer-scoped) tracks the currently
-  focused entry and reconciles — the first genuine window entry anywhere
-  clears a stale accent. Spec: style_state_spec "a stale focus accent heals
-  once any window is entered normally" (focus a float, yank focus back under
-  `eventignore=all`, assert the accent survives, then `:new` clears it). The
-  clanker side ALSO defers its own focus grab past VimEnter (panel_spec
-  "opened during startup, the prompt is genuinely focused after VimEnter",
-  driving a real child nvim). Suite 314/0.
+- [x] **Stranded `_focus` accent on startup (2026-07-05, user bug: "the prompt
+  shows focused (blue border) when the panel is created even though the cursor
+  isn't in it; focusing then unfocusing clears it").** subwin.lua drove `_focus`
+  off WinEnter/WinLeave on the float's buffer, but focus can leave a float
+  WITHOUT a WinLeave: nvim's own startup re-enters the first window AFTER
+  `-u init` sourcing with autocmds suppressed (also any `:noautocmd wincmd`), so
+  a focus grab during init strands the style ON. Fix: a manager-level WinEnter
+  (not buffer-scoped) tracks the currently focused entry and reconciles — the
+  first genuine window entry anywhere clears a stale accent. Spec:
+  style_state_spec "a stale focus accent heals once any window is entered
+  normally" (focus a float, yank focus back under `eventignore=all`, assert the
+  accent survives, then `:new` clears it). The weave side ALSO defers its own
+  focus grab past VimEnter (panel_spec "opened during startup, the prompt is
+  genuinely focused after VimEnter", driving a real child nvim). Suite 314/0.
 
-- [x] **One-keystroke activation across a container boundary (2026-07-05,
-  user request).** Before: pressing a button inside a container while focus
-  was on the parent took TWO `<CR>`s — the root's activate only offered the
-  cell to `subwins.enter_at`, which FOCUSED the container float and stopped;
-  the button press needed a second `<CR>` on the container's own layer.
-  Reason: each flush target (root, every container) has its own
-  `interact.attach` layer driven by ITS window's cursor, and the boundary was
-  entered explicitly (one level per `<CR>`). Fix: new `subwins.activate_at`
-  (subwin.lua) = `enter_at` (focus + land the cursor via the mirror_map
-  translation) THEN, if the entry is a container, delegate to its
-  `child_interact.activate(true)`. interact.lua's `<CR>`/click path calls
-  `activate_at` instead of `enter_at` (insert keys keep plain `enter_at`), and
-  the interact handle now exposes `activate` so a parent can delegate in.
-  Recurses through nesting (a container's activate calls its own
-  `activate_at`), so a button any depth down is one `<CR>`, and it does
+- [x] **One-keystroke activation across a container boundary (2026-07-05, user
+  request).** Before: pressing a button inside a container while focus was on
+  the parent took TWO `<CR>`s — the root's activate only offered the cell to
+  `subwins.enter_at`, which FOCUSED the container float and stopped; the button
+  press needed a second `<CR>` on the container's own layer. Reason: each flush
+  target (root, every container) has its own `interact.attach` layer driven by
+  ITS window's cursor, and the boundary was entered explicitly (one level per
+  `<CR>`). Fix: new `subwins.activate_at` (subwin.lua) = `enter_at` (focus +
+  land the cursor via the mirror_map translation) THEN, if the entry is a
+  container, delegate to its `child_interact.activate(true)`. interact.lua's
+  `<CR>`/click path calls `activate_at` instead of `enter_at` (insert keys keep
+  plain `enter_at`), and the interact handle now exposes `activate` so a parent
+  can delegate in. Recurses through nesting (a container's activate calls its
+  own `activate_at`), so a button any depth down is one `<CR>`, and it does
   press-AND-focus (focus stays in the container, per the user's ask). Over a
   non-interactive cell it just focuses (identical to the old first `<CR>`), so
-  the "focus hops" stepping for plain labels is unchanged. Spec:
-  container_spec "<CR> over a button inside a container presses it AND focuses
-  the container (one press)". Suite 315/0; clanker 164/164 (the transcript's
-  tool-call headers are buttons in a container — now one `<CR>` from the root
-  toggles them; verified live). Keyboard `<Tab>` traversal stays island-scoped
-  by design.
+  the "focus hops" stepping for plain labels is unchanged. Spec: container_spec
+  "<CR> over a button inside a container presses it AND focuses the container
+  (one press)". Suite 315/0; weave 164/164 (the transcript's tool-call headers
+  are buttons in a container — now one `<CR>` from the root toggles them;
+  verified live). Keyboard `<Tab>` traversal stays island-scoped by design.
 
-- [x] **Hover across the container boundary (2026-07-05, user request,
-  follow-up to the activation change).** Continuation of the same idea for the
-  continuous case: gliding the parent's cursor over a button in an UNFOCUSED
-  container now highlights it, without moving focus. Design (user's, chosen
-  over a cursor-independent `hover_at` paint): since each surface's hover reads
-  ITS OWN window's cursor and Neovim cursors are per-window, drive off the
-  parent's live cursor and NUDGE the (unfocused) container's own cursor to the
-  translated, always-visible cell (shared `translate()`, no scroll — same
-  landing `enter()` uses), then run the container's existing interaction so it
-  paints on the float the user sees. Verified `nvim_win_set_cursor` on a
-  non-current window and `nvim_win_call(winsaveview/winrestview)` do NOT
-  disturb the parent's visual selection / mode / curwin (the user's worry) —
-  so no `win_call` needed anyway (the translated line is always visible, so
-  set_cursor never scrolls). Wiring: `subwins.hover_at(row,x)` finds the
-  container under the cell, translates, nudges its cursor, calls its
-  `child_interact.update(true)`; recurses for nesting; tracks the hovered
-  entry to `clear_hover()` on leave. interact.lua's `update(propagate)` gained
-  a LIVENESS gate — hover only paints where the cursor is the live pointer
-  (this window current, or parent-driven); an unfocused, un-pointed container's
-  update() (which still runs every flush via sync) now CLEARS instead of
-  painting a phantom hover at its idle cursor (the bug that surfaced: a fresh
-  mount showed a stray button hover). `clear_hover` guards its relayout with
-  `syncing` against flush re-entry. Spec: container_spec "hover reaches into an
-  UNFOCUSED container… focus stays on the root" (hover appears on the container
-  buf, focus unchanged, clears on leave). Suite 316/0; clanker 164/164, bench
-  unchanged (append 1.16ms, toggle 10.7ms @ N=1000); verified live (root cursor
-  over the transcript's tool header highlights it, focus stays on the root,
-  clears on leave). NB button hover is the themed `FibrousButtonHover` fill
-  (hl-tier overlay), not `FibrousHover`.
+- [x] **Hover across the container boundary (2026-07-05, user request, follow-up
+  to the activation change).** Continuation of the same idea for the continuous
+  case: gliding the parent's cursor over a button in an UNFOCUSED container now
+  highlights it, without moving focus. Design (user's, chosen over a
+  cursor-independent `hover_at` paint): since each surface's hover reads ITS OWN
+  window's cursor and Neovim cursors are per-window, drive off the parent's live
+  cursor and NUDGE the (unfocused) container's own cursor to the translated,
+  always-visible cell (shared `translate()`, no scroll — same landing `enter()`
+  uses), then run the container's existing interaction so it paints on the float
+  the user sees. Verified `nvim_win_set_cursor` on a non-current window and
+  `nvim_win_call(winsaveview/winrestview)` do NOT disturb the parent's visual
+  selection / mode / curwin (the user's worry) — so no `win_call` needed anyway
+  (the translated line is always visible, so set_cursor never scrolls). Wiring:
+  `subwins.hover_at(row,x)` finds the container under the cell, translates,
+  nudges its cursor, calls its `child_interact.update(true)`; recurses for
+  nesting; tracks the hovered entry to `clear_hover()` on leave. interact.lua's
+  `update(propagate)` gained a LIVENESS gate — hover only paints where the
+  cursor is the live pointer (this window current, or parent-driven); an
+  unfocused, un-pointed container's update() (which still runs every flush via
+  sync) now CLEARS instead of painting a phantom hover at its idle cursor (the
+  bug that surfaced: a fresh mount showed a stray button hover). `clear_hover`
+  guards its relayout with `syncing` against flush re-entry. Spec:
+  container_spec "hover reaches into an UNFOCUSED container… focus stays on the
+  root" (hover appears on the container buf, focus unchanged, clears on leave).
+  Suite 316/0; weave 164/164, bench unchanged (append 1.16ms, toggle 10.7ms @
+  N=1000); verified live (root cursor over the transcript's tool header
+  highlights it, focus stays on the root, clears on leave). NB button hover is
+  the themed `FibrousButtonHover` fill (hl-tier overlay), not `FibrousHover`.
 
 - [x] **Hover/activation clamped onto the last line from a container's dead
   space (2026-07-05, user bug).** When a container box is taller than its
-  content, the blank padding rows below the last line had no `mirror_map`
-  entry, so `translate()`'s fallback CLAMPED them (`math.min(…, count)`) onto
-  the last content line — a parent cursor over that dead space hovered, and
-  `<CR>` activated, the last line's button. Fix: `translate` now returns a
-  third `content` boolean (false for box rows past the buffer's end; lnum still
-  clamps so a focus can land). `hover_at` treats dead space as no target
-  (clears, no paint); `activate_at` still focuses the container but skips the
-  press when `content` is false. Spec: container_spec "dead space past a
-  container's content never hovers or activates its last line" (control: the
-  real button row still hovers). Suite 317/0; clanker 164/164.
+  content, the blank padding rows below the last line had no `mirror_map` entry,
+  so `translate()`'s fallback CLAMPED them (`math.min(…, count)`) onto the last
+  content line — a parent cursor over that dead space hovered, and `<CR>`
+  activated, the last line's button. Fix: `translate` now returns a third
+  `content` boolean (false for box rows past the buffer's end; lnum still clamps
+  so a focus can land). `hover_at` treats dead space as no target (clears, no
+  paint); `activate_at` still focuses the container but skips the press when
+  `content` is false. Spec: container_spec "dead space past a container's
+  content never hovers or activates its last line" (control: the real button row
+  still hovers). Suite 317/0; weave 164/164.
 
-### remote-clanker.nvim (ACP client on fibrous) — design decisions (2026-07-04)
+- [x] **Parent-driven hover used a stale scroll base → offset + self-scroll
+  (2026-07-05, user bug: "hover is X rows above the cursor, keeps the offset,
+  appears during streaming, clears after a manual scroll; and the hover scrolls
+  the subcontainer").** `translate()` mapped via the cached `base`/`mirror_map`,
+  captured during sync — but follow-mode scrolls the transcript float with a
+  DEFERRED set_cursor AFTER sync, so base lagged the float's real topline by the
+  scroll amount. Two symptoms, one cause: (1) the hovered line was off by the
+  scroll delta (a constant offset that a manual scroll's WinScrolled → resync
+  cleared); (2) that line was off-screen, so the hover's own
+  `nvim_win_set_cursor` scrolled the float to reveal it (killing my earlier
+  "always visible, never scrolls" assumption). Fix: for a SHOWN, NOWRAP float
+  (containers are nowrap — only raw_buffer wraps) `translate` now reads the
+  float's LIVE topline via `getwininfo`, `lnum = topline + (row - c.y) - clip`,
+  instead of the cached base; the mirror_map stays the fallback for
+  hidden/wrapping floats. Spec: container_spec "hover tracks the container's
+  LIVE scroll (no offset, no scroll) when the float scrolled since the last
+  sync". Suite 317/0; weave 164/164; verified live during real streaming
+  (topline advancing 26→30→37, every hover matched the live line, zero scroll).
 
-- Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not
-  a raw managed buffer — ADR 0008's bug class (stale lines, fold loss, scroll
+### weave.nvim (ACP client on fibrous) — design decisions (2026-07-04)
+
+- Transcript = per-entry COMPONENTS (tool call, thought, prompt, output…), not a
+  raw managed buffer — ADR 0008's bug class (stale lines, fold loss, scroll
   races) is what the pure projection precludes; M1–M3 above make it O(change).
 - No virtual scrolling: buffer + scroll-mode viewport already virtualize the
   display; CPU is bounded by the memo tiers.
