@@ -49,7 +49,16 @@ end
 -- floats never swim.
 ---@param winid integer  the root float
 ---@param group integer
+---@return fun() restore  pin the view NOW (call it after a relayout too)
 local function pin_view(winid, group)
+	-- A resize hands the cursor no margin to push the view around with: nvim
+	-- shrinking the window would otherwise scroll the root to keep the cursor
+	-- (plus the user's global 'scrolloff') on screen, and that resize-time
+	-- scroll delivers no WinScrolled the handler below can catch — the panel
+	-- stayed scrolled until a manual scroll. sync() re-pins directly besides.
+	vim.wo[winid].scrolloff = 0
+	vim.wo[winid].sidescrolloff = 0
+
 	local pending = false
 	local function restore()
 		pending = false
@@ -80,6 +89,7 @@ local function pin_view(winid, group)
 			end
 		end,
 	})
+	return restore
 end
 
 -- Shared mount plumbing: create the root, wire coalesced resize sync (one
@@ -251,8 +261,9 @@ function M.floating(component, props, opts)
 		border = opts.border,
 	})
 	local group = vim.api.nvim_create_augroup("FibrousInlineFloat_" .. winid, { clear = true })
+	local pin_restore
 	if not scroll then
-		pin_view(winid, group)
+		pin_restore = pin_view(winid, group)
 	end
 	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1 })
 	interaction = interact.attach(host, winid, opts.mouse, manager)
@@ -276,6 +287,11 @@ function M.floating(component, props, opts)
 			})
 		end
 		host.relayout()
+		-- Re-pin after the resize: nvim may have scrolled the root to chase the
+		-- cursor when the window shrank (no WinScrolled to catch it — see pin_view).
+		if pin_restore then
+			pin_restore()
+		end
 	end
 
 	local close_backdrop = {
@@ -403,8 +419,9 @@ function M.window(component, props, opts)
 		zindex = zindex,
 	})
 	local group = vim.api.nvim_create_augroup("FibrousInlineSplit_" .. host_winid, { clear = true })
+	local pin_restore
 	if not scroll then
-		pin_view(winid, group)
+		pin_restore = pin_view(winid, group)
 	end
 	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1 })
 	interaction = interact.attach(host, winid, opts.mouse, manager)
@@ -435,6 +452,10 @@ function M.window(component, props, opts)
 			height = cur.height,
 		})
 		host.relayout()
+		-- Re-pin after the resize (see the floating sync + pin_view).
+		if pin_restore then
+			pin_restore()
+		end
 	end
 
 	local handle, teardown = wire(component, props, host, winid, group, { manager, interaction }, sync, function()

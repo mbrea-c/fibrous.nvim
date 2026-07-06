@@ -197,6 +197,35 @@ describe("inline.mount", function()
     scroller.unmount()
   end)
 
+  it("fixed mode: a relayout (resize) re-pins the root view even with no WinScrolled", function()
+    -- Shrinking the OS window makes nvim scroll the root float to keep the
+    -- cursor visible (its 'scrolloff' margin), and that resize-time scroll does
+    -- NOT deliver a WinScrolled the pin handler can catch — so the panel stayed
+    -- scrolled until a manual scroll snapped it back. A relayout (what
+    -- VimResized/WinResized trigger) must re-pin the view itself.
+    local function view_of(winid)
+      local v
+      vim.api.nvim_win_call(winid, function()
+        v = vim.fn.winsaveview()
+      end)
+      return v
+    end
+
+    local fixed = mount.floating(Hello, {}, { width = 10, height = 3 })
+    -- the root has no scroll margin of its own to fight a resize with
+    assert.equal(0, vim.wo[fixed.winid].scrolloff)
+    assert.equal(0, vim.wo[fixed.winid].sidescrolloff)
+
+    -- scroll WITHOUT delivering WinScrolled (the resize path the pin missed)
+    vim.api.nvim_win_call(fixed.winid, function()
+      vim.fn.winrestview({ topline = 2, lnum = 2, col = 0 })
+    end)
+    fixed.relayout() -- what a resize event triggers
+    assert.equal(1, view_of(fixed.winid).topline)
+
+    fixed.unmount()
+  end)
+
   it("window: winid = 0 resolves to the current window at mount time", function()
     local origin = vim.api.nvim_get_current_win()
     local handle = mount.window(Hello, {}, { winid = 0, mode = "scroll" })

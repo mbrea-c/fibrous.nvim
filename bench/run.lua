@@ -27,6 +27,7 @@ local root_dir = vim.fn.getcwd()
 package.path = table.concat({
 	root_dir .. "/lua/?.lua",
 	root_dir .. "/lua/?/init.lua",
+	root_dir .. "/bench/?.lua",
 	package.path,
 }, ";")
 
@@ -38,6 +39,7 @@ local layout = require("fibrous.inline.layout")
 local render = require("fibrous.inline.render")
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
+local throughput = require("throughput")
 
 -- Structured-output mode (bench_history.sh): BENCH_JSON=1 suppresses the human
 -- lines and emits one JSON object at the end — { label, bench, n, results } — so
@@ -76,8 +78,14 @@ local function bench(name, iters, fn)
 		fn(i)
 	end
 	local per_op = (uv.hrtime() - t0) / iters / 1e6
-	record(name, "ms/op", per_op, { iters = iters })
-	say(("%-52s %10.3f ms/op   (%d iters)\n"):format(name, per_op, iters))
+	-- Draw throughput: one more op, instrumented, OUTSIDE the timed loop (the
+	-- wrappers' strwidth sums must not pollute ms/op). These ops are
+	-- deterministic, so one is representative of the per-op cell count.
+	local draw = throughput.counting(function()
+		fn(iters + 1)
+	end)
+	record(name, "ms/op", per_op, { iters = iters, cells = draw.cells, writes = draw.writes })
+	say(("%-52s %10.3f ms/op %8d cells/op  (%d iters)\n"):format(name, per_op, draw.cells, iters))
 end
 
 ---------------------------------------------------------------------------
@@ -259,11 +267,26 @@ do
 		local root = runtime.create_root(App, {}, { host = host })
 		root:render()
 		local tick0 = vim.api.nvim_buf_get_changedtick(host.bufnr)
-		local cpu = cpu_second()
+		-- Count the cells drawn over the second too (the ssh+tmux cost of a live
+		-- animation): the timer's commits write through vim.api, so the wrappers
+		-- catch them. os.clock inside is unaffected by the tiny strwidth sums.
+		local cpu
+		local draw = throughput.counting(function()
+			cpu = cpu_second()
+		end)
 		local commits = vim.api.nvim_buf_get_changedtick(host.bufnr) - tick0
 		root:unmount()
-		record(label, "ms CPU/s", cpu, { commits = commits })
-		say(("%-52s %10.3f ms CPU/s (%d commits)\n"):format(label, cpu, commits))
+		local per_commit = commits > 0 and draw.cells / commits or 0
+		record(label, "ms CPU/s", cpu, { commits = commits, cells = draw.cells, cells_per_commit = per_commit })
+		say(
+			("%-52s %10.3f ms CPU/s (%d commits, %d cells/s, %.0f cells/commit)\n"):format(
+				label,
+				cpu,
+				commits,
+				draw.cells,
+				per_commit
+			)
+		)
 	end
 
 	local idle = cpu_second()

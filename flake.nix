@@ -73,6 +73,14 @@
             cd ${self}
             exec nvim --headless -u NONE -i NONE -l bench/transcript.lua "$@"
           '';
+          # Terminal-draw throughput: bytes nvim's TUI pushes at a real pty per
+          # frame — the tmux+ssh cost (highlight repaints and escape overhead
+          # included), one layer below the buffer-write cells/op figure. Spawns
+          # child nvim TUIs, which isolate themselves via --clean.
+          bench-term = app "fibrous-bench-term" ''
+            cd ${self}
+            exec nvim --headless -u NONE -i NONE -l bench/term.lua "$@"
+          '';
           # Run the benches across git history and print a trend table. Reads the
           # repo at $PWD; NEVER writes it (clones to temp, worktrees there). The
           # bench harness is PINNED here (this flake's snapshot, ${self}), run

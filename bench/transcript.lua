@@ -17,6 +17,7 @@ local root_dir = vim.fn.getcwd()
 package.path = table.concat({
 	root_dir .. "/lua/?.lua",
 	root_dir .. "/lua/?/init.lua",
+	root_dir .. "/bench/?.lua",
 	package.path,
 }, ";")
 
@@ -27,6 +28,7 @@ local inline_host = require("fibrous.inline.host")
 local layout = require("fibrous.inline.layout")
 local render = require("fibrous.inline.render")
 local ui = require("fibrous.inline.components")
+local throughput = require("throughput")
 
 -- Structured-output mode, identical contract to bench/run.lua: BENCH_JSON=1
 -- suppresses the human lines and emits one { label, bench, n, results } object;
@@ -61,8 +63,13 @@ local function bench(name, iters, fn)
 		fn(i)
 	end
 	local per_op = (uv.hrtime() - t0) / iters / 1e6
-	record(name, "ms/op", per_op, { iters = iters })
-	say(("%-52s %10.3f ms/op   (%d iters)\n"):format(name, per_op, iters))
+	-- Draw throughput: one more op, instrumented, OUTSIDE the timed loop — the
+	-- cells written to the buffer, the ssh+tmux draw cost (see bench/throughput).
+	local draw = throughput.counting(function()
+		fn(iters + 1)
+	end)
+	record(name, "ms/op", per_op, { iters = iters, cells = draw.cells, writes = draw.writes })
+	say(("%-52s %10.3f ms/op %8d cells/op  (%d iters)\n"):format(name, per_op, draw.cells, iters))
 end
 
 local WIDTH = 100

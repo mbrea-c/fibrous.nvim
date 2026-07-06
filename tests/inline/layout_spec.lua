@@ -232,6 +232,23 @@ describe("inline.layout containers", function()
     assert.same({ x = 3, y = 0, w = 1, h = 2 }, tree.children[2].rect)
   end)
 
+  it("a fixed-width row child still stretches to the full cross height", function()
+    -- An explicit WIDTH is the child's MAIN size in a row, not its cross size —
+    -- so align=stretch (default) must still stretch it to the row's full height.
+    -- (A sidebar with a fixed width and a left border spanning the whole panel.)
+    local tree = {
+      kind = "row",
+      children = {
+        { kind = "col", props = { grow = 1 }, children = { { kind = "text", text = "a" } } },
+        { kind = "col", props = { width = 6 }, children = { { kind = "text", text = "x" } } },
+      },
+    }
+    layout.compute(tree, { width = 20, height = 10 })
+    assert.equal(10, tree.children[1].rect.h) -- grow col: full height
+    assert.equal(10, tree.children[2].rect.h) -- fixed-width col: full height too (stretched)
+    assert.equal(6, tree.children[2].rect.w) -- and its explicit width is honoured
+  end)
+
   it("grow children split the leftover main axis by weight (app mode)", function()
     local tree = {
       kind = "col",

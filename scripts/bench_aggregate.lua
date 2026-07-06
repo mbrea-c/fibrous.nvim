@@ -48,17 +48,29 @@ for line in io.lines(jsonl_path) do
 			if (obj.n or 0) > 0 then
 				bench_n[obj.bench] = obj.n
 			end
-			for _, r in ipairs(obj.results or {}) do
-				if not b.seen[r.op] then
-					b.seen[r.op] = true
-					b.ops[#b.ops + 1] = r.op
-					b.cells[r.op] = {}
+			-- Register one (op → per-label values) series. Called for the latency
+			-- value and, right after, for the op's draw throughput — so a "·draw"
+			-- row sits directly under its ms row in the table.
+			local function push(op, u, value)
+				if not b.seen[op] then
+					b.seen[op] = true
+					b.ops[#b.ops + 1] = op
+					b.cells[op] = {}
 				end
-				unit[obj.bench][r.op] = r.unit
-				if type(r.value) == "number" then
-					local cell = b.cells[r.op][obj.label] or {}
-					cell[#cell + 1] = r.value
-					b.cells[r.op][obj.label] = cell
+				unit[obj.bench][op] = u
+				if type(value) == "number" then
+					local cell = b.cells[op][obj.label] or {}
+					cell[#cell + 1] = value
+					b.cells[op][obj.label] = cell
+				end
+			end
+			for _, r in ipairs(obj.results or {}) do
+				push(r.op, r.unit, r.value)
+				-- Draw throughput (cells written to the buffer) as its own series:
+				-- deterministic, so its MAD is ~0 and any real change flags at once —
+				-- more cells = more redraw = worse, same "higher is worse" polarity.
+				if type(r.cells) == "number" then
+					push(r.op .. "  ·draw", "cells/op", r.cells)
 				end
 			end
 		end
@@ -124,7 +136,7 @@ local function pr(line)
 end
 
 pr("")
-pr(("bench-history  —  %d points, %d reps each  (median ms; ▲ slower / ▼ faster vs the column to its left)")
+pr(("bench-history  —  %d points, %d reps each  (median value; ·draw rows = cells/op; ▲ worse / ▼ better vs the column to its left)")
 	:format(#order, reps))
 
 for _, bench in ipairs(bench_order) do

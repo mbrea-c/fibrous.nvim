@@ -444,7 +444,18 @@ local function layout_children(node)
 		end
 
 		local child_props = child.props or {}
-		local explicit_cross = horizontal and child_props.height or child_props.width
+		-- The child's CROSS-axis explicit size: height in a row, width in a col.
+		-- Written as an if (not `horizontal and child_props.height or
+		-- child_props.width`) because that Lua idiom falls through to width whenever
+		-- height is nil — so a fixed-WIDTH row child (its MAIN size) was wrongly read
+		-- as having an explicit cross size and skipped the stretch (a bordered
+		-- fixed-width sidebar stopping at its content height instead of filling the row).
+		local explicit_cross
+		if horizontal then
+			explicit_cross = child_props.height
+		else
+			explicit_cross = child_props.width
+		end
 		local child_cross = horizontal and child.size.h or child.size.w
 		local child_align = child_props.align_self or align
 		local cross_size, cross_off

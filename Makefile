@@ -28,6 +28,16 @@ bench:
 bench-transcript:
 	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/transcript.lua
 
+# Terminal-draw throughput — bytes nvim's TUI pushes at a real pty per frame
+# (the tmux+ssh cost, highlight repaints included), "one layer down" from the
+# buffer-write cells/op figure. Spawns child nvim TUIs, so it runs plain (not
+# under `-u NONE`, which the children get themselves via --clean):
+#   make bench-term            # 80x24 pty, 60 frames
+#   make bench-term BENCH_FRAMES=120 BENCH_COLS=120
+.PHONY: bench-term
+bench-term:
+	$(NVIM_BIN) --headless -u NONE -i NONE -l bench/term.lua
+
 # Launch an interactive, fully isolated Neovim with only this plugin loaded, and
 # (optionally) open one example straight away:
 #   make example            # opens, then :Examples / :Example <name>
