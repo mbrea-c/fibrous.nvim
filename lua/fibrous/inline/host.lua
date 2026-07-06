@@ -213,6 +213,12 @@ local function build_node(fiber, ctx)
 	else
 		node.kind = "text"
 		node.text = props.text or ""
+		-- `fill`: content generated from the node's FINAL width at layout time
+		-- (layout.lua) — a width-aware text node that spans its stretched/grown
+		-- box and re-fills on resize with no re-render.
+		if type(props.fill) == "function" then
+			node.fill = props.fill
+		end
 	end
 	attach_style(node, ctx.states)
 	-- Tier B (incremental paint) bookkeeping, stored only off the fast path:
