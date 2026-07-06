@@ -354,8 +354,8 @@ function M.attach(host, root_winid, mouse, subwins, target)
   -- container's layer presses the role or hops into a nested subwindow) — no
   -- more "one <CR> to enter, one to act" at each level.
   local function activate(enter_subwins, via_click)
+    local row, x = cursor_cell()
     if enter_subwins and subwins then
-      local row, x = cursor_cell()
       if row and subwins.activate_at(row, x, via_click) then
         return
       end
@@ -366,7 +366,15 @@ function M.attach(host, root_winid, mouse, subwins, target)
     end
     local props = node.props
     if props.role == "button" and props.on_press then
-      props.on_press()
+      -- the press column WITHIN the node's content box (display cells, 0-based),
+      -- so a widget can act on WHERE it was pressed (e.g. ripple at the click).
+      -- Older handlers that take no argument simply ignore it.
+      local local_x
+      local c = node.content
+      if x and c then
+        local_x = math.min(math.max(x - c.x, 0), math.max(c.w - 1, 0))
+      end
+      props.on_press(local_x)
     elseif props.role == "checkbox" and props.on_toggle then
       props.on_toggle(not props.checked)
     end

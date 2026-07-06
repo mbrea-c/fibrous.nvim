@@ -93,6 +93,40 @@ describe("inline.interact", function()
     handle.unmount()
   end)
 
+  it("on_press receives the cursor-local column within the widget", function()
+    -- a widget can act on WHERE it was pressed (e.g. ripple at the click).
+    local got = {}
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          {
+            comp = ui.label,
+            props = {
+              text = "==========", -- 10 cells wide, content box at x=0
+              role = "button",
+              on_press = function(x)
+                got[#got + 1] = x
+              end,
+            },
+          },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 3 })
+
+    move_cursor(handle, 1, 4)
+    press(handle, "<CR>")
+    move_cursor(handle, 1, 7)
+    press(handle, "<CR>")
+    move_cursor(handle, 1, 0)
+    press(handle, "<CR>")
+    assert.same({ 4, 7, 0 }, got)
+
+    handle.unmount()
+  end)
+
   it("<Space> toggles a checkbox; the re-render keeps the hover under the cursor", function()
     local function App(ctx)
       local checked = ctx.use_state(false)
