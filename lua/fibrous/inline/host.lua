@@ -608,11 +608,22 @@ function M.new(opts)
 				if node.inner then
 					seen[node.fiber] = true
 					local c = node.content
+					local props = node.props or {}
 					-- explicit "fixed" lays the content out at exactly the
 					-- viewport height (grow/justify fill it); default is scroll —
 					-- content height, the float a native viewport over it
-					local fixed = (node.props or {}).mode == "fixed"
-					process(node.fiber, node.inner, math.max(c.w, 1), fixed and math.max(c.h, 1) or nil)
+					local fixed = props.mode == "fixed"
+					-- scroll_x = false → no horizontal scroll: lay the content out ONE
+					-- cell narrower than the float, so a line's trailing newline (which
+					-- visual mode can put the cursor on) always fits in the viewport and
+					-- nvim never scrolls right to reveal it. Pinning leftcol can't win
+					-- that fight — the cursor sits on the off-screen newline, so a reset
+					-- just re-scrolls; keeping the newline on-screen is the actual fix.
+					local cw = math.max(c.w, 1)
+					if props.scroll_x == false then
+						cw = math.max(c.w - 1, 1)
+					end
+					process(node.fiber, node.inner, cw, fixed and math.max(c.h, 1) or nil)
 				end
 			end
 			return damage

@@ -131,6 +131,37 @@ describe("inline.container", function()
     pinned.unmount()
   end)
 
+  it("scroll_x = false lays content out one cell narrower so a line's newline always fits", function()
+    -- The real cure for the visual-mode right-scroll (a leftcol pin can't win it —
+    -- the cursor sits on the off-screen trailing newline, so a reset just
+    -- re-scrolls): clip content to width-1, so every line's newline lands at
+    -- <= width-1, on-screen, and nvim never scrolls right to reveal it.
+    local function app(props)
+      return function()
+        return {
+          comp = ui.col,
+          props = {},
+          children = {
+            { comp = ui.container, props = props, children = { { comp = ui.label, props = { text = string.rep("x", 40) } } } },
+          },
+        }
+      end
+    end
+    local function line_width(handle)
+      local sub = subwin_of(handle.winid)
+      local buf = vim.api.nvim_win_get_buf(sub)
+      return vim.fn.strdisplaywidth(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or "")
+    end
+
+    local free = mount.floating(app({}), {}, { width = 20, height = 4 })
+    assert.equal(20, line_width(free)) -- default: content fills the full width
+    free.unmount()
+
+    local pinned = mount.floating(app({ scroll_x = false }), {}, { width = 20, height = 4 })
+    assert.equal(19, line_width(pinned)) -- scroll_x = false: one cell narrower
+    pinned.unmount()
+  end)
+
   it("an explicit height is a viewport: the buffer grows, the float doesn't", function()
     local function App()
       local rows = {}
