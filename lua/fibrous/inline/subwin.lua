@@ -107,6 +107,7 @@ end
 ---@class SubwinAttachOpts
 ---@field target? FlushTarget  the flush target this manager serves; default the host's root. A container entry spawns a nested manager over ITS target, anchored to the container's float — the same wiring, one level down.
 ---@field mouse? InlineMouseOpts|false  threaded into nested containers' interaction layers
+---@field keys? string[]  component keybindings, threaded into nested containers' interaction layers (routed to on_key handlers)
 ---@field zindex? integer  this level's float zindex; the mounts pass root+1 (see InlineWindowMountOpts for the stacking policy) and each nesting level stacks +1 so children always cover their container. Default 60 for standalone attaches.
 
 -- Attach a manager to one of `host`'s flush targets, whose buffer is shown in
@@ -1001,6 +1002,49 @@ function M.attach(host, root_winid, opts)
 		vim.wo[winid].scrolloff = 0
 		vim.wo[winid].sidescrolloff = 0
 
+		-- Opt-in scroll locking. By default a container float scrolls both ways
+		-- like any window; a container may pin EITHER axis independently
+		-- (props.scroll_x / props.scroll_y = false) when its content isn't meant to
+		-- move on that axis. E.g. a transcript is vertical-only (scroll_x = false):
+		-- content is laid out and clipped to the viewport width, so a stray
+		-- horizontal scroll — the visible trigger is visual mode reaching a padded
+		-- line's trailing newline, one cell past the right edge — snaps back to
+		-- leftcol 0 instead of drifting the content sideways.
+		if node.subwin == "container" and (props.scroll_x == false or props.scroll_y == false) then
+			local pin_pending = false
+			vim.api.nvim_create_autocmd("WinScrolled", {
+				group = group,
+				pattern = tostring(winid),
+				callback = function()
+					if pin_pending then
+						return
+					end
+					pin_pending = true
+					-- deferred, like the root's pin_view: an inline winrestview is
+					-- invisible to nvim's scroll checkpoint and would stick the next scroll
+					vim.schedule(function()
+						pin_pending = false
+						if not vim.api.nvim_win_is_valid(winid) then
+							return
+						end
+						vim.api.nvim_win_call(winid, function()
+							local v = vim.fn.winsaveview()
+							local fix = {}
+							if props.scroll_x == false and (v.leftcol or 0) ~= 0 then
+								fix.leftcol = 0
+							end
+							if props.scroll_y == false and v.topline ~= 1 then
+								fix.topline = 1
+							end
+							if next(fix) then
+								vim.fn.winrestview(fix)
+							end
+						end)
+					end)
+				end,
+			})
+		end
+
 		local entry = { bufnr = bufnr, winid = winid, node = node, owned = owned, maps = {} }
 		map_motions(entry)
 		-- The native half of click-to-insert: a click on a VISIBLE float never
@@ -1033,8 +1077,10 @@ function M.attach(host, root_winid, opts)
 				target = entry.child_target,
 				mouse = opts.mouse,
 				zindex = zindex + 1,
+				keys = opts.keys,
 			})
-			entry.child_interact = interact.attach(host, winid, opts.mouse, entry.child_manager, entry.child_target)
+			entry.child_interact =
+				interact.attach(host, winid, opts.mouse, entry.child_manager, entry.child_target, opts.keys)
 			-- Creation-time escape hatch, like text_input's — the container also
 			-- hands over its float, the app's handle for window work
 			-- (buffer-local keymaps, follow-scroll, focusing).

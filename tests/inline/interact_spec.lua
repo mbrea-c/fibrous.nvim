@@ -127,6 +127,50 @@ describe("inline.interact", function()
     handle.unmount()
   end)
 
+  it("a routed key fires the on_key handler of the component under the cursor (no role needed)", function()
+    local acted, got_x = 0, nil
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "plain" } },
+          {
+            -- a key-handling block: on_key but NO role → no hover, no <CR> activation
+            comp = ui.col,
+            props = { on_key = { K = function(x)
+              acted = acted + 1
+              got_x = x
+            end } },
+            children = {
+              { comp = ui.label, props = { text = "block a" } },
+              { comp = ui.label, props = { text = "block b" } },
+            },
+          },
+        },
+      }
+    end
+    -- the mount declares which keys route to components' on_key handlers
+    local handle = mount.floating(App, {}, { width = 10, height = 4, keys = { "K" } })
+
+    -- K anywhere on the block (even its 2nd line) fires its handler, with the
+    -- cursor's column within the block (like on_press)
+    move_cursor(handle, 3, 2)
+    press(handle, "K")
+    assert.equal(1, acted)
+    assert.equal(2, got_x)
+
+    -- K off the block does nothing; nor does <CR> (the block carries no role)
+    move_cursor(handle, 1, 0)
+    press(handle, "K")
+    assert.equal(1, acted)
+    move_cursor(handle, 2, 0)
+    press(handle, "<CR>")
+    assert.equal(1, acted)
+
+    handle.unmount()
+  end)
+
   it("<Space> toggles a checkbox; the re-render keeps the hover under the cursor", function()
     local function App(ctx)
       local checked = ctx.use_state(false)

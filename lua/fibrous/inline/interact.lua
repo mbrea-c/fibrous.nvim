@@ -50,29 +50,35 @@ local str_width, cell_to_byte = width.str, width.cell_to_byte
 
 local ns_hover = vim.api.nvim_create_namespace("fibrous_inline_hover")
 
--- The deepest node at cell (x, y) carrying a role. Later children paint over
--- earlier ones, so they are tried in reverse; a role-less subtree falls
--- through to the closest interactive ancestor.
+-- The deepest node at cell (x, y) whose props satisfy `pred`. Later children
+-- paint over earlier ones, so they are tried in reverse; a non-matching subtree
+-- falls through to the closest matching ancestor. `pred` picks the marker —
+-- `role` for hover/activation, `on_key[key]` for an app-declared component key.
 ---@param node table  a node annotated by layout.compute
 ---@param x integer
 ---@param y integer
+---@param pred fun(props: table): any
 ---@return table|nil
-local function hit(node, x, y)
+local function hit(node, x, y, pred)
   local r = node.rect
   if not r or x < r.x or x >= r.x + r.w or y < r.y or y >= r.y + r.h then
     return nil
   end
   local children = node.children or {}
   for i = #children, 1, -1 do
-    local found = hit(children[i], x, y)
+    local found = hit(children[i], x, y, pred)
     if found then
       return found
     end
   end
-  if node.props and node.props.role then
+  if node.props and pred(node.props) then
     return node
   end
   return nil
+end
+
+local function has_role(props)
+  return props.role
 end
 
 ---@class InteractHandle
@@ -93,8 +99,9 @@ end
 ---@param mouse? InlineMouseOpts|false  false disables all mouse maps
 ---@param subwins? SubwinManager  explicit-focus target for <CR>/click/insert keys
 ---@param target? FlushTarget  which target's tree/buffer to interact with; default the root
+---@param keys? string[]  normal-mode keys routed to the on_key handler of the component under the cursor
 ---@return InteractHandle
-function M.attach(host, root_winid, mouse, subwins, target)
+function M.attach(host, root_winid, mouse, subwins, target, keys)
   if mouse == false then
     mouse = { activate = false, follow = false }
   else
@@ -125,7 +132,34 @@ function M.attach(host, root_winid, mouse, subwins, target)
     if not row then
       return nil
     end
-    return hit(target.tree, x, row)
+    return hit(target.tree, x, row, has_role)
+  end
+
+  -- Fire a component's own handler for `key`: the nearest node under the cursor
+  -- carrying `on_key[key]` is called with the cursor's column within its content
+  -- (like on_press). Generic — a component says "run this when `key` is pressed
+  -- while I'm hovered"; fibrous neither names nor interprets the action. Keyed off
+  -- on_key, not `role`, so such a component draws no hover and doesn't collide
+  -- with <CR>/<Space> activation.
+  local function fire_key(key)
+    if not target.tree then
+      return
+    end
+    local row, x = cursor_cell()
+    if not row then
+      return
+    end
+    local node = hit(target.tree, x, row, function(props)
+      return props.on_key and props.on_key[key]
+    end)
+    if node then
+      local local_x
+      local c = node.content
+      if x and c then
+        local_x = math.min(math.max(x - c.x, 0), math.max(c.w - 1, 0))
+      end
+      node.props.on_key[key](local_x)
+    end
   end
 
   -- The node's hover override; every interactive node hovers, so no override
@@ -408,6 +442,14 @@ function M.attach(host, root_winid, mouse, subwins, target)
     vim.keymap.set("n", "<LeftRelease>", function()
       activate(true, true)
     end, { buffer = bufnr, nowait = true, desc = "fibrous: activate (mouse)" })
+  end
+  -- App-declared component keys: each is routed to the on_key handler of the
+  -- component under the cursor (nothing fires if none there carries it).
+  for _, key in ipairs(keys or {}) do
+    maps[#maps + 1] = key
+    vim.keymap.set("n", key, function()
+      fire_key(key)
+    end, { buffer = bufnr, nowait = true, desc = "fibrous: component key " .. key })
   end
 
   -- Insert-entry keys: over a subwindow they focus its float and replay the

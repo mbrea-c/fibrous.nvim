@@ -82,6 +82,55 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
+  it("scroll_x = false pins the container's leftcol; default containers scroll freely", function()
+    -- Horizontal scroll lock is OPT-IN per container. Default: a container float
+    -- scrolls both ways like any window. scroll_x = false pins leftcol to 0 (a
+    -- vertical-only viewport — e.g. a transcript, where visual mode reaching a
+    -- padded line's trailing newline would otherwise drift it sideways).
+    local function app(container_props)
+      return function()
+        return {
+          comp = ui.col,
+          props = {},
+          children = {
+            { comp = ui.container, props = container_props, children = { { comp = ui.label, props = { text = "alpha" } } } },
+          },
+        }
+      end
+    end
+    local function leftcol_of(win)
+      local lc
+      vim.api.nvim_win_call(win, function()
+        lc = vim.fn.winsaveview().leftcol or 0
+      end)
+      return lc
+    end
+    local function scroll_right(win)
+      vim.api.nvim_win_call(win, function()
+        vim.fn.winrestview({ leftcol = 4 })
+      end)
+      vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(win) })
+    end
+
+    -- default: unpinned — a horizontal scroll sticks
+    local free = mount.floating(app({}), {}, { width = 12, height = 6 })
+    local fsub = subwin_of(free.winid)
+    scroll_right(fsub)
+    vim.wait(100)
+    assert.equal(4, leftcol_of(fsub))
+    free.unmount()
+
+    -- scroll_x = false: leftcol snaps back to 0
+    local pinned = mount.floating(app({ scroll_x = false }), {}, { width = 12, height = 6 })
+    local psub = subwin_of(pinned.winid)
+    scroll_right(psub)
+    vim.wait(200, function()
+      return leftcol_of(psub) == 0
+    end, 10)
+    assert.equal(0, leftcol_of(psub))
+    pinned.unmount()
+  end)
+
   it("an explicit height is a viewport: the buffer grows, the float doesn't", function()
     local function App()
       local rows = {}

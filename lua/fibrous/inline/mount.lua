@@ -175,6 +175,7 @@ end
 ---@field col? integer      default centered
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
+---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer   root float zindex (default 50, nvim's float default); subwindow levels stack root+1
 ---@field border? string|string[]  nvim_open_win border for the root float
 ---@field backdrop? boolean|integer  dim the editor behind the app: a full-screen, non-focusable float one z-level below the root (FibrousBackdrop + winblend; a number IS the blend, true = 60). NB nvim's compositor can't blend floats through a winblend float: normal windows behind the backdrop DIM, floats behind it (pane-anchored fibrous apps included) are hidden outright — the intended modal effect. Needs termguicolors to blend rather than block.
@@ -265,8 +266,8 @@ function M.floating(component, props, opts)
 	if not scroll then
 		pin_restore = pin_view(winid, group)
 	end
-	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1 })
-	interaction = interact.attach(host, winid, opts.mouse, manager)
+	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1, keys = opts.keys })
+	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys)
 
 	local function sync()
 		local cur = geom()
@@ -310,6 +311,7 @@ end
 ---@field split? SplitOpts   direction/position/size of the host pane; default vertical/left/40
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
+---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer   root float zindex (default 10 — see M.window)
 
 -- Open a native split pane and return its winid. The pane holds a throwaway
@@ -353,7 +355,13 @@ function M.split(component, props, opts)
 	vim.api.nvim_set_current_win(origin_winid)
 
 	local handle =
-		M.window(component, props, { winid = host_winid, mode = opts.mode, mouse = opts.mouse, zindex = opts.zindex })
+		M.window(component, props, {
+			winid = host_winid,
+			mode = opts.mode,
+			mouse = opts.mouse,
+			zindex = opts.zindex,
+			keys = opts.keys,
+		})
 
 	return handle
 end
@@ -362,6 +370,7 @@ end
 ---@field winid integer which window to mount on
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
+---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer  root float zindex; default 10. Pane-anchored apps are page furniture — the whole stack (root + subwindow levels, +1 each) stays below nvim's float default (50), so genuine floats (float-mounted fibrous apps, other plugins' popups) always render above them.
 
 -- Mount `component` over a native split pane.
@@ -423,8 +432,8 @@ function M.window(component, props, opts)
 	if not scroll then
 		pin_restore = pin_view(winid, group)
 	end
-	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1 })
-	interaction = interact.attach(host, winid, opts.mouse, manager)
+	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1, keys = opts.keys })
+	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys)
 
 	-- The pane is reachable by <C-w>-navigation (floats are not part of the
 	-- window layout), but it is a blank scratch buffer behind the float:
