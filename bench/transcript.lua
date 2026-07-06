@@ -28,15 +28,41 @@ local layout = require("fibrous.inline.layout")
 local render = require("fibrous.inline.render")
 local ui = require("fibrous.inline.components")
 
+-- Structured-output mode, identical contract to bench/run.lua: BENCH_JSON=1
+-- suppresses the human lines and emits one { label, bench, n, results } object;
+-- BENCH_LABEL tags the run. Only the reporting changes — the scenarios are what
+-- the history walker measures against every commit's library.
+local JSON = (vim.env.BENCH_JSON or "") ~= ""
+local LABEL = vim.env.BENCH_LABEL or ""
+local RESULTS = {}
+local function say(line)
+	if not JSON then
+		io.write(line)
+	end
+end
+local function record(op, unit, value, extra)
+	local r = { op = op, unit = unit, value = value }
+	for k, v in pairs(extra or {}) do
+		r[k] = v
+	end
+	RESULTS[#RESULTS + 1] = r
+end
+
 local function bench(name, iters, fn)
-	fn(0) -- warmup (JIT + caches)
+	local ok, err = pcall(fn, 0) -- warmup (JIT + caches)
+	if not ok then
+		record(name, "ms/op", nil, { iters = iters, error = tostring(err) })
+		say(("%-52s ERROR: %s\n"):format(name, tostring(err)))
+		return
+	end
 	collectgarbage("collect")
 	local t0 = uv.hrtime()
 	for i = 1, iters do
 		fn(i)
 	end
 	local per_op = (uv.hrtime() - t0) / iters / 1e6
-	io.write(("%-52s %10.3f ms/op   (%d iters)\n"):format(name, per_op, iters))
+	record(name, "ms/op", per_op, { iters = iters })
+	say(("%-52s %10.3f ms/op   (%d iters)\n"):format(name, per_op, iters))
 end
 
 local WIDTH = 100
@@ -115,7 +141,7 @@ local function scroll_host()
 	})
 end
 
-io.write(("transcript benchmarks — N = %d entries\n\n"):format(N))
+say(("transcript benchmarks — N = %d entries\n\n"):format(N))
 
 ---------------------------------------------------------------------------
 -- The paint floor: layout + full fresh paint at transcript size, no
@@ -194,4 +220,8 @@ do
 	root:unmount()
 end
 
-io.write("\ndone\n")
+if JSON then
+	io.write(vim.json.encode({ label = LABEL, bench = "transcript", n = N, results = RESULTS }) .. "\n")
+else
+	io.write("\ndone\n")
+end

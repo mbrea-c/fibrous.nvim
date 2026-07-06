@@ -12,6 +12,26 @@
     (left to you — renaming the live working dir mid-session would break the
     cwd)
 
+## Tooling
+
+- [x] Benchmark history walker — run the benches across a span of git history and
+  aggregate into a trend table. `nix run .#bench-history -- --last 12 --reps 8
+  [--step S] [--benches run,transcript] [--n BENCH_N]` (or `scripts/bench_history.sh`
+  standalone). SAFETY: never modifies the real repo/working tree — clones to a
+  temp dir (`--no-hardlinks`), does all worktrees/checkouts THERE, cleans up on
+  exit. Each commit is measured by the SAME pinned bench code (the flake bakes
+  `bench/` from `self`), run against that commit's library via
+  `--cmd 'set rtp^=<worktree>'`, on the flake's constant neovim — only
+  `lua/fibrous/` varies. The uncommitted working tree is benched too (a `working`
+  point: `lua/` is COPIED into temp, never touched in place). `--reps` runs
+  randomized batches (each batch = every point once, in fresh random order) so
+  drift spreads evenly; the aggregator (`scripts/bench_aggregate.lua`) reduces
+  reps to median + MAD and flags ▲/▼ shifts that clear the combined noise + a 3%
+  floor. Benches gained a `BENCH_JSON=1` structured-output mode (BENCH_LABEL tags
+  the run) that leaves the human output and the measured scenarios untouched.
+  Caveat: laptop noise dominates sub-ms ops — trust it for A/B and short windows,
+  add `--reps` for stability; environment pinning (taskset/governor) not done.
+
 ## Bugs
 
 - [x] Relayout (e.g. resize) clears visual selection

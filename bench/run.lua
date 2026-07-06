@@ -39,15 +39,45 @@ local render = require("fibrous.inline.render")
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
 
+-- Structured-output mode (bench_history.sh): BENCH_JSON=1 suppresses the human
+-- lines and emits one JSON object at the end — { label, bench, n, results } — so
+-- a caller can aggregate many runs. BENCH_LABEL tags the run (a commit sha or
+-- "working"). The scenario code is untouched; only how a result is REPORTED
+-- changes, so the same pinned file measures every commit identically.
+local JSON = (vim.env.BENCH_JSON or "") ~= ""
+local LABEL = vim.env.BENCH_LABEL or ""
+local RESULTS = {}
+local function say(line)
+	if not JSON then
+		io.write(line)
+	end
+end
+-- Record one measurement (and print it in human mode). A nil value + `error`
+-- marks a scenario that raised — a commit whose API the pinned harness outran —
+-- so the aggregate shows N/A for it instead of losing the whole run.
+local function record(op, unit, value, extra)
+	local r = { op = op, unit = unit, value = value }
+	for k, v in pairs(extra or {}) do
+		r[k] = v
+	end
+	RESULTS[#RESULTS + 1] = r
+end
+
 local function bench(name, iters, fn)
-	fn(0) -- warmup (JIT + caches)
+	local ok, err = pcall(fn, 0) -- warmup (JIT + caches)
+	if not ok then
+		record(name, "ms/op", nil, { iters = iters, error = tostring(err) })
+		say(("%-52s ERROR: %s\n"):format(name, tostring(err)))
+		return
+	end
 	collectgarbage("collect")
 	local t0 = uv.hrtime()
 	for i = 1, iters do
 		fn(i)
 	end
 	local per_op = (uv.hrtime() - t0) / iters / 1e6
-	io.write(("%-52s %10.3f ms/op   (%d iters)\n"):format(name, per_op, iters))
+	record(name, "ms/op", per_op, { iters = iters })
+	say(("%-52s %10.3f ms/op   (%d iters)\n"):format(name, per_op, iters))
 end
 
 ---------------------------------------------------------------------------
@@ -121,7 +151,7 @@ local function pure_tree(n)
 end
 
 local N = tonumber(vim.env.BENCH_N) or 100
-io.write(("inline host benchmarks — N = %d sections (~%d nodes)\n\n"):format(N, N * 6))
+say(("inline host benchmarks — N = %d sections (~%d nodes)\n\n"):format(N, N * 6))
 
 bench("pure layout+paint (scroll mode)", 50, function()
 	local tree = pure_tree(N)
@@ -232,11 +262,13 @@ do
 		local cpu = cpu_second()
 		local commits = vim.api.nvim_buf_get_changedtick(host.bufnr) - tick0
 		root:unmount()
-		io.write(("%-52s %10.3f ms CPU/s (%d commits)\n"):format(label, cpu, commits))
+		record(label, "ms CPU/s", cpu, { commits = commits })
+		say(("%-52s %10.3f ms CPU/s (%d commits)\n"):format(label, cpu, commits))
 	end
 
 	local idle = cpu_second()
-	io.write(("%-52s %10.3f ms CPU/s\n"):format("idle event loop (animation baseline)", idle))
+	record("idle event loop (animation baseline)", "ms CPU/s", idle)
+	say(("%-52s %10.3f ms CPU/s\n"):format("idle event loop (animation baseline)", idle))
 	measure("animation 30fps, moving frame (bouncing dot)", bouncing)
 	measure("animation 30fps, static frame (diff-skipped)", static)
 end
@@ -268,4 +300,8 @@ do
 	handle.unmount()
 end
 
-io.write("\ndone\n")
+if JSON then
+	io.write(vim.json.encode({ label = LABEL, bench = "run", n = N, results = RESULTS }) .. "\n")
+else
+	io.write("\ndone\n")
+end
