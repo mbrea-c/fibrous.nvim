@@ -46,6 +46,18 @@ describe("inline.layout text nodes", function()
     assert.same({ "abc", "def", "gh" }, tree.lines)
   end)
 
+  it("wrap = 'char' breaks at ANY character, preserving whitespace (indentation kept)", function()
+    -- For code: word wrap drops leading whitespace and collapses inner runs; char
+    -- wrap chunks by display width keeping every space, so indentation survives.
+    local tree = { kind = "text", props = { wrap = "char" }, text = "    indented and long" }
+    layout.compute(tree, { width = 10 })
+    for _, l in ipairs(tree.lines) do
+      assert.is_true(vim.fn.strdisplaywidth(l) <= 10)
+    end
+    assert.equal("    indent", tree.lines[1]) -- 4 spaces kept (word wrap would give "indented")
+    assert.equal("    indented and long", table.concat(tree.lines)) -- nothing lost or collapsed
+  end)
+
   it("assigned width narrower than measured re-wraps at layout time", function()
     -- A col child stretches to the col's content width; wrapped text must
     -- reflow to the width it actually got, not the width it was measured at.

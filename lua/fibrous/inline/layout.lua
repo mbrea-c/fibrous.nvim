@@ -138,6 +138,68 @@ local function wrap_text(text, ranges, max_w)
 	return out, runs
 end
 
+-- Character-level wrap: break each logical line into display-width chunks at ANY
+-- character boundary, keeping ALL whitespace (so a code line keeps its
+-- indentation and inner spacing — unlike word wrap, which tokenizes on %S+ and
+-- drops leading/collapses inner whitespace). Spans re-attribute like wrap_text;
+-- continuation rows start at column 0 (no hanging indent). A single char wider
+-- than max_w degrades to its own overflowing row, as hard_break does.
+---@param text string
+---@param ranges SpanRange[]|nil
+---@param max_w integer
+---@return string[] lines, SpanRun[][]|nil line_runs
+local function wrap_text_char(text, ranges, max_w)
+	local out = {}
+	local po = ranges and {}
+	local base = 1
+	for _, logical in ipairs(vim.split(text, "\n", { plain = true })) do
+		if logical == "" then
+			out[#out + 1] = "" -- blank line preserved (paragraph break)
+			if po then
+				po[#po + 1] = {}
+			end
+		else
+			local chunk, w, cs = "", 0, base
+			for ch in chars(logical) do
+				local cw = char_width(ch)
+				if w + cw > max_w and chunk ~= "" then
+					out[#out + 1] = chunk
+					if po then
+						po[#po + 1] = { { s = cs, text = chunk } }
+					end
+					cs = cs + #chunk
+					chunk, w = "", 0
+				end
+				chunk, w = chunk .. ch, w + cw
+			end
+			out[#out + 1] = chunk
+			if po then
+				po[#po + 1] = { { s = cs, text = chunk } }
+			end
+		end
+		base = base + #logical + 1
+	end
+	if not po then
+		return out, nil
+	end
+	local runs = {}
+	for i, pieces in ipairs(po) do
+		runs[i] = spans.runs(pieces, ranges)
+	end
+	return out, runs
+end
+
+-- Dispatch by wrap mode: "char" = character wrap (whitespace-preserving); any
+-- other truthy value = word wrap.
+---@param mode boolean|string
+---@return string[] lines, SpanRun[][]|nil line_runs
+local function wrap_by(mode, text, ranges, max_w)
+	if mode == "char" then
+		return wrap_text_char(text, ranges, max_w)
+	end
+	return wrap_text(text, ranges, max_w)
+end
+
 -- Split nowrap `text` at newlines; with `ranges`, attribute each line whole.
 ---@return string[] lines, SpanRun[][]|nil line_runs
 local function split_text(text, ranges)
@@ -215,7 +277,7 @@ function measure(node, avail_w)
 		end
 		node._text, node._ranges = text, ranges
 		if props.wrap then
-			node.lines, node.line_runs = wrap_text(text, ranges, content_avail)
+			node.lines, node.line_runs = wrap_by(props.wrap, text, ranges, content_avail)
 			node._wrap_w = content_avail
 		else
 			node.lines, node.line_runs = split_text(text, ranges)
@@ -528,7 +590,7 @@ function layout(node, x, y, w, h)
 		end
 		node.lines, node.line_runs = split_text(text, ranges)
 	elseif node.kind == "text" and (node.props or {}).wrap and node.content.w ~= node._wrap_w then
-		node.lines, node.line_runs = wrap_text(node._text, node._ranges, math.max(node.content.w, 1))
+		node.lines, node.line_runs = wrap_by((node.props or {}).wrap, node._text, node._ranges, math.max(node.content.w, 1))
 		node._wrap_w = node.content.w
 	elseif CONTAINERS[node.kind] then
 		layout_children(node)
