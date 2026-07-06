@@ -48,6 +48,7 @@ local layout = require("fibrous.inline.layout")
 local render = require("fibrous.inline.render")
 local style = require("fibrous.inline.style")
 local theme = require("fibrous.inline.theme")
+local width = require("fibrous.inline.width")
 
 local M = {}
 
@@ -473,9 +474,34 @@ function M.new(opts)
 				for i = head + 1, new_end do
 					slice[#slice + 1] = canvas_lines[i]
 				end
+				-- Preserve the cursor's DISPLAY column across the write. set_lines
+				-- keeps the byte column, so an animated line whose glyphs change
+				-- UTF-8 length (same display width) drags a resting cursor as bytes
+				-- shift under it (weave's water indicator). Capture every showing
+				-- window whose cursor sits on a rewritten line; restore below. Only
+				-- for same-count splices, where line indices don't move.
+				local pinned
+				if old_n == new_n then
+					for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+						local pos = vim.api.nvim_win_get_cursor(win)
+						local r = pos[1] - 1
+						if r >= head and r < old_end then
+							local line = vim.api.nvim_buf_get_lines(buf, r, r + 1, false)[1] or ""
+							pinned = pinned or {}
+							pinned[#pinned + 1] = { win = win, row = pos[1], cell = width.str(line:sub(1, pos[2])) }
+						end
+					end
+				end
 				vim.bo[buf].modifiable = true
 				vim.api.nvim_buf_set_lines(buf, head, old_end, false, slice)
 				vim.bo[buf].modifiable = false
+				for _, p in ipairs(pinned or {}) do
+					local line = vim.api.nvim_buf_get_lines(buf, p.row - 1, p.row, false)[1] or ""
+					local col = width.cell_to_byte(line, p.cell)
+					if col ~= vim.api.nvim_win_get_cursor(p.win)[2] then
+						pcall(vim.api.nvim_win_set_cursor, p.win, { p.row, col })
+					end
+				end
 				for i = head + 1, new_end do
 					for _, s in ipairs(hl_rows[i]) do
 						vim.api.nvim_buf_set_extmark(buf, ns, s.row, s.start_col, {
