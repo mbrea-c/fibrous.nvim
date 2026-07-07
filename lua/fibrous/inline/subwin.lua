@@ -1265,15 +1265,28 @@ function M.attach(host, root_winid, opts)
 	-- the root — a lone widget window closing has no sensible half-open state.
 	-- Closing the ROOT float cascades into the mount target's teardown; our own
 	-- destroys set entry.dead before closing, so they don't rebound here.
+	--
+	-- One more case must NOT rebound: a widget being UNMOUNTED whose component
+	-- deletes its (unowned) buffer in an effect cleanup. Deleting a displayed
+	-- buffer makes nvim auto-close the float BEFORE sync's destroy marks it dead
+	-- — a spurious WinClosed that would otherwise take the whole app down (the
+	-- fibrous-docs playground crash). Buffer validity can't tell the two apart:
+	-- the WinClosed fires mid-deletion, while the buffer still reads valid. So
+	-- DEFER the decision — by the time the scheduled check runs, an unmount has
+	-- driven a re-render + sync that reaps the entry (floats[inst] cleared,
+	-- entry.dead set); a genuine :q triggers no re-render, so the entry is still
+	-- live. Only then is it a real user close.
 	vim.api.nvim_create_autocmd("WinClosed", {
 		group = group,
 		callback = function(ev)
 			local closed = tonumber(ev.match)
-			for _, entry in pairs(floats) do
+			for inst, entry in pairs(floats) do
 				if entry.winid == closed and not entry.dead then
-					-- deferred: windows can't be closed from inside WinClosed
+					-- deferred: windows can't be closed from inside WinClosed, and
+					-- the defer is also what lets a pending unmount's sync reap the
+					-- entry first (see above).
 					vim.schedule(function()
-						if vim.api.nvim_win_is_valid(root_winid) then
+						if floats[inst] == entry and not entry.dead and vim.api.nvim_win_is_valid(root_winid) then
 							pcall(vim.api.nvim_win_close, root_winid, true)
 						end
 					end)

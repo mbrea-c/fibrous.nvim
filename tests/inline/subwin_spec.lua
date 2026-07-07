@@ -1070,6 +1070,56 @@ describe("inline.subwin", function()
     assert.equal(before, #vim.api.nvim_list_wins())
   end)
 
+  it("unmounting a raw_buffer whose buffer the app deletes does not tear down the app", function()
+    -- The fibrous-docs playground crash: a swapped-out subtree whose component
+    -- owns a raw_buffer and DELETES that buffer in its effect cleanup on unmount.
+    -- Deleting the buffer makes nvim auto-close the float BEFORE sync's destroy
+    -- marks the entry dead, so the WinClosed guard must not mistake it for a
+    -- user :q of a live widget and cascade into closing the root.
+    local raw_buffer = { __host = "raw_buffer" }
+    local function Editor(ctx)
+      local ref = ctx.use_ref(nil)
+      if not ref.current then
+        ref.current = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(ref.current, 0, -1, false, { "hello" })
+      end
+      ctx.use_effect(function()
+        local b = ref.current
+        return function()
+          pcall(vim.api.nvim_buf_delete, b, { force = true })
+        end
+      end, {})
+      return { comp = raw_buffer, props = { bufnr = ref.current, height = 3, render = "always" } }
+    end
+    local setter
+    local function App(ctx)
+      local show = ctx.use_state(true)
+      setter = show
+      local children = { { comp = text, props = { text = "top" } } }
+      if show.get() then
+        children[#children + 1] = { comp = Editor, props = {} }
+      end
+      return { comp = col, props = {}, children = children }
+    end
+
+    local handle = mount.floating(App, {}, { width = 10, height = 6, mode = "scroll" })
+    assert.is_not_nil(subwin_of(handle))
+
+    setter.set(false) -- unmount Editor: its cleanup deletes the raw_buffer's buffer
+
+    -- let any (mis)scheduled WinClosed→root cascade run
+    vim.wait(200, function()
+      return not vim.api.nvim_win_is_valid(handle.winid)
+    end)
+
+    -- the widget went away, but the app is still standing
+    assert.is_true(vim.api.nvim_win_is_valid(handle.winid), "root float was torn down by the widget's buffer deletion")
+    assert.is_true(vim.api.nvim_buf_is_valid(handle.bufnr))
+    assert.is_nil(subwin_of(handle))
+
+    handle.unmount()
+  end)
+
   -- Click-to-insert: a pointer user may have no keyboard at all (on mobile
   -- the OSK only appears in insert-ish modes), so clicking a text field means
   -- "edit it" — the click path (<LeftRelease>) enters the widget IN INSERT
