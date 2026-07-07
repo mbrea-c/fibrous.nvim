@@ -527,19 +527,34 @@ function M.attach(host, root_winid, opts)
 			or c.w <= 0
 			or (policy(entry) == "focus" and not focused and not entry.revealing)
 		then
-			vim.api.nvim_win_set_config(entry.winid, { hide = true })
+			-- Idempotent: a float already hidden must not be re-hidden. Every
+			-- nvim_win_set_config REDRAWS the float, so a root flush from an
+			-- animation elsewhere (weave's water) would otherwise churn every
+			-- subwindow each frame — the ssh+tmux transcript flicker that never
+			-- settles.
+			if entry.applied_geo ~= "hide" then
+				vim.api.nvim_win_set_config(entry.winid, { hide = true })
+				entry.applied_geo = "hide"
+			end
 			return
 		end
 
-		vim.api.nvim_win_set_config(entry.winid, {
-			relative = "win",
-			win = root_winid,
-			row = vis_top,
-			col = vis_left,
-			width = vis_right - vis_left + 1,
-			height = vis_bot - vis_top + 1,
-			hide = false,
-		})
+		-- Only reconfigure when the visible geometry actually moved (see above):
+		-- an unchanged box under a busy root stays put, no redraw.
+		local geo = table.concat({ vis_top, vis_left, vis_right - vis_left + 1, vis_bot - vis_top + 1 }, ":")
+		local geo_changed = entry.applied_geo ~= geo
+		if geo_changed then
+			vim.api.nvim_win_set_config(entry.winid, {
+				relative = "win",
+				win = root_winid,
+				row = vis_top,
+				col = vis_left,
+				width = vis_right - vis_left + 1,
+				height = vis_bot - vis_top + 1,
+				hide = false,
+			})
+			entry.applied_geo = geo
+		end
 		-- Clipped at the top: scroll the float's own viewport so the slice below
 		-- the occlusion edge is what shows — the clip COMPOSES with the widget's
 		-- own scroll (base + clipped). The rest of the view (cursor, columns) is
@@ -569,9 +584,17 @@ function M.attach(host, root_winid, opts)
 					v.col = width.cell_to_byte(line, v.leftcol + w - 1)
 				end
 			end
-			vim.api.nvim_win_call(entry.winid, function()
-				vim.fn.winrestview(v)
-			end)
+			-- winrestview also redraws, so skip it when the target view is
+			-- unchanged AND the geometry held. A resize (geo_changed) makes nvim
+			-- re-anchor topline around the cursor, so the restore MUST run then to
+			-- reassert base + clip — the memo only guards the truly-idle case.
+			local vkey = table.concat({ v.topline, v.lnum, v.leftcol or 0, v.col or 0 }, ":")
+			if geo_changed or entry.applied_view ~= vkey then
+				vim.api.nvim_win_call(entry.winid, function()
+					vim.fn.winrestview(v)
+				end)
+				entry.applied_view = vkey
+			end
 		end
 		-- Record the clip for the geometry just applied EVEN WHILE FOCUSED:
 		-- the view is deliberately left alone then, but the resize above makes

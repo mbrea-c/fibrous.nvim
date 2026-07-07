@@ -50,4 +50,64 @@ describe("bench.termdraw", function()
     })
     assert.is_true(hl.bytes > 0, "a highlight-only change still costs terminal draw")
   end)
+
+  it("a still container float adds ~no per-frame draw under an animating sibling", function()
+    -- Regression guard for the reposition idempotence fix. A component animating
+    -- somewhere in the tree flushes the ROOT every frame; a still container's
+    -- float must NOT be reconfigured/re-scrolled (each of those REDRAWS it) — the
+    -- ssh+tmux transcript flicker that scaled with transcript size. The guard is
+    -- self-calibrating: the SAME 30 static rows, once inline and once inside a
+    -- container float, under the SAME moving-dot sibling. The delta is purely the
+    -- float's per-frame overhead — it must stay near zero (was ~800 B/frame before
+    -- the fix, 0 after). A generous 200 B/frame bound tolerates pty noise while
+    -- catching any return of the per-frame float redraw.
+    local PRE = [[
+      local mount = require("fibrous.inline.mount")
+      local ui = require("fibrous.inline.components")
+      local function rows(n)
+        local k = {}
+        for i = 1, n do k[i] = { comp = ui.label, props = { text = ("static row %d — lorem ipsum"):format(i) } } end
+        return k
+      end
+      local set
+      local function Dot(ctx) local s = ctx.use_state(0); set = s.set
+        local W = 40; local pos = s.get() % W
+        return { comp = ui.label, props = { text = ("."):rep(pos) .. "o" .. ("."):rep(W - 1 - pos) } } end
+    ]]
+    local function per_frame(body)
+      return termdraw.measure({
+        rtp = { vim.fn.getcwd() },
+        cols = 60,
+        rows = 20,
+        frames = 30,
+        init = PRE .. body,
+      }).per_frame
+    end
+
+    -- 30 static rows laid out inline, the dot animating above them
+    local inline = per_frame([[
+      local function App() return { comp = ui.col, props = {}, children =
+        vim.list_extend({ { comp = Dot } }, rows(30)) } end
+      mount.floating(App, {}, { width = 50, height = 16 })
+      _G.FRAME = function(i) set(i) end
+    ]])
+    -- the SAME rows inside a container (a subwindow float), same dot above
+    local floated = per_frame([[
+      local function App() return { comp = ui.col, props = {}, children = {
+        { comp = Dot },
+        { comp = ui.container, props = { height = 12, scroll_x = false }, children = rows(30) },
+      } } end
+      mount.floating(App, {}, { width = 50, height = 16 })
+      _G.FRAME = function(i) set(i) end
+    ]])
+
+    assert.is_true(
+      floated - inline < 200,
+      ("still container float overhead too high: %.0f B/frame (inline %.0f, floated %.0f)"):format(
+        floated - inline,
+        inline,
+        floated
+      )
+    )
+  end)
 end)

@@ -123,6 +123,34 @@ run(
 ]]
 )
 
+-- A still container float under an animating sibling: the dot moves every frame
+-- (flushing the root), but the 30-row container is untouched. Its float must NOT
+-- redraw per frame — this should track close to "animation frame" above, NOT
+-- add a full float repaint on top (the reposition-idempotence win; guarded in
+-- tests/bench/termdraw_spec.lua).
+run(
+	"still container float under animation",
+	PRE
+		.. [[
+  local function rows(n)
+    local k = {}
+    for i = 1, n do k[i] = { comp = ui.label, props = { text = ("static row %d — lorem ipsum"):format(i) } } end
+    return k
+  end
+  local W = 40
+  local set
+  local function Dot(ctx) local s = ctx.use_state(0); set = s.set
+    local pos = s.get() % W
+    return { comp = ui.label, props = { text = ("."):rep(pos) .. "o" .. ("."):rep(W - 1 - pos) } } end
+  local function App() return { comp = ui.col, props = {}, children = {
+    { comp = Dot },
+    { comp = ui.container, props = { height = 14, scroll_x = false }, children = rows(30) },
+  } } end
+  mount.floating(App, {}, { width = 50, height = 20 })
+  _G.FRAME = function(i) set(i) end
+]]
+)
+
 if JSON then
 	io.write(vim.json.encode({ label = LABEL, bench = "term", n = FRAMES, results = RESULTS }) .. "\n")
 else

@@ -289,6 +289,52 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
+  it("a root-only re-flush does not reconfigure a settled container float", function()
+    -- reposition() runs for every container on every ROOT flush. A component
+    -- animating elsewhere (weave's water indicator) flushes the root each frame
+    -- while the container's box, content and the root's scroll are all
+    -- unchanged. Reconfiguring the float (nvim_win_set_config) then forces a
+    -- needless float REDRAW every frame — the reported ssh+tmux cursor flicker
+    -- "around the transcript buffer" that never settles while water moves.
+    -- reposition must be idempotent: no set_config when nothing about the float
+    -- moved.
+    local function App(_, props)
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = props.head or "head" } },
+          {
+            comp = ui.container,
+            props = {},
+            children = { { comp = ui.label, props = { text = "body" } } },
+          },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 6 })
+    local csub = subwin_of(handle.winid)
+
+    local real_cfg = vim.api.nvim_win_set_config
+    local cfg_calls = 0
+    vim.api.nvim_win_set_config = function(win, ...)
+      if win == csub then
+        cfg_calls = cfg_calls + 1
+      end
+      return real_cfg(win, ...)
+    end
+    local ok, err = pcall(function()
+      -- a root-only update (the water-frame analogue): the head label flips, the
+      -- container's box and content stay put
+      handle.set_props({ head = "HEAD" })
+    end)
+    vim.api.nvim_win_set_config = real_cfg
+    assert(ok, err)
+
+    handle.unmount()
+    assert.equal(0, cfg_calls)
+  end)
+
   it("a text_input inside a container works end to end", function()
     local got, submitted
     local function App()
