@@ -1103,7 +1103,7 @@ function M.attach(host, root_winid, opts)
 				keys = opts.keys,
 			})
 			entry.child_interact =
-				interact.attach(host, winid, opts.mouse, entry.child_manager, entry.child_target, opts.keys)
+				interact.attach(host, winid, opts.mouse, entry.child_manager, entry.child_target, opts.keys, props.anchor)
 			-- Creation-time escape hatch, like text_input's — the container also
 			-- hands over its float, the app's handle for window work
 			-- (buffer-local keymaps, follow-scroll, focusing).
@@ -1243,7 +1243,11 @@ function M.attach(host, root_winid, opts)
 					-- the host — this level's splice says nothing about it); a
 					-- pure scroll here still repositions the child floats, whose
 					-- visible slices moved with the container's
-					entry.child_manager.sync(host.take_damage(node.fiber))
+					local child_damage = host.take_damage(node.fiber)
+					entry.child_manager.sync(child_damage)
+					-- Put the cursor back on its anchored entry after the container's
+					-- own buffer was re-spliced (resize rewrap / mid-list insert).
+					entry.child_interact.reanchor(child_damage)
 					entry.child_interact.update()
 				end
 			end

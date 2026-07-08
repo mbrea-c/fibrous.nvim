@@ -80,6 +80,11 @@ end
 function M.create_fiber(spec, env)
 	local fiber = Fiber.new(spec.comp, spec.props)
 	fiber.children_specs = spec.children or {}
+	-- Stable identity for cursor anchoring (interact.lua): the host propagates
+	-- it onto the laid-out node so a relayout can relocate the cursor's entry.
+	-- Reconciliation itself stays POSITIONAL — the key is metadata, not a
+	-- reorder hint — so a shifted entry keeps its key while its fiber is reused.
+	fiber.key = spec.key
 	fiber.ctx = hooks.make_ctx(env.schedule)
 	local tag = host_tag(spec.comp)
 	if tag and env.host then
@@ -134,40 +139,80 @@ end
 ---@param env Env
 function M.reconcile_children(parent, specs, env)
 	local old = parent.child_fibers or {}
+
+	-- Matching, React-style: a spec WITH a key matches the old fiber of the same
+	-- key (so a moved entry keeps its fiber + hook state); a spec WITHOUT a key
+	-- matches the next unclaimed KEYLESS old fiber in order — i.e. by index, the
+	-- previous positional behavior. Keys are metadata (the cursor anchor and this
+	-- matching read them); layout/paint already reposition a reused fiber that
+	-- lands at a new rect, so a move needs no extra bookkeeping — only a removal
+	-- must blank the vacated cells, via _child_dropped.
+	local by_key = {}
+	local keyless = {}
+	for _, f in ipairs(old) do
+		if f.key ~= nil then
+			by_key[f.key] = f
+		else
+			keyless[#keyless + 1] = f
+		end
+	end
+
+	local used = {}
+	local kl = 0 -- cursor into `keyless`, advanced once per keyless spec
 	local next_children = {}
+
+	-- Update-in-place (or memo-bailout) a matched fiber, exactly as before.
+	local function reuse(existing, spec)
+		if spec.memo and type(spec.comp) == "function" and shallow_equal(existing.props, spec.props or {}) then
+			existing.parent = parent
+		else
+			local prev_props = existing.props
+			existing.props = spec.props or {}
+			existing.children_specs = spec.children or {}
+			existing.parent = parent
+			if existing.instance and env.host then
+				env.host.update_instance(existing.instance, prev_props, existing.props)
+			end
+			M.render_fiber(existing, env)
+		end
+	end
+
 	for i, spec in ipairs(specs) do
-		local existing = old[i]
-		if existing and existing.type == spec.comp then
-			if spec.memo and type(spec.comp) == "function" and shallow_equal(existing.props, spec.props or {}) then
-				existing.parent = parent
-				next_children[i] = existing
-			else
-				local prev_props = existing.props
-				existing.props = spec.props or {}
-				existing.children_specs = spec.children or {}
-				existing.parent = parent
-				if existing.instance and env.host then
-					env.host.update_instance(existing.instance, prev_props, existing.props)
-				end
-				M.render_fiber(existing, env)
-				next_children[i] = existing
+		local match
+		if spec.key ~= nil then
+			local cand = by_key[spec.key]
+			if cand and cand.type == spec.comp and not used[cand] then
+				match = cand
 			end
 		else
-			if existing then
-				M.unmount_fiber(existing, env)
-				-- a positionally-dropped fiber: the incremental painter must blank
-				-- its old cells (a same-or-larger new child at this index won't).
-				parent._child_dropped = true
+			-- next unclaimed keyless old; type must still match to reuse
+			kl = kl + 1
+			local cand = keyless[kl]
+			if cand and cand.type == spec.comp and not used[cand] then
+				match = cand
 			end
+		end
+
+		if match then
+			used[match] = true
+			match.key = spec.key
+			reuse(match, spec)
+			next_children[i] = match
+		else
 			local fiber = M.create_fiber(spec, env)
 			fiber.parent = parent
 			M.render_fiber(fiber, env)
 			next_children[i] = fiber
 		end
 	end
-	for i = #specs + 1, #old do
-		M.unmount_fiber(old[i], env)
-		parent._child_dropped = true -- trailing removal, same reason
+
+	-- Any old fiber not claimed this render is gone: unmount it and flag the
+	-- removal so the incremental painter blanks its orphaned cells.
+	for _, f in ipairs(old) do
+		if not used[f] then
+			M.unmount_fiber(f, env)
+			parent._child_dropped = true
+		end
 	end
 	parent.child_fibers = next_children
 end

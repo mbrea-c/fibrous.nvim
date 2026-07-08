@@ -81,8 +81,78 @@ local function has_role(props)
   return props.role
 end
 
+-- The deepest KEYED node at cell (x, y): the innermost entry carrying a stable
+-- `key` (host-stamped from the spec). Anchoring keys on this, not fiber identity,
+-- since positional reconciliation reuses a fiber for whatever entry lands at its
+-- index. Falls through to the closest keyed ancestor, like `hit`.
+---@return table|nil
+local function keyed_at(node, x, y)
+  local r = node.rect
+  if not r or x < r.x or x >= r.x + r.w or y < r.y or y >= r.y + r.h then
+    return nil
+  end
+  local children = node.children or {}
+  for i = #children, 1, -1 do
+    local found = keyed_at(children[i], x, y)
+    if found then
+      return found
+    end
+  end
+  if node.key ~= nil then
+    return node
+  end
+  return nil
+end
+
+-- The deepest node at cell (x, y), regardless of key — the fallback identity
+-- when nothing under the cursor is keyed. A pure relayout (resize) runs no
+-- reconciliation, so the fiber backref is stable and relocates the same content.
+local function deepest_at(node, x, y)
+  local r = node.rect
+  if not r or x < r.x or x >= r.x + r.w or y < r.y or y >= r.y + r.h then
+    return nil
+  end
+  local children = node.children or {}
+  for i = #children, 1, -1 do
+    local found = deepest_at(children[i], x, y)
+    if found then
+      return found
+    end
+  end
+  return node
+end
+
+-- The node whose fiber backref is `fiber`, anywhere in the tree, or nil.
+local function node_with_fiber(node, fiber)
+  if node.fiber == fiber then
+    return node
+  end
+  for _, child in ipairs(node.children or {}) do
+    local found = node_with_fiber(child, fiber)
+    if found then
+      return found
+    end
+  end
+  return nil
+end
+
+-- The node carrying `key` anywhere in the laid-out tree, or nil.
+local function node_with_key(node, key)
+  if node.key == key then
+    return node
+  end
+  for _, child in ipairs(node.children or {}) do
+    local found = node_with_key(child, key)
+    if found then
+      return found
+    end
+  end
+  return nil
+end
+
 ---@class InteractHandle
 ---@field update fun(propagate?: boolean)  re-evaluate hover at the current cursor (CursorMoved / post-flush); `propagate` forces driving hover into child containers (nil = only when this window is current)
+---@field reanchor fun(damage: any)  after a flush, put the cursor back on its anchored keyed entry (no-op when damage is false/nil or the surface is unfocused)
 ---@field activate fun(enter_subwins: boolean, via_click?: boolean)  run activation at the current cursor (roles + subwindow entry); a parent delegates into this after focusing the layer
 ---@field clear_hover fun()  drop this layer's hover (and any it drives in nested containers)
 ---@field teardown fun()
@@ -100,14 +170,16 @@ end
 ---@param subwins? SubwinManager  explicit-focus target for <CR>/click/insert keys
 ---@param target? FlushTarget  which target's tree/buffer to interact with; default the root
 ---@param keys? string[]  normal-mode keys routed to the on_key handler of the component under the cursor
+---@param anchor? boolean  keep the cursor on its keyed entry across relayout (default true; false opts out)
 ---@return InteractHandle
-function M.attach(host, root_winid, mouse, subwins, target, keys)
+function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
   if mouse == false then
     mouse = { activate = false, follow = false }
   else
     mouse = vim.tbl_extend("keep", mouse or {}, { activate = true, follow = false })
   end
   target = target or host.root_target
+  local anchor_enabled = anchor ~= false
   local bufnr = target.bufnr
   local group = vim.api.nvim_create_augroup("FibrousInlineInteract_" .. root_winid, { clear = true })
 
@@ -414,10 +486,98 @@ function M.attach(host, root_winid, mouse, subwins, target, keys)
     end
   end
 
+  -- ── Cursor anchoring across relayout ────────────────────────────────────
+  -- The vim cursor holds an ABSOLUTE line; a count-changing relayout (a width
+  -- resize rewraps everything, a mid-list insert shifts the tail) re-splices the
+  -- span it sits in and leaves it on a row that now holds different content. We
+  -- track what the cursor is on as the user moves, then after each relayout put
+  -- the cursor back on it — holding its screen row so the view doesn't jump.
+  -- Identity, best first: a `key` (survives INSERT/REORDER, since positional
+  -- reconciliation reuses a fiber for whatever entry lands at its index); else
+  -- the node's fiber (stable across a pure relayout like a resize, which runs no
+  -- reconciliation — this is what pins keyless UIs).
+  ---@type { key: any, fiber: any, offset: integer, screen_row: integer }|nil
+  local anchor_state = nil
+
+  -- Is this surface the live pointer (its window current)? Only then is the
+  -- cursor the user's, so only then do we capture/restore against it — an
+  -- unfocused transcript is owned by the app's own follow-to-bottom.
+  local function pointer_live()
+    return vim.api.nvim_win_is_valid(root_winid) and vim.api.nvim_get_current_win() == root_winid
+  end
+
+  -- Remember what the cursor is on and where it sits on screen.
+  local function capture_anchor()
+    if not anchor_enabled or not target.tree or not pointer_live() then
+      return
+    end
+    local row, x = cursor_cell()
+    if not row then
+      return
+    end
+    -- prefer the deepest KEYED entry (reorder-stable); fall back to the deepest
+    -- node's fiber (resize-stable) so keyless UIs pin too
+    local node = keyed_at(target.tree, x or 0, row) or deepest_at(target.tree, x or 0, row)
+    if not node then
+      anchor_state = nil
+      return
+    end
+    local topline = vim.api.nvim_win_call(root_winid, function()
+      return vim.fn.winsaveview().topline
+    end)
+    anchor_state = {
+      key = node.key, -- nil for the fiber fallback
+      fiber = node.fiber,
+      offset = row - node.rect.y, -- rows into the entry
+      screen_row = row - (topline - 1), -- rows below the top of the viewport
+    }
+  end
+
+  -- After a relayout that rewrote the buffer, move the cursor back onto its
+  -- anchored entry (and hold its screen row). `damage`: false/nil = the buffer
+  -- didn't change (pure scroll) → nothing to fix.
+  local function reanchor(damage)
+    if not anchor_enabled or not anchor_state or not damage then
+      return
+    end
+    if not target.tree or not pointer_live() then
+      return
+    end
+    -- relocate by key (reorder-stable) or, for a keyless anchor, by fiber
+    local node
+    if anchor_state.key ~= nil then
+      node = node_with_key(target.tree, anchor_state.key)
+    else
+      node = node_with_fiber(target.tree, anchor_state.fiber)
+    end
+    if not node then
+      return -- the entry is gone (e.g. collapsed away): leave the cursor be
+    end
+    local r = node.rect
+    local last = vim.api.nvim_buf_line_count(bufnr) - 1
+    local new_row = math.min(math.max(r.y + math.min(anchor_state.offset, math.max(r.h - 1, 0)), 0), last)
+    local line = vim.api.nvim_buf_get_lines(bufnr, new_row, new_row + 1, false)[1] or ""
+    local cur_col = vim.api.nvim_win_get_cursor(root_winid)[2]
+    vim.api.nvim_win_call(root_winid, function()
+      vim.fn.winrestview({
+        topline = math.max(new_row - anchor_state.screen_row + 1, 1),
+        lnum = new_row + 1,
+        col = math.min(cur_col, #line),
+        leftcol = 0,
+      })
+    end)
+  end
+
   vim.api.nvim_create_autocmd("CursorMoved", {
     group = group,
     buffer = bufnr,
-    callback = update,
+    callback = function()
+      capture_anchor()
+      -- A real cursor move in THIS buffer means the cursor is live here, so
+      -- force hover liveness (the bare autocmd used to pass its event table,
+      -- which `update` read as a truthy `propagate`).
+      update(true)
+    end,
   })
 
   local maps = { "<CR>", "<Space>" }
@@ -487,6 +647,9 @@ function M.attach(host, root_winid, mouse, subwins, target, keys)
 
   return {
     update = update,
+    -- Called by the mount / subwin manager after a flush: restore the cursor to
+    -- its anchored entry once the buffer has been re-spliced.
+    reanchor = reanchor,
     -- Exposed so a parent's subwin manager can delegate activation into this
     -- (container) layer after focusing it — the recursive half of
     -- `subwins.activate_at`.

@@ -220,6 +220,7 @@ function M.floating(component, props, opts)
 					damage = false
 				end
 				manager.sync(damage)
+				interaction.reanchor(damage)
 				interaction.update()
 			end
 		end,
@@ -267,7 +268,7 @@ function M.floating(component, props, opts)
 		pin_restore = pin_view(winid, group)
 	end
 	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1, keys = opts.keys })
-	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys)
+	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys, opts.anchor)
 
 	local function sync()
 		local cur = geom()
@@ -414,6 +415,7 @@ function M.window(component, props, opts)
 					damage = false
 				end
 				manager.sync(damage)
+				interaction.reanchor(damage)
 				interaction.update()
 			end
 		end,
@@ -433,7 +435,7 @@ function M.window(component, props, opts)
 		pin_restore = pin_view(winid, group)
 	end
 	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1, keys = opts.keys })
-	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys)
+	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys, opts.anchor)
 
 	-- The pane is reachable by <C-w>-navigation (floats are not part of the
 	-- window layout), but it is a blank scratch buffer behind the float:

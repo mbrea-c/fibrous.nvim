@@ -115,6 +115,9 @@ local function new_node(kind, props, fiber)
 	node.kind = kind
 	node.props = props
 	node.fiber = fiber
+	-- Stable identity for cursor anchoring (interact.lua reanchor): carried from
+	-- the fiber's spec `key`. Only nodes whose fiber was given a key get one.
+	node.key = fiber.key
 	return node
 end
 
@@ -139,7 +142,14 @@ end
 local function build_node(fiber, ctx)
 	if type(fiber.type) == "function" then
 		local child = fiber.child_fibers and fiber.child_fibers[1]
-		return child and build_node(child, ctx) or nil
+		local node = child and build_node(child, ctx) or nil
+		-- A keyed function component (an entry wrapper) has no node of its own —
+		-- stamp its key onto the host node it renders so anchoring can find it.
+		-- The outermost keyed wrapper wins (this runs as recursion unwinds).
+		if node and fiber.key ~= nil then
+			node.key = fiber.key
+		end
+		return node
 	end
 
 	local tag = fiber.type.__host
