@@ -175,6 +175,49 @@ describe("inline cursor anchor", function()
     handle.unmount()
   end)
 
+  it("pins the cursor in a NESTED container across a resize (the weave transcript shape)", function()
+    -- the transcript is a ui.container (its own buffer/float) with keyless
+    -- wrapping entries; a resize gives the container a FULL ("all") repaint,
+    -- which reanchor must act on (it arrives as nil damage, not a range).
+    local cont_win
+    local function App(_, props)
+      local kids = {}
+      for _, it in ipairs(props.items) do
+        kids[#kids + 1] = { comp = ui.paragraph, props = { text = it.text } }
+      end
+      return {
+        comp = ui.container,
+        props = { grow = 1, on_create = function(_, w) cont_win = w end },
+        children = kids,
+      }
+    end
+    vim.o.columns = 80
+    vim.o.lines = 24
+    local handle = mount.floating(App, { items = seed(9) }, { height = 14, mode = "fixed" })
+    assert.is_true(type(cont_win) == "number", "container float not created")
+    local cbuf = vim.api.nvim_win_get_buf(cont_win)
+
+    local function crow(needle)
+      for i, l in ipairs(vim.api.nvim_buf_get_lines(cbuf, 0, -1, false)) do
+        if l:find(needle, 1, true) then
+          return i
+        end
+      end
+    end
+    vim.api.nvim_set_current_win(cont_win) -- the container's own interact owns its anchor
+    local r = assert(crow("ENTRY5"), "ENTRY5 not found")
+    vim.api.nvim_win_set_cursor(cont_win, { r, 0 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = cbuf })
+
+    vim.o.columns = 44 -- narrower editor → container rewraps (full repaint)
+    handle.relayout()
+
+    local cr = vim.api.nvim_win_get_cursor(cont_win)[1]
+    local line = vim.api.nvim_buf_get_lines(cbuf, cr - 1, cr, false)[1] or ""
+    assert.truthy(line:find("ENTRY5", 1, true), "nested-container cursor swam on resize")
+    handle.unmount()
+  end)
+
   it("does not fight a wheel scroll: a re-render keeps the scrolled view", function()
     -- a tall keyless scroll surface whose header changes on re-render
     local function TallApp(_, props)

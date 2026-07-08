@@ -1248,7 +1248,14 @@ function M.attach(host, root_winid, opts)
 					-- Put the cursor back on its anchored entry after the container's
 					-- own buffer was re-spliced (resize rewrap / mid-list insert).
 					entry.child_interact.reanchor(child_damage)
-					entry.child_interact.update()
+					-- Re-evaluate the child's hover only when its buffer actually
+					-- changed (false = nothing did). Otherwise a flush from an animation
+					-- ELSEWHERE would clear the child's hover every frame just for the
+					-- parent's pointer to re-drive it — a redraw per frame (the ssh+tmux
+					-- flurry when hovering a tool call in an unfocused transcript).
+					if child_damage ~= false then
+						entry.child_interact.update()
+					end
 				end
 			end
 		end

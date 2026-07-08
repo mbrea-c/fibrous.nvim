@@ -27,10 +27,7 @@ AGENTS ARE ONLY ALLOWED TO "TICK OFF" TASKS WHEN COMPLETE
   trascript; this is very disorienting. I would rather the transcript cursor
   stays pinned.
 
-- [ ] weave:Long task lists overflow container. Maybe need to be nested into a
-  `render = "focus"` subcontainer.
-
-- [ ] fibrous+weave: Hovering a tool call on the transcript while the transcript
+- [x] fibrous+weave: Hovering a tool call on the transcript while the transcript
   is unfocused causes a flurry of redraws (cursor flickering on ssh+tmux)
 
 - [ ] fibrous+weave: In the parent buffer in weave, moving the cursor all the
@@ -41,6 +38,9 @@ AGENTS ARE ONLY ALLOWED TO "TICK OFF" TASKS WHEN COMPLETE
 
   - Not sure what the best solution is. Perhaps if `scroll_x` is disabled in a
     buffer, we should limit rendering to one cell before the edge of the window?
+
+- [ ] weave:Long task lists overflow container. Maybe need to be nested into a
+  `render = "focus"` subcontainer.
 
 ## Features
 

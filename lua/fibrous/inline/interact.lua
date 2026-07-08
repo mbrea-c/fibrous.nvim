@@ -250,17 +250,58 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     })
   end
 
+  -- What the hover overlay currently shows: the hovered FIBER + its rect. The
+  -- fiber is stable across a re-render (reconciliation reuses it) even when the
+  -- built node is a fresh object, so this means "the overlay on the buffer is
+  -- still correct" — the guard that keeps a parent-driven re-drive (hover_at on
+  -- every animation frame) from tearing the overlay down and repainting it. When
+  -- the content under it actually changes the buffer is re-spliced, which routes
+  -- through clear_hover (resetting this) before the repaint.
+  local shown_fiber, shown_rect = nil, nil
+  local function rects_eq(a, b)
+    return a and b and a.x == b.x and a.y == b.y and a.w == b.w and a.h == b.h
+  end
+
+  -- Is our overlay still on the buffer at `rect`? A re-splice of those rows
+  -- (the node re-rendered) deletes the extmarks, so "present" distinguishes an
+  -- untouched overlay (skip the repaint) from one the buffer change wiped (must
+  -- repaint) — without threading per-flush damage through every update() caller.
+  local function overlay_present(rect)
+    local last = vim.api.nvim_buf_line_count(bufnr) - 1
+    local y0 = math.min(math.max(rect.y, 0), last)
+    local y1 = math.min(math.max(rect.y + rect.h - 1, 0), last)
+    local ex = vim.api.nvim_buf_get_extmarks(bufnr, ns_hover, { y0, 0 }, { y1, -1 }, { limit = 1 })
+    return #ex > 0
+  end
+
   -- Paint the hl-tier hover overlay for `node` (structural hovers were baked
   -- into the canvas by the relayout, so there is nothing left to overlay).
   local function paint(node)
+    -- Idempotent: same fiber at the same rect, with its overlay still intact,
+    -- is already correct — the guard that stops a parent-driven re-drive (every
+    -- animation frame) from tearing down and repainting an unchanged hover.
+    if
+      node
+      and shown_fiber ~= nil
+      and node.fiber == shown_fiber
+      and rects_eq(node.rect, shown_rect)
+      and overlay_present(node.rect)
+    then
+      return
+    end
     vim.api.nvim_buf_clear_namespace(bufnr, ns_hover, 0, -1)
     if not node then
+      shown_fiber, shown_rect = nil, nil
       return
     end
     local part = hover_part(node)
     if style.tier(part) == "structural" then
+      -- baked into the canvas by the relayout; nothing to overlay or track
+      shown_fiber, shown_rect = nil, nil
       return
     end
+    shown_fiber = node.fiber
+    shown_rect = { x = node.rect.x, y = node.rect.y, w = node.rect.w, h = node.rect.h }
     local r = node.rect
     local last = vim.api.nvim_buf_line_count(bufnr) - 1
     local y0, y1 = math.max(r.y, 0), math.min(r.y + r.h - 1, last)
@@ -317,8 +358,11 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     end
     hovered_fiber = nil
     hovered_structural = false
-    if vim.api.nvim_buf_is_valid(bufnr) then
+    -- Only touch the buffer when something is actually shown, so a repeated
+    -- clear (an unfocused container's per-flush update) isn't a redraw each time.
+    if shown_fiber and vim.api.nvim_buf_is_valid(bufnr) then
       vim.api.nvim_buf_clear_namespace(bufnr, ns_hover, 0, -1)
+      shown_fiber, shown_rect = nil, nil
     end
     if subwins and subwins.clear_hover then
       subwins.clear_hover()
@@ -534,10 +578,12 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
   end
 
   -- After a relayout that rewrote the buffer, move the cursor back onto its
-  -- anchored entry (and hold its screen row). `damage`: false/nil = the buffer
-  -- didn't change (pure scroll) → nothing to fix.
+  -- anchored entry (and hold its screen row). `damage` follows take_damage:
+  -- `false` = nothing changed (skip); a range table = a splice; `nil` = a FULL
+  -- repaint ("all" — what a container gets on a resize rewrap), which we MUST
+  -- re-anchor for. So skip only on the explicit false, not on nil.
   local function reanchor(damage)
-    if not anchor_enabled or not anchor_state or not damage then
+    if not anchor_enabled or not anchor_state or damage == false then
       return
     end
     if not target.tree or not pointer_live() then
