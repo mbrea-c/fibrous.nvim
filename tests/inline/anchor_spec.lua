@@ -174,4 +174,34 @@ describe("inline cursor anchor", function()
     assert.falsy(cursor_line(handle):find("ENTRY5", 1, true), "an unfocused surface must not be re-anchored")
     handle.unmount()
   end)
+
+  it("does not fight a wheel scroll: a re-render keeps the scrolled view", function()
+    -- a tall keyless scroll surface whose header changes on re-render
+    local function TallApp(_, props)
+      local kids = { { comp = ui.label, props = { text = "HEADER " .. (props.n or 0) } } }
+      for i = 1, 40 do
+        kids[#kids + 1] = { comp = ui.label, props = { text = "line " .. i } }
+      end
+      return { comp = ui.col, props = {}, children = kids }
+    end
+    vim.o.columns = 60
+    vim.o.lines = 20
+    local handle = mount.floating(TallApp, { n = 0 }, { width = 30, height = 10, mode = "scroll" })
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 3, 0 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
+
+    -- wheel scroll down (view moves, cursor stays visible → WinScrolled, no CursorMoved)
+    vim.api.nvim_win_call(handle.winid, function()
+      vim.fn.winrestview({ topline = 9, lnum = 12, col = 0 })
+    end)
+    vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(handle.winid) })
+
+    -- an unrelated re-render lands (animation / streaming / counter) — a damage flush
+    handle.set_props({ n = 1 })
+
+    local tl = topline(handle)
+    assert.is_true(tl >= 8, "the anchor snapped the scroll back (topline " .. tl .. ")")
+    handle.unmount()
+  end)
 end)

@@ -580,6 +580,16 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     end,
   })
 
+  -- Scrolling (wheel, <C-e>/<C-y>, zz…) moves the view without necessarily
+  -- moving the cursor. Re-capture so the anchor tracks WHERE THE USER IS LOOKING
+  -- NOW — otherwise the next damage flush would restore the pre-scroll screen row
+  -- and snap the view back, fighting every scroll in a frequently-rendering app.
+  vim.api.nvim_create_autocmd("WinScrolled", {
+    group = group,
+    pattern = tostring(root_winid),
+    callback = capture_anchor,
+  })
+
   local maps = { "<CR>", "<Space>" }
   vim.keymap.set("n", "<CR>", function()
     activate(true)
