@@ -38,6 +38,14 @@ bench-transcript:
 bench-term:
 	$(NVIM_BIN) --headless -u NONE -i NONE -l bench/term.lua
 
+# Run the benches across a span of git history and print a trend table. Reads
+# the repo read-only (clones to temp). HARNESS_DIR pins the scenarios so only
+# lua/fibrous/ varies between points; defaults to this tree for dev use.
+#   make bench-history ARGS="--last 12 --reps 8 --benches transcript"
+.PHONY: bench-history
+bench-history:
+	NVIM_BIN=$(NVIM_BIN) HARNESS_DIR=$${HARNESS_DIR:-$(CURDIR)} scripts/bench_history.sh $(ARGS)
+
 # Launch an interactive, fully isolated Neovim with only this plugin loaded, and
 # (optionally) open one example straight away:
 #   make example            # opens, then :Examples / :Example <name>

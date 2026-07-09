@@ -604,11 +604,24 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     local new_row = math.min(math.max(r.y + math.min(anchor_state.offset, math.max(r.h - 1, 0)), 0), last)
     local line = vim.api.nvim_buf_get_lines(bufnr, new_row, new_row + 1, false)[1] or ""
     local cur_col = vim.api.nvim_win_get_cursor(root_winid)[2]
+    local want_topline = math.max(new_row - anchor_state.screen_row + 1, 1)
+    local want_lnum = new_row + 1
+    local want_col = math.min(cur_col, #line)
     vim.api.nvim_win_call(root_winid, function()
+      -- Idempotent: a flush that didn't move the anchored entry (an animating
+      -- sibling repainting every frame while the root is the live pointer) leaves
+      -- the view already correct. winrestview is a WRITE — it invalidates the
+      -- window and repaints the WHOLE float — so calling it every frame with the
+      -- same values turns the anchor into a full-float redraw per frame (the
+      -- ssh+tmux flicker-frenzy). Only restore when the view actually differs.
+      local v = vim.fn.winsaveview()
+      if v.topline == want_topline and v.lnum == want_lnum and v.col == want_col and (v.leftcol or 0) == 0 then
+        return
+      end
       vim.fn.winrestview({
-        topline = math.max(new_row - anchor_state.screen_row + 1, 1),
-        lnum = new_row + 1,
-        col = math.min(cur_col, #line),
+        topline = want_topline,
+        lnum = want_lnum,
+        col = want_col,
         leftcol = 0,
       })
     end)

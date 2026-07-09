@@ -30,6 +30,23 @@ AGENTS ARE ONLY ALLOWED TO "TICK OFF" TASKS WHEN COMPLETE
 - [x] fibrous+weave: Hovering a tool call on the transcript while the transcript
   is unfocused causes a flurry of redraws (cursor flickering on ssh+tmux)
 
+- [x] fibrous/weave?: Water is causing flicker-frenzy again (too many redraws).
+  Strangely now this only happens when there's no subcontainer focused (i.e. the
+  cursor focus is on the root float).
+
+  - [x] WHY DID OUR BENCHES AND TESTS NOT CATCH THIS REGRESSION?
+
+- [ ] fibrous+weave: If transcript is not focused, there's no anchoring. I think
+  we should still anchor buffers that aren't focused.
+
+- [ ] weave: We should make it clear when the turn is ended (maybe different
+  color in water?); sometimes it's not clear if we're waiting for the agent's
+  tool call or we have the mike.
+
+- [ ] weave: `allow` permission option should always be on the first slot if
+  it's present. Sometimes `claude-agent-acp` sends it second, so muscle memory
+  of clicking `;;1` to approve betrays me.
+
 - [ ] fibrous+weave: In the parent buffer in weave, moving the cursor all the
   way to the right (`$`) in visual mode scrolls the window one cell to the
   right. This is because the newline char at the end of a line is selectable in
@@ -43,6 +60,10 @@ AGENTS ARE ONLY ALLOWED TO "TICK OFF" TASKS WHEN COMPLETE
   `render = "focus"` subcontainer.
 
 ## Features
+
+- [ ] weave: Want timestamps + total duration of generation/execution (when
+  relevant) after prompts, tool calls, thinking blocks and generation blocks. In
+  tool calls you can include them in the toggleable metadata.
 
 - [ ] weave: Latex math support in markdown widget (need some way of rendering
   latex math -> ascii/unicode)
@@ -99,3 +120,7 @@ AGENTS ARE ONLY ALLOWED TO "TICK OFF" TASKS WHEN COMPLETE
 
 - [ ] Possibility of moving fibrous-docs into a subflake under `docs`
   subdirectory within fibrous repo
+
+- [ ] fibrous: What is the difference between a toplevel mount and a
+  subcontainer? What code paths are shared? What code isn't but should be shared? What
+  code cannot or should not be shared?

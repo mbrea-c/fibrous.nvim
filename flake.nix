@@ -32,54 +32,60 @@
         };
       });
 
-      # Runnable entry points, all against the flake's own snapshot of the
-      # source (commit/stage changes to see them; use `make ...` against the
-      # working tree during development):
+      # Runnable entry points — the CANONICAL, complete surface. Each wraps the
+      # matching Makefile target (so the actual `nvim` invocation lives in ONE
+      # place — `make …` and `nix run` can never drift), run against the flake's
+      # own snapshot of the source (commit/stage changes to see them; `make …`
+      # against the working tree during development):
       #   nix run .#test [-- tests/inline/host_spec.lua]   the suite / one spec
-      #   nix run .#bench                                  inline host benchmarks (BENCH_N=…)
-      #   nix run .#bench-transcript                       transcript-scale benchmarks
-      #   nix run .#bench-history -- --last 12 --reps 8    benches across git history → trend table
-      #   nix run .#example [-- counter]                   examples browser in a clean nvim
+      #   nix run .#bench                                   inline host benchmarks (BENCH_N=…)
+      #   nix run .#bench-transcript                        transcript-scale benchmarks
+      #   nix run .#bench-term                              terminal-draw bytes/frame (real pty)
+      #   nix run .#bench-history -- --last 12 --reps 8     benches across git history → trend table
+      #   nix run .#example [-- counter]                    examples browser in a clean nvim
       # `nix run .` (default) opens the examples browser.
       apps = forAllSystems (
         pkgs:
         let
-          app = name: text: {
+          # A `make <target>` wrapper: neovim (the Makefile's `NVIM_BIN ?= nvim`
+          # default resolves to it on PATH) + make, plus any extra tools a target
+          # orchestrates with. Runs the target inside the flake's own snapshot.
+          app = extraInputs: name: text: {
             type = "app";
             program = pkgs.lib.getExe (
               pkgs.writeShellApplication {
                 inherit name text;
-                runtimeInputs = [ pkgs.neovim ];
+                runtimeInputs = [
+                  pkgs.neovim
+                  pkgs.gnumake
+                ]
+                ++ extraInputs;
               }
             );
-          };
-          # Same, but with the extra tools the history walker orchestrates with.
-          appWith = runtimeInputs: name: text: {
-            type = "app";
-            program = pkgs.lib.getExe (pkgs.writeShellApplication { inherit name text runtimeInputs; });
           };
         in
         rec {
           default = example;
-          test = app "fibrous-test" ''
+          test = app [ ] "fibrous-test" ''
             cd ${self}
-            exec nvim --headless -u NONE -i NONE -l tests/run.lua "$@"
+            if [ "$#" -gt 0 ]; then exec make test-file FILE="$1"; fi
+            exec make test
           '';
-          bench = app "fibrous-bench" ''
+          bench = app [ ] "fibrous-bench" ''
             cd ${self}
-            exec nvim --headless -u NONE -i NONE -l bench/run.lua "$@"
+            exec make bench
           '';
-          bench-transcript = app "fibrous-bench-transcript" ''
+          bench-transcript = app [ ] "fibrous-bench-transcript" ''
             cd ${self}
-            exec nvim --headless -u NONE -i NONE -l bench/transcript.lua "$@"
+            exec make bench-transcript
           '';
           # Terminal-draw throughput: bytes nvim's TUI pushes at a real pty per
           # frame — the tmux+ssh cost (highlight repaints and escape overhead
           # included), one layer below the buffer-write cells/op figure. Spawns
           # child nvim TUIs, which isolate themselves via --clean.
-          bench-term = app "fibrous-bench-term" ''
+          bench-term = app [ ] "fibrous-bench-term" ''
             cd ${self}
-            exec nvim --headless -u NONE -i NONE -l bench/term.lua "$@"
+            exec make bench-term
           '';
           # Run the benches across git history and print a trend table. Reads the
           # repo at $PWD; NEVER writes it (clones to temp, worktrees there). The
@@ -87,16 +93,14 @@
           # against each commit's library — so only lua/fibrous/ varies. Runtime
           # (this neovim) is constant too. e.g.
           #   nix run .#bench-history -- --last 12 --reps 8 --benches transcript
-          bench-history = appWith [ pkgs.neovim pkgs.git pkgs.coreutils ] "fibrous-bench-history" ''
-            export NVIM_BIN="${pkgs.neovim}/bin/nvim"
+          bench-history = app [ pkgs.git pkgs.coreutils ] "fibrous-bench-history" ''
             export HARNESS_DIR="${self}"
-            exec ${self}/scripts/bench_history.sh "$@"
+            exec make bench-history ARGS="$*"
           '';
-          example = app "fibrous-example" ''
-            if [ $# -gt 0 ]; then
-              exec nvim --clean -u ${self}/examples/init.lua -c "Example $1"
-            fi
-            exec nvim --clean -u ${self}/examples/init.lua
+          example = app [ ] "fibrous-example" ''
+            cd ${self}
+            if [ "$#" -gt 0 ]; then exec make example EX="$1"; fi
+            exec make example
           '';
         }
       );

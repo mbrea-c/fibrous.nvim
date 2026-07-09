@@ -151,6 +151,39 @@ run(
 ]]
 )
 
+-- A FOCUSED root under an animating sibling, cursor parked on a static row: the
+-- dot moves every frame (flushing the root), and because the root is the live
+-- pointer the cursor anchor runs to hold the parked entry. If that entry hasn't
+-- MOVED the anchor must write NO view — a winrestview invalidates the window and
+-- repaints the whole float, the ssh+tmux flicker that returned only with the
+-- ROOT focused. This must track close to "animation frame", NOT add a full-float
+-- repaint per frame (the reanchor-idempotence win; guarded in
+-- tests/bench/termdraw_spec.lua).
+run(
+	"focused root, cursor anchored under animation",
+	PRE
+		.. [[
+  local function rows(n)
+    local k = {}
+    for i = 1, n do k[i] = { comp = ui.label, props = { text = ("static row %d — lorem ipsum"):format(i) } } end
+    return k
+  end
+  local W = 40
+  local set
+  local function Dot(ctx) local s = ctx.use_state(0); set = s.set
+    local pos = s.get() % W
+    return { comp = ui.label, props = { text = ("."):rep(pos) .. "o" .. ("."):rep(W - 1 - pos) } } end
+  local function App() return { comp = ui.col, props = {}, children =
+    vim.list_extend({ { comp = Dot } }, rows(30)) } end
+  local handle = mount.floating(App, {}, { width = 50, height = 16, mode = "scroll" })
+  handle.focus()
+  -- park the cursor on a static entry so the anchor pins it; the dot above
+  -- animates every frame, flushing the root but never moving row 12
+  vim.api.nvim_win_set_cursor(handle.winid, { 12, 0 })
+  _G.FRAME = function(i) set(i) end
+]]
+)
+
 if JSON then
 	io.write(vim.json.encode({ label = LABEL, bench = "term", n = FRAMES, results = RESULTS }) .. "\n")
 else

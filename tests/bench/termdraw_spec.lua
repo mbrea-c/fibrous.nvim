@@ -110,4 +110,60 @@ describe("bench.termdraw", function()
       )
     )
   end)
+
+  it("a FOCUSED root under continuous animation doesn't redraw per frame from the cursor anchor", function()
+    -- Regression guard for the reanchor idempotence fix (requests.md flicker-
+    -- frenzy that returns only when the ROOT float is focused — not a
+    -- subcontainer). A component animating anywhere flushes the root every
+    -- frame; while the root is the live pointer, reanchor runs to hold the
+    -- cursor's entry — but if that entry hasn't MOVED it must write NO view
+    -- (a winrestview marks the window for redraw, repainting the whole float
+    -- = the ssh+tmux flicker). Self-calibrating: the SAME focused scene, cursor
+    -- parked on a static row, dot animating above it, once with the anchor on
+    -- and once with `anchor = false` (which never reanchors — the floor). The
+    -- delta is purely the anchor's per-frame overhead; it must stay near zero.
+    local PRE = [[
+      local mount = require("fibrous.inline.mount")
+      local ui = require("fibrous.inline.components")
+      local function rows(n)
+        local k = {}
+        for i = 1, n do k[i] = { comp = ui.label, props = { text = ("static row %d — lorem ipsum"):format(i) } } end
+        return k
+      end
+      local set
+      local function Dot(ctx) local s = ctx.use_state(0); set = s.set
+        local W = 40; local pos = s.get() % W
+        return { comp = ui.label, props = { text = ("."):rep(pos) .. "o" .. ("."):rep(W - 1 - pos) } } end
+      local function App() return { comp = ui.col, props = {}, children =
+        vim.list_extend({ { comp = Dot } }, rows(30)) } end
+    ]]
+    local function per_frame(anchor)
+      return termdraw.measure({
+        rtp = { vim.fn.getcwd() },
+        cols = 60,
+        rows = 20,
+        frames = 30,
+        init = PRE .. ([[
+          local handle = mount.floating(App, {}, { width = 50, height = 16, mode = "scroll", anchor = %s })
+          handle.focus()
+          -- park the cursor on a static entry so the anchor pins it; the dot
+          -- above animates every frame, flushing the root but never moving row 12
+          vim.api.nvim_win_set_cursor(handle.winid, { 12, 0 })
+          _G.FRAME = function(i) set(i) end
+        ]]):format(tostring(anchor)),
+      }).per_frame
+    end
+
+    local anchored = per_frame(true)
+    local unanchored = per_frame(false)
+
+    assert.is_true(
+      anchored - unanchored < 200,
+      ("focused-root anchor overhead too high: %.0f B/frame (anchored %.0f, unanchored %.0f)"):format(
+        anchored - unanchored,
+        anchored,
+        unanchored
+      )
+    )
+  end)
 end)

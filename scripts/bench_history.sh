@@ -16,14 +16,17 @@
 #
 # Usage:
 #   scripts/bench_history.sh [--last N] [--step S] [--reps R]
-#                            [--benches run,transcript] [--n BENCH_N]
+#                            [--benches run,transcript,term] [--n BENCH_N]
 #                            [--no-working] [--out results.jsonl]
 #
 #   --last N       how many commits back from HEAD to include (default 8)
 #   --step S       take every S-th commit (default 1)
 #   --reps R       measurement batches; each batch runs every (point,bench) once
 #                  in a fresh random order, so drift is spread evenly (default 6)
-#   --benches L    comma list of bench files under bench/ (default run,transcript)
+#   --benches L    comma list of bench files under bench/ (default
+#                  run,transcript,term). `term` spawns child nvim TUIs in a real
+#                  pty (the ssh+tmux terminal-draw cost) — slower, and commits
+#                  predating the termdraw harness show n/a for it.
 #   --n VALUE      override BENCH_N for every bench (default: each bench's own)
 #   --no-working   don't bench the uncommitted working tree (benched by default
 #                  when it differs from HEAD)
@@ -36,7 +39,7 @@ set -euo pipefail
 LAST=8
 STEP=1
 REPS=6
-BENCHES="run,transcript"
+BENCHES="run,transcript,term"
 BENCH_N_OVERRIDE=""
 WORKING=auto
 OUT=""
