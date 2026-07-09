@@ -48,6 +48,7 @@ local layout = require("fibrous.inline.layout")
 local render = require("fibrous.inline.render")
 local style = require("fibrous.inline.style")
 local theme = require("fibrous.inline.theme")
+local visualsel = require("fibrous.inline.visualsel")
 local width = require("fibrous.inline.width")
 
 local M = {}
@@ -307,6 +308,7 @@ function M.new(opts)
 	theme.apply()
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	vim.bo[bufnr].modifiable = false
+	visualsel.mark(bufnr) -- guard Visual-mode $ against the off-screen-newline right-scroll
 
 	---@type Fiber|nil  the most recently committed root, so relayout can re-flush
 	local last_root = nil
@@ -604,6 +606,7 @@ function M.new(opts)
 			if not target then
 				local buf = vim.api.nvim_create_buf(false, true)
 				vim.bo[buf].modifiable = false
+				visualsel.mark(buf) -- same Visual-mode $ guard for container canvases
 				target = { bufnr = buf, pending = "all", subwins = {}, canvas_lines = {} }
 				targets[key] = target
 			end
@@ -623,16 +626,11 @@ function M.new(opts)
 					-- viewport height (grow/justify fill it); default is scroll —
 					-- content height, the float a native viewport over it
 					local fixed = props.mode == "fixed"
-					-- scroll_x = false → no horizontal scroll: lay the content out ONE
-					-- cell narrower than the float, so a line's trailing newline (which
-					-- visual mode can put the cursor on) always fits in the viewport and
-					-- nvim never scrolls right to reveal it. Pinning leftcol can't win
-					-- that fight — the cursor sits on the off-screen newline, so a reset
-					-- just re-scrolls; keeping the newline on-screen is the actual fix.
+					-- Content fills the FULL width. The Visual-mode trailing-newline
+					-- right-scroll (which a leftcol pin can't win) is handled instead by
+					-- the `selection=old` guard on canvas buffers (see visualsel.lua) — so
+					-- no column is reserved here, and scroll_x = false costs no width.
 					local cw = math.max(c.w, 1)
-					if props.scroll_x == false then
-						cw = math.max(c.w - 1, 1)
-					end
 					process(node.fiber, node.inner, cw, fixed and math.max(c.h, 1) or nil)
 				end
 			end

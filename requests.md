@@ -39,15 +39,15 @@ AGENTS ARE ONLY ALLOWED TO "TICK OFF" TASKS WHEN COMPLETE
 - [x] fibrous+weave: If transcript is not focused, there's no anchoring. I think
   we should still anchor buffers that aren't focused.
 
-- [ ] weave: We should make it clear when the turn is ended (maybe different
+- [x] weave: We should make it clear when the turn is ended (maybe different
   color in water?); sometimes it's not clear if we're waiting for the agent's
   tool call or we have the mike.
 
-- [ ] weave: `allow` permission option should always be on the first slot if
+- [x] weave: `allow` permission option should always be on the first slot if
   it's present. Sometimes `claude-agent-acp` sends it second, so muscle memory
   of clicking `;;1` to approve betrays me.
 
-- [ ] fibrous+weave: In the parent buffer in weave, moving the cursor all the
+- [x] fibrous+weave: In the parent buffer in weave, moving the cursor all the
   way to the right (`$`) in visual mode scrolls the window one cell to the
   right. This is because the newline char at the end of a line is selectable in
   visual mode, so if the line already reaches the end of the window, the newline

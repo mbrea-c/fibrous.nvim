@@ -131,11 +131,12 @@ describe("inline.container", function()
     pinned.unmount()
   end)
 
-  it("scroll_x = false lays content out one cell narrower so a line's newline always fits", function()
-    -- The real cure for the visual-mode right-scroll (a leftcol pin can't win it —
-    -- the cursor sits on the off-screen trailing newline, so a reset just
-    -- re-scrolls): clip content to width-1, so every line's newline lands at
-    -- <= width-1, on-screen, and nvim never scrolls right to reveal it.
+  it("scroll_x = false costs no width — content fills the container, newline handled by selection=old", function()
+    -- The visual-mode right-scroll (a leftcol pin can't win it — the cursor sits
+    -- on the off-screen trailing newline, so a reset just re-scrolls) is cured by
+    -- the `selection=old` guard on canvas buffers (see visualsel_spec), NOT by
+    -- reserving a column. So scroll_x = false no longer narrows content: every
+    -- container fills its full width, at every nesting level.
     local function app(props)
       return function()
         return {
@@ -158,7 +159,7 @@ describe("inline.container", function()
     free.unmount()
 
     local pinned = mount.floating(app({ scroll_x = false }), {}, { width = 20, height = 4 })
-    assert.equal(19, line_width(pinned)) -- scroll_x = false: one cell narrower
+    assert.equal(20, line_width(pinned)) -- scroll_x = false: STILL full width (no reserve)
     pinned.unmount()
   end)
 
