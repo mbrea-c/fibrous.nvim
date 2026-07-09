@@ -13,6 +13,8 @@ fibrous itself, and runs in your browser using a WASM-compiled version of
 Neovim! Access it [here](https://mbrea-c.github.io/fibrous-docs/). There are
 interactive, hot-reloadable examples to play around with.
 
+![Demo showcasing this UI library](./demo_optimized.gif)
+
 ## Examples
 
 Runnable sample UIs live in [`examples/`](examples/). They open in a clean,
