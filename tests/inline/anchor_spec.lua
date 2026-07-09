@@ -12,10 +12,13 @@
 -- reconciliation is positional, the anchor keys on a stable `key` prop (the
 -- entry's identity), not fiber identity.
 --
--- Anchoring is opt-out per surface (`anchor = false`) and gated to the FOCUSED
--- surface (so an app's own follow-to-bottom on an unfocused transcript still
--- owns the cursor). The topline-held / no-visual-jump half is eyeballed in the
--- PTY repro; here we assert the cursor lands back on its entry.
+-- Anchoring is opt-out per surface (`anchor = false`). It is NOT gated to focus:
+-- an unfocused surface still holds its VIEW across a relayout — it pins the entry
+-- at the reference row (the cursor's entry when the cursor is on-screen, else the
+-- top-visible entry) by topline, WITHOUT moving the cursor, so an app's own
+-- follow-to-bottom keeps ownership of the cursor. A FOCUSED surface additionally
+-- moves the cursor. The topline-held / no-visual-jump half is eyeballed in the
+-- PTY repro; here we assert the entry lands back under the reference row.
 
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
@@ -161,17 +164,53 @@ describe("inline cursor anchor", function()
     handle.unmount()
   end)
 
-  it("only the focused surface is anchored", function()
-    local base = vim.api.nvim_get_current_win() -- the pre-existing window
-    local handle = mount_app()
-    focus_on(handle, "ENTRY5")
-    -- focus leaves the surface: it is no longer the live pointer, so the app's
-    -- own follow (not us) owns its cursor
-    vim.api.nvim_set_current_win(base)
+  it("holds an UNFOCUSED surface's view across a resize (pins the entry, not the cursor)", function()
+    -- The transcript case: focus is on the parent, but a resize must not make the
+    -- unfocused transcript swim. We hold the reference entry's screen row by
+    -- topline and leave the cursor alone (the app's follow owns the cursor).
+    local base = vim.api.nvim_get_current_win()
+    vim.o.columns = 80
+    vim.o.lines = 30
+    local handle = mount.floating(App, { items = seed(20) }, { height = 8, mode = "scroll" })
+    -- scroll it (as a wheel scroll would) so ENTRY8 sits at the top of the view,
+    -- the cursor riding along on-screen; the surface stays UNFOCUSED throughout
+    local r = assert(row_of(handle, "ENTRY8"))
+    vim.api.nvim_win_set_cursor(handle.winid, { r, 0 })
+    vim.api.nvim_win_call(handle.winid, function()
+      vim.fn.winrestview({ topline = r, lnum = r, col = 0 })
+    end)
+    vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(handle.winid) })
+    assert.is_true(vim.api.nvim_get_current_win() == base, "surface must be unfocused for this test")
+    local cur_before = vim.api.nvim_win_get_cursor(handle.winid)[1]
+
+    resize(handle, 40) -- rewrap while unfocused
+
+    local tl = topline(handle)
+    local top = vim.api.nvim_buf_get_lines(handle.bufnr, tl - 1, tl, false)[1] or ""
+    assert.truthy(top:find("ENTRY8", 1, true), "unfocused view swam: ENTRY8 not held at the top")
+    assert.equal(
+      cur_before,
+      vim.api.nvim_win_get_cursor(handle.winid)[1],
+      "unfocused anchoring must not move the cursor (the app's follow owns it)"
+    )
+    handle.unmount()
+  end)
+
+  it("anchor = false does not hold an unfocused view either", function()
+    vim.o.columns = 80
+    vim.o.lines = 30
+    local handle = mount.floating(App, { items = seed(20) }, { height = 8, mode = "scroll", anchor = false })
+    local r = assert(row_of(handle, "ENTRY8"))
+    vim.api.nvim_win_call(handle.winid, function()
+      vim.fn.winrestview({ topline = r, lnum = r, col = 0 })
+    end)
+    vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(handle.winid) })
 
     resize(handle, 40)
 
-    assert.falsy(cursor_line(handle):find("ENTRY5", 1, true), "an unfocused surface must not be re-anchored")
+    local tl = topline(handle)
+    local top = vim.api.nvim_buf_get_lines(handle.bufnr, tl - 1, tl, false)[1] or ""
+    assert.falsy(top:find("ENTRY8", 1, true), "anchor=false must not hold the unfocused view")
     handle.unmount()
   end)
 

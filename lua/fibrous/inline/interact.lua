@@ -550,30 +550,43 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     return vim.api.nvim_win_is_valid(root_winid) and vim.api.nvim_get_current_win() == root_winid
   end
 
-  -- Remember what the cursor is on and where it sits on screen.
+  -- Remember what the reader is looking at and where it sits on screen. Not
+  -- gated to focus: an unfocused surface is captured too (on WinScrolled), so a
+  -- later relayout can hold its view. The REFERENCE is the cursor's entry when
+  -- the cursor is on-screen — the user's place; a focused window's cursor always
+  -- is, and an unfocused one is while a scroll dragged it along or the app parked
+  -- it in view (follow-to-bottom sits it on the last line). When the cursor is
+  -- off-screen (parked out of view, then scrolled away) it no longer says what
+  -- the reader sees, so anchor the TOP of the viewport instead.
   local function capture_anchor()
-    if not anchor_enabled or not target.tree or not pointer_live() then
+    if not anchor_enabled or not target.tree then
       return
     end
     local row, x = cursor_cell()
     if not row then
       return
     end
+    local topline = vim.api.nvim_win_call(root_winid, function()
+      return vim.fn.winsaveview().topline
+    end)
+    local top_row = topline - 1 -- 0-indexed row at the top of the viewport
+    local height = vim.api.nvim_win_get_height(root_winid)
+    local cursor_onscreen = row >= top_row and row < top_row + height
+    local ref_row = cursor_onscreen and row or top_row
+    local ref_x = cursor_onscreen and (x or 0) or 0
     -- prefer the deepest KEYED entry (reorder-stable); fall back to the deepest
     -- node's fiber (resize-stable) so keyless UIs pin too
-    local node = keyed_at(target.tree, x or 0, row) or deepest_at(target.tree, x or 0, row)
+    local node = keyed_at(target.tree, ref_x, ref_row) or deepest_at(target.tree, ref_x, ref_row)
     if not node then
       anchor_state = nil
       return
     end
-    local topline = vim.api.nvim_win_call(root_winid, function()
-      return vim.fn.winsaveview().topline
-    end)
     anchor_state = {
       key = node.key, -- nil for the fiber fallback
       fiber = node.fiber,
-      offset = row - node.rect.y, -- rows into the entry
-      screen_row = row - (topline - 1), -- rows below the top of the viewport
+      offset = ref_row - node.rect.y, -- rows into the entry
+      screen_row = ref_row - top_row, -- rows below the top of the viewport
+      cursor = cursor_onscreen, -- the reference was the cursor (vs the top row)
     }
   end
 
@@ -586,7 +599,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     if not anchor_enabled or not anchor_state or damage == false then
       return
     end
-    if not target.tree or not pointer_live() then
+    if not target.tree then
       return
     end
     -- relocate by key (reorder-stable) or, for a keyless anchor, by fiber
@@ -597,33 +610,56 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       node = node_with_fiber(target.tree, anchor_state.fiber)
     end
     if not node then
-      return -- the entry is gone (e.g. collapsed away): leave the cursor be
+      return -- the entry is gone (e.g. collapsed away): leave the view be
     end
     local r = node.rect
     local last = vim.api.nvim_buf_line_count(bufnr) - 1
     local new_row = math.min(math.max(r.y + math.min(anchor_state.offset, math.max(r.h - 1, 0)), 0), last)
-    local line = vim.api.nvim_buf_get_lines(bufnr, new_row, new_row + 1, false)[1] or ""
-    local cur_col = vim.api.nvim_win_get_cursor(root_winid)[2]
     local want_topline = math.max(new_row - anchor_state.screen_row + 1, 1)
-    local want_lnum = new_row + 1
-    local want_col = math.min(cur_col, #line)
+
+    -- Focused, and the anchor is the cursor's own entry: the cursor is the
+    -- user's, so pin it back onto its entry AND hold its screen row.
+    if pointer_live() and anchor_state.cursor then
+      local line = vim.api.nvim_buf_get_lines(bufnr, new_row, new_row + 1, false)[1] or ""
+      local cur_col = vim.api.nvim_win_get_cursor(root_winid)[2]
+      local want_lnum = new_row + 1
+      local want_col = math.min(cur_col, #line)
+      vim.api.nvim_win_call(root_winid, function()
+        -- Idempotent: a flush that didn't move the anchored entry (an animating
+        -- sibling repainting every frame while the root is the live pointer) leaves
+        -- the view already correct. winrestview is a WRITE — it invalidates the
+        -- window and repaints the WHOLE float — so calling it every frame with the
+        -- same values turns the anchor into a full-float redraw per frame (the
+        -- ssh+tmux flicker-frenzy). Only restore when the view actually differs.
+        local v = vim.fn.winsaveview()
+        if v.topline == want_topline and v.lnum == want_lnum and v.col == want_col and (v.leftcol or 0) == 0 then
+          return
+        end
+        vim.fn.winrestview({
+          topline = want_topline,
+          lnum = want_lnum,
+          col = want_col,
+          leftcol = 0,
+        })
+      end)
+      return
+    end
+
+    -- Otherwise the surface is UNFOCUSED (or its cursor was off-screen): hold the
+    -- VIEW only, so the reader's content stays put across the relayout, and leave
+    -- the cursor to the app's own follow-to-bottom (which owns an unfocused
+    -- cursor — moving it here would fight follow). Only when there is actually
+    -- something scrolled: a surface whose content fits the window has no scroll
+    -- position to keep, and writing topline would only fight its pin-to-top.
+    if vim.api.nvim_buf_line_count(bufnr) <= vim.api.nvim_win_get_height(root_winid) then
+      return
+    end
     vim.api.nvim_win_call(root_winid, function()
-      -- Idempotent: a flush that didn't move the anchored entry (an animating
-      -- sibling repainting every frame while the root is the live pointer) leaves
-      -- the view already correct. winrestview is a WRITE — it invalidates the
-      -- window and repaints the WHOLE float — so calling it every frame with the
-      -- same values turns the anchor into a full-float redraw per frame (the
-      -- ssh+tmux flicker-frenzy). Only restore when the view actually differs.
-      local v = vim.fn.winsaveview()
-      if v.topline == want_topline and v.lnum == want_lnum and v.col == want_col and (v.leftcol or 0) == 0 then
+      local v = vim.fn.winsaveview() -- same idempotency guard, topline only
+      if v.topline == want_topline and (v.leftcol or 0) == 0 then
         return
       end
-      vim.fn.winrestview({
-        topline = want_topline,
-        lnum = want_lnum,
-        col = want_col,
-        leftcol = 0,
-      })
+      vim.fn.winrestview({ topline = want_topline, leftcol = 0 })
     end)
   end
 

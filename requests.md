@@ -36,7 +36,7 @@ AGENTS ARE ONLY ALLOWED TO "TICK OFF" TASKS WHEN COMPLETE
 
   - [x] WHY DID OUR BENCHES AND TESTS NOT CATCH THIS REGRESSION?
 
-- [ ] fibrous+weave: If transcript is not focused, there's no anchoring. I think
+- [x] fibrous+weave: If transcript is not focused, there's no anchoring. I think
   we should still anchor buffers that aren't focused.
 
 - [ ] weave: We should make it clear when the turn is ended (maybe different

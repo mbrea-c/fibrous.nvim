@@ -166,4 +166,59 @@ describe("bench.termdraw", function()
       )
     )
   end)
+
+  it("an UNFOCUSED surface holds its view without redrawing per frame", function()
+    -- The companion guard for unfocused anchoring (requests.md: "if transcript
+    -- is not focused, there's no anchoring … we should still anchor buffers that
+    -- aren't focused"). An unfocused scroll surface pins its view (topline) across
+    -- relayout, but an animating leaf inside it must NOT trigger a winrestview per
+    -- frame — that would invalidate and repaint the whole float (the flicker).
+    -- Self-calibrating: same unfocused, scrolled scene, dot animating on-screen,
+    -- once with the anchor on and once with `anchor = false` (the floor).
+    local PRE = [[
+      local mount = require("fibrous.inline.mount")
+      local ui = require("fibrous.inline.components")
+      local function rows(n)
+        local k = {}
+        for i = 1, n do k[i] = { comp = ui.label, props = { text = ("static row %d — lorem ipsum"):format(i) } } end
+        return k
+      end
+      local W = 40
+      local set
+      local function Dot(ctx) local s = ctx.use_state(0); set = s.set
+        local pos = s.get() % W
+        return { comp = ui.label, props = { text = ("."):rep(pos) .. "o" .. ("."):rep(W - 1 - pos) } } end
+      local function App() return { comp = ui.col, props = {}, children =
+        vim.list_extend(rows(30), { { comp = Dot } }) } end
+    ]]
+    local function per_frame(anchor)
+      return termdraw.measure({
+        rtp = { vim.fn.getcwd() },
+        cols = 60,
+        rows = 20,
+        frames = 30,
+        init = PRE .. ([[
+          -- mount but DO NOT focus: the original window stays current, so the
+          -- surface is UNFOCUSED. Scroll it so a static row sits at the top, the
+          -- dot animating on-screen near the bottom; capture on WinScrolled.
+          local handle = mount.floating(App, {}, { width = 50, height = 8, mode = "scroll", anchor = %s })
+          vim.api.nvim_win_call(handle.winid, function() vim.fn.winrestview({ topline = 24 }) end)
+          vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(handle.winid) })
+          _G.FRAME = function(i) set(i) end
+        ]]):format(tostring(anchor)),
+      }).per_frame
+    end
+
+    local anchored = per_frame(true)
+    local unanchored = per_frame(false)
+
+    assert.is_true(
+      anchored - unanchored < 200,
+      ("unfocused anchor overhead too high: %.0f B/frame (anchored %.0f, unanchored %.0f)"):format(
+        anchored - unanchored,
+        anchored,
+        unanchored
+      )
+    )
+  end)
 end)

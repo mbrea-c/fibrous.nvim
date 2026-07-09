@@ -13,11 +13,20 @@
 -- while a scroll-mode height change still forces a fresh full-canvas paint
 -- (host.lua only repaints incrementally while the canvas size holds).
 
+-- Two axes, kept separate so cross-history trends stay honest. The LIBRARY under
+-- test comes from the cwd — bench_history.sh points it at each commit's worktree,
+-- so lua/fibrous varies per point. The HARNESS (this script's helpers, e.g.
+-- throughput) must NOT: it loads from THIS script's own directory, so the ruler
+-- stays pinned while the thing measured changes. (Loading it from the cwd too
+-- would make a commit that touched bench/ silently move its own numbers, and
+-- leaves the uncommitted working tree — snapshotted as lua/ only — unable to find
+-- it at all.)
 local root_dir = vim.fn.getcwd()
+local harness_dir = debug.getinfo(1, "S").source:sub(2):match("(.*/)") or "./"
 package.path = table.concat({
 	root_dir .. "/lua/?.lua",
 	root_dir .. "/lua/?/init.lua",
-	root_dir .. "/bench/?.lua",
+	harness_dir .. "?.lua",
 	package.path,
 }, ";")
 

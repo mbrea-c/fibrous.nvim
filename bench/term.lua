@@ -184,6 +184,34 @@ run(
 ]]
 )
 
+-- An UNFOCUSED scroll surface holding its view under an animating leaf inside
+-- it: the dot moves every frame, but the surface pins its topline WITHOUT a
+-- winrestview per frame (the unfocused-anchor idempotence win; guarded in
+-- tests/bench/termdraw_spec.lua). Tracks close to "animation frame".
+run(
+	"unfocused surface holds view under animation",
+	PRE
+		.. [[
+  local function rows(n)
+    local k = {}
+    for i = 1, n do k[i] = { comp = ui.label, props = { text = ("static row %d — lorem ipsum"):format(i) } } end
+    return k
+  end
+  local W = 40
+  local set
+  local function Dot(ctx) local s = ctx.use_state(0); set = s.set
+    local pos = s.get() % W
+    return { comp = ui.label, props = { text = ("."):rep(pos) .. "o" .. ("."):rep(W - 1 - pos) } } end
+  local function App() return { comp = ui.col, props = {}, children =
+    vim.list_extend(rows(30), { { comp = Dot } }) } end
+  -- mounted UNFOCUSED (never focused), scrolled so a static row tops the view
+  local handle = mount.floating(App, {}, { width = 50, height = 8, mode = "scroll" })
+  vim.api.nvim_win_call(handle.winid, function() vim.fn.winrestview({ topline = 24 }) end)
+  vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(handle.winid) })
+  _G.FRAME = function(i) set(i) end
+]]
+)
+
 if JSON then
 	io.write(vim.json.encode({ label = LABEL, bench = "term", n = FRAMES, results = RESULTS }) .. "\n")
 else
