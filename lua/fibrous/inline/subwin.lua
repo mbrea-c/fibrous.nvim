@@ -37,10 +37,10 @@
 --        edge exits.
 --
 -- text_input wiring: buffer edits report through props.on_change(value)
--- (TextChanged/TextChangedI); <CR> — normal or insert mode — calls
--- props.on_submit(value) when given, otherwise insert-mode <CR> falls through
--- to a plain newline. Handlers are read from the latest committed props at
--- fire time.
+-- (TextChanged/TextChangedI); NORMAL-mode <CR> calls props.on_submit(value)
+-- when given. Insert-mode <CR> is always a plain newline (submit is a normal-
+-- mode / app-key act), so a prompt composes multi-line. Handlers are read from
+-- the latest committed props at fire time.
 
 local width = require("fibrous.inline.width")
 local cursorshim = require("fibrous.inline.cursorshim")
@@ -747,18 +747,14 @@ function M.attach(host, root_winid, opts)
 		end)
 	end
 
-	-- Step out of the float in direction `dir`, one cell past the CONTENT box:
-	-- with a border that is the border cell itself — symmetric with entry, where
-	-- the root cursor crosses the border one keypress at a time. Vertical exits
-	-- keep the column, horizontal exits keep the row.
-	local function exit_dir(entry, dir)
+	-- The parent box cell (row, col) that currently SHOWS the float's cursor: the
+	-- mirror's row map inverted (enter()'s translation the other way — under wrap
+	-- the mapping is non-linear, and the widget's own scroll offsets it), with an
+	-- arithmetic fallback for a widget that never mirrored, clamped into the
+	-- content box. Both the directional exit and the <Esc> pop-out land off this.
+	local function cursor_box_cell(entry)
 		local pos, cell = float_cursor(entry)
 		local c = entry.node.content
-		-- Buffer position → the box row/cell that SHOWS it, via the mirror's
-		-- row map (enter()'s translation inverted — under wrap the mapping is
-		-- non-linear, and the widget's own scroll offsets it). Arithmetic
-		-- fallback for a widget that never mirrored; clamped into the box so
-		-- the exit target always sits beside the box.
 		local drow, dcell
 		for i, mm in ipairs(entry.mirror_map or {}) do
 			if mm.lnum == pos[1] and cell >= mm.cell0 and cell < mm.cell0 + c.w then
@@ -770,6 +766,16 @@ function M.attach(host, root_winid, opts)
 		dcell = dcell or math.max(cell - (entry.leftcol or 0), 0)
 		local srow = math.min(math.max(c.y + drow, c.y), c.y + c.h - 1)
 		local scol = math.min(math.max(c.x + dcell, c.x), c.x + c.w - 1)
+		return srow, scol
+	end
+
+	-- Step out of the float in direction `dir`, one cell past the CONTENT box:
+	-- with a border that is the border cell itself — symmetric with entry, where
+	-- the root cursor crosses the border one keypress at a time. Vertical exits
+	-- keep the column, horizontal exits keep the row.
+	local function exit_dir(entry, dir)
+		local c = entry.node.content
+		local srow, scol = cursor_box_cell(entry)
 		if dir == "k" then
 			exit_to(c.y - 1, scol)
 		elseif dir == "j" then
@@ -779,6 +785,14 @@ function M.attach(host, root_winid, opts)
 		else
 			exit_to(srow, c.x + c.w)
 		end
+	end
+
+	-- Pop focus back to the parent WITHOUT crossing an edge (requests.md: <Esc>
+	-- from normal mode in a focused subwindow unfocuses it): land the root cursor
+	-- on the widget's OWN cell, so it stays over the widget and a second <CR>
+	-- re-enters where you left off.
+	local function exit_here(entry)
+		exit_to(cursor_box_cell(entry))
 	end
 
 	-- Buffer-local traversal maps. A raw_buffer's buffer may be shown in other
@@ -809,6 +823,16 @@ function M.attach(host, root_winid, opts)
 				end
 			end)
 		end
+		-- <Esc> in normal mode pops focus back to the parent (requests.md), for
+		-- every focusable subwindow. A raw_buffer may be shown elsewhere too, so
+		-- outside OUR float it stays native (cancel pending / clear hlsearch).
+		map("n", "<Esc>", function()
+			if vim.api.nvim_get_current_win() == entry.winid then
+				exit_here(entry)
+			else
+				vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+			end
+		end)
 		-- Page motions hand off to the root so they are never trapped in a
 		-- one-line input — EXCEPT in a container, which is a scrolling region
 		-- in its own right: there they stay native (the float scrolls).
@@ -902,7 +926,11 @@ function M.attach(host, root_winid, opts)
 				end)
 			end,
 		})
-		entry.map({ "n", "i" }, "<CR>", function()
+		-- <CR> submits in NORMAL mode only (requests.md): in INSERT it stays a
+		-- plain newline, so a prompt composes multi-line and submitting is an
+		-- explicit act (normal-mode <CR>, or an app key like <C-s>). Insert <CR>
+		-- is simply left unmapped — native newline — so nothing to feed back.
+		entry.map("n", "<CR>", function()
 			local props = entry.node.props or {}
 			if props.on_submit then
 				props.on_submit(buf_value(entry.bufnr))
@@ -912,10 +940,6 @@ function M.attach(host, root_winid, opts)
 				if props.clear_on_submit and vim.api.nvim_buf_is_valid(entry.bufnr) then
 					vim.api.nvim_buf_set_lines(entry.bufnr, 0, -1, false, { "" })
 				end
-			elseif vim.api.nvim_get_mode().mode:find("i") then
-				-- No submit handler: a plain newline. "i" puts it BEFORE whatever is
-				-- still in the typeahead, "n" (noremap) keeps it from recursing here.
-				vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "in", false)
 			end
 		end)
 	end
@@ -1323,6 +1347,37 @@ function M.attach(host, root_winid, opts)
 		return false
 	end
 
+	-- Is `entry` a TEXT-EDIT buffer — one an operator (dd/cw/x…) should focus and
+	-- act on? A text_input always is; a raw_buffer only when it is modifiable;
+	-- a container never is (its buffer is the host canvas, not editable text).
+	local function is_editable(entry)
+		local sub = entry.node.subwin
+		if sub == "text_input" then
+			return true
+		end
+		if sub == "raw_buffer" then
+			return vim.api.nvim_buf_is_valid(entry.bufnr) and vim.bo[entry.bufnr].modifiable
+		end
+		return false
+	end
+
+	-- enter_at, but ONLY for an editable subwindow: an operator over one focuses
+	-- it (so the replayed key finishes the edit in the float); over a container
+	-- or non-editable float it does nothing, leaving the key native on the root
+	-- (requests.md: dd/cb/ce over an unfocused text-edit buffer focuses + edits).
+	local function enter_editable_at(row, x)
+		for _, entry in pairs(floats) do
+			local r = entry.node.rect or entry.node.content
+			if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
+				if is_editable(entry) then
+					return enter(entry, row, x, false)
+				end
+				return false
+			end
+		end
+		return false
+	end
+
 	-- Like enter_at, but also RUNS the entered subwindow's own interaction once
 	-- it has focus — so <CR>/click over a button inside a container presses it
 	-- in a single keystroke instead of "one to enter, one to press". Only a
@@ -1403,6 +1458,7 @@ function M.attach(host, root_winid, opts)
 	return {
 		sync = sync,
 		enter_at = enter_at,
+		enter_editable_at = enter_editable_at,
 		activate_at = activate_at,
 		hover_at = hover_at,
 		clear_hover = clear_hover,

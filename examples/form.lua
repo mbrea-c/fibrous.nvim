@@ -2,9 +2,10 @@
 -- of truth while you type — keystrokes are handled natively by Neovim, no
 -- per-keystroke re-render of the input itself. Each edit fires `on_change`,
 -- which we mirror into `use_state` so the panel below updates reactively;
--- `<CR>` fires `on_submit`. Focus is explicit: the cursor glides over the
--- input like any other cell — press i (or <CR>) on it to edit, and h/j/k/l
--- at its edges step back out into the page.
+-- NORMAL-mode `<CR>` fires `on_submit` (insert `<CR>` is a newline). Focus is
+-- explicit: the cursor glides over the input like any other cell — press i or
+-- <CR> to edit, v to visual-select inside it, an operator (dd/ce) to edit it
+-- in place; h/j/k/l at its edges or <Esc> step back out into the page.
 
 local nr = require("fibrous")
 local ui = nr.ui

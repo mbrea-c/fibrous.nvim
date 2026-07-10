@@ -733,6 +733,37 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
         vim.api.nvim_feedkeys(key, "in", false)
       end, { buffer = bufnr, nowait = true, desc = "fibrous: edit subwindow" })
     end
+    -- Entering visual mode over a subwindow focuses it and starts the selection
+    -- INSIDE the float, so you select real sub-buffer text (requests.md). Away
+    -- from a subwindow enter_at is a no-op and the key replays natively — visual
+    -- mode in the parent canvas, as before.
+    for _, key in ipairs({ "v", "V", "<C-v>" }) do
+      maps[#maps + 1] = key
+      vim.keymap.set("n", key, function()
+        local row, x = cursor_cell()
+        if row then
+          subwins.enter_at(row, x)
+        end
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(key, true, false, true), "in", false)
+      end, { buffer = bufnr, nowait = true, desc = "fibrous: visual-select subwindow" })
+    end
+    -- Edit operators over an UNFOCUSED editable subwindow focus it and finish the
+    -- edit inside the float (requests.md: dd/cb/ce…). The key replays after focus
+    -- so operator + motion (dd, ce, cw, 3dd) all land in the float; over a
+    -- non-editable float or bare canvas the key is native (a no-op on the
+    -- unmodifiable root). Only editable subwindows are entered — a container is
+    -- not a text-edit buffer. Yank is left out: the canvas mirror is real text,
+    -- so y already copies it without a focus hop.
+    for _, key in ipairs({ "d", "c", "s", "x", "r", "~", ">", "<", "=", "J", "D", "C", "S", "X", "p", "P" }) do
+      maps[#maps + 1] = key
+      vim.keymap.set("n", key, function()
+        local row, x = cursor_cell()
+        if row then
+          subwins.enter_editable_at(row, x)
+        end
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(key, true, false, true), "in", false)
+      end, { buffer = bufnr, nowait = true, desc = "fibrous: edit subwindow (operator)" })
+    end
   end
   local saved_mousemoveevent = nil
   if mouse.follow then

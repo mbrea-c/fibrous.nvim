@@ -384,7 +384,9 @@ describe("inline.container", function()
       return got ~= nil
     end)
     assert.equal("hello", got)
-    press("<Esc><CR>")
+    -- <CR> submits from insert mode (wire_input maps it for {n,i}); a normal-mode
+    -- <Esc> now leaves the widget for the parent, so submit directly.
+    press("<CR>")
     assert.equal("hello", submitted)
 
     handle.unmount()

@@ -111,6 +111,103 @@ describe("inline.focus", function()
     handle.unmount()
   end)
 
+  it("v over a subbuffer focuses it and starts the visual selection inside the float", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    local sub = subwin_of(handle)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 3 }) -- over the input, cell 3 → input "c"
+    press("v")
+
+    -- focus crossed into the float and we are in visual mode there…
+    assert.equal(sub, vim.api.nvim_get_current_win())
+    assert.equal("v", vim.api.nvim_get_mode().mode)
+    -- …selecting to end-of-line and yanking grabs REAL sub-buffer text
+    press("$y")
+    assert.equal("cdef", vim.fn.getreg('"'))
+    handle.unmount()
+  end)
+
+  it("v away from any subbuffer stays visual in the parent", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 1, 0 }) -- on "head", no widget
+    press("v")
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    assert.equal("v", vim.api.nvim_get_mode().mode)
+    press("<Esc>")
+    handle.unmount()
+  end)
+
+  it("dd over an unfocused editable subbuffer focuses it and deletes the line", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    local sub = subwin_of(handle)
+    local buf = vim.api.nvim_win_get_buf(sub)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 3 }) -- over the input
+    press("dd")
+
+    assert.equal(sub, vim.api.nvim_get_current_win())
+    assert.same({ "" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    handle.unmount()
+  end)
+
+  it("x over an unfocused editable subbuffer focuses it and deletes the char there", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    local sub = subwin_of(handle)
+    local buf = vim.api.nvim_win_get_buf(sub)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 3 }) -- input cell 2 = "c"
+    press("x")
+
+    assert.equal(sub, vim.api.nvim_get_current_win())
+    assert.same({ "abdef" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    handle.unmount()
+  end)
+
+  it("an operator away from an editable widget is a native no-op on the root", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    local sub = subwin_of(handle)
+    local buf = vim.api.nvim_win_get_buf(sub)
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 1, 0 }) -- on "head", no widget
+    press("dd") -- native on the unmodifiable root: E21, no focus change
+
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    assert.same({ "abcdef" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    handle.unmount()
+  end)
+
+  it("an operator over a NON-editable subwindow (container) does not focus it", function()
+    local function ContainerApp()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "head" } },
+          {
+            comp = ui.container,
+            props = { height = 2 },
+            children = {
+              { comp = ui.label, props = { text = "row1" } },
+              { comp = ui.label, props = { text = "row2" } },
+            },
+          },
+        },
+      }
+    end
+    local handle = mount.floating(ContainerApp, {}, { width = 12, height = 4 })
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 0 }) -- over the container region
+    press("dd")
+    -- a container is not a text-edit buffer: focus stays on the parent
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    handle.unmount()
+  end)
+
   it("<CR> on a border cell enters, clamped into the content box", function()
     local function App()
       return {
@@ -182,6 +279,23 @@ describe("inline.focus", function()
     assert.equal(handle.winid, vim.api.nvim_get_current_win())
     assert.same({ 2, 9 }, vim.api.nvim_win_get_cursor(handle.winid))
 
+    handle.unmount()
+  end)
+
+  it("<Esc> in a focused subwindow (normal mode) pops focus back to the parent", function()
+    local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
+    local sub = subwin_of(handle)
+
+    -- focus the input in NORMAL mode (via <CR>, not an insert key)
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 3 })
+    press("<CR>")
+    assert.equal(sub, vim.api.nvim_get_current_win())
+
+    -- <Esc> leaves the widget for the parent, landing on the widget's own cell
+    press("<Esc>")
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    assert.equal(2, vim.api.nvim_win_get_cursor(handle.winid)[1]) -- back on the input row
     handle.unmount()
   end)
 
@@ -353,10 +467,12 @@ describe("inline.focus", function()
 
     vim.api.nvim_set_current_win(handle.winid)
     vim.api.nvim_win_set_cursor(handle.winid, { 2, 0 }) -- the input row
-    -- one batch: enter, type, submit — then "gg", which distinguishes the
-    -- outcomes: left in insert mode it mangles the root (E21, cursor stuck);
-    -- back in normal mode it is a plain motion to the top
-    press("ifoo<CR>gg")
+    -- one batch: enter, type, <Esc> back to normal, submit (normal-mode <CR>) —
+    -- the submit destroys the focused input (positional reconciliation shifts it)
+    -- so focus must return cleanly to the root; then "gg" distinguishes the
+    -- outcomes: stuck on the dead float it mangles things, back on the root it is
+    -- a plain motion to the top
+    press("ifoo<Esc><CR>gg")
 
     assert.equal(handle.winid, vim.api.nvim_get_current_win())
     assert.equal("n", vim.api.nvim_get_mode().mode)

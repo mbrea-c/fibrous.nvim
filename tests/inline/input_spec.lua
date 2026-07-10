@@ -59,7 +59,7 @@ describe("inline.input", function()
     handle.unmount()
   end)
 
-  it("<CR> submits in normal and insert mode when on_submit is given", function()
+  it("<CR> submits in NORMAL mode only; in insert it is a plain newline", function()
     local submitted = {}
     local function App()
       return {
@@ -70,7 +70,7 @@ describe("inline.input", function()
             comp = ui.text_input,
             props = {
               value = "abc",
-              height = 1,
+              height = 2,
               on_submit = function(v)
                 submitted[#submitted + 1] = v
               end,
@@ -79,17 +79,18 @@ describe("inline.input", function()
         },
       }
     end
-    local handle = mount.floating(App, {}, { width = 10, height = 1 })
+    local handle = mount.floating(App, {}, { width = 10, height = 2 })
     local sub = subwin_of(handle)
+    local buf = vim.api.nvim_win_get_buf(sub)
 
     vim.api.nvim_set_current_win(sub)
-    press("<CR>") -- normal mode
+    press("<CR>") -- normal mode → submit
     assert.same({ "abc" }, submitted)
 
-    press("A!<CR>") -- insert mode, after appending a character
-    assert.same({ "abc", "abc!" }, submitted)
-    -- submit did NOT insert a newline
-    assert.same({ "abc!" }, vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(sub), 0, -1, false))
+    -- in INSERT mode <CR> is a newline (multi-line compose), NOT a submit
+    press("A!<CR>more")
+    assert.same({ "abc" }, submitted) -- no extra submit from insert <CR>
+    assert.same({ "abc!", "more" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
 
     handle.unmount()
   end)
@@ -144,9 +145,11 @@ describe("inline.input", function()
     assert.same({ "abc" }, submitted)
     assert.same({ "" }, vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(sub), 0, -1, false))
 
-    -- The cleared input keeps working: type fresh text, submit again.
+    -- The cleared input keeps working: type fresh text, submit again. <CR>
+    -- submits from insert mode too (wire_input maps it for {n,i}), so no <Esc>
+    -- first -- and a normal-mode <Esc> now leaves the widget for the parent.
     press("inext")
-    press("<Esc><CR>")
+    press("<CR>")
     assert.same({ "abc", "next" }, submitted)
     assert.same({ "" }, vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(sub), 0, -1, false))
 
