@@ -119,11 +119,16 @@ function M.window_resolver(winid, bufnr)
     if top and (row + 1 < top or row + 1 > bot) then
       return nil -- off-screen
     end
-    local last_row = box.y + math.max(box.h - 1, 0)
+    -- Single-LINE match, on the box's TOP row. flash is line-oriented: a match
+    -- whose pos/end_pos straddle rows (a bordered or tall widget's border-box)
+    -- mislabels and mis-highlights. Anchoring at the top row keeps flash happy;
+    -- the cursor still lands on the widget (hover/activation is by cell), so
+    -- jump-to-activate is unaffected. The label sits at the widget's top-left.
+    local line = M.line_at(bufnr, row)
     return {
       winid = winid,
-      pos = { row + 1, width.cell_to_byte(M.line_at(bufnr, row), box.x) },
-      end_pos = { last_row + 1, width.cell_to_byte(M.line_at(bufnr, last_row), box.x + box.w) },
+      pos = { row + 1, width.cell_to_byte(line, box.x) },
+      end_pos = { row + 1, width.cell_to_byte(line, box.x + box.w) },
     }
   end
 end
