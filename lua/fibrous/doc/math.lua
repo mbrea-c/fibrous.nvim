@@ -67,6 +67,17 @@ local SUB = {
 
 -- ── parser ───────────────────────────────────────────────────────────────────
 
+-- Big operators: rendered inline in single-line mode (∑ⁿᵢ₌₁), but as a large
+-- multi-row glyph with limits stacked above/below in display mode. The pieces
+-- stack vertically to form the tall glyph (a summation top/bottom, an integral
+-- top/extension/bottom); operators without stacking glyphs use the single char.
+local BIGOPS = { sum = true, prod = true, int = true, oint = true, bigcup = true, bigcap = true }
+local BIGOP_PIECES = {
+  sum = { "⎲", "⎳" },
+  int = { "⌠", "⎮", "⌡" },
+  oint = { "⌠", "⎮", "⌡" },
+}
+
 local parse_nodes, parse_arg
 
 -- One argument: a `{...}` group (returns its body list) or a single atom.
@@ -123,11 +134,18 @@ parse_nodes = function(s, i, stop)
         local body, i2 = parse_arg(s, ni)
         nodes[#nodes + 1] = { kind = "sqrt", body = body }
         i = i2
+      elseif cmd and BIGOPS[cmd] then
+        nodes[#nodes + 1] = { kind = "bigop", text = SYMBOLS[cmd], op = cmd }
+        i = ni
       elseif cmd then
         nodes[#nodes + 1] = { kind = "sym", text = SYMBOLS[cmd] or cmd }
         i = ni
       else
-        nodes[#nodes + 1] = { kind = "sym", text = s:sub(i + 1, i + 1) }
+        -- escaped non-letter: LaTeX spacing commands (\, \; \: \ ) become a
+        -- space, \! nothing; anything else is the literal escaped character.
+        local ch = s:sub(i + 1, i + 1)
+        local SPACING = { [","] = " ", [";"] = " ", [":"] = " ", [" "] = " ", ["!"] = "" }
+        nodes[#nodes + 1] = { kind = "sym", text = SPACING[ch] or ch }
         i = i + 2
       end
     else
@@ -173,7 +191,7 @@ render_single = function(nodes)
   local parts = {}
   for _, node in ipairs(nodes) do
     local base
-    if node.kind == "sym" then
+    if node.kind == "sym" or node.kind == "bigop" then
       base = node.text
     elseif node.kind == "group" then
       base = render_single(node.body)
@@ -285,13 +303,31 @@ end
 
 local function sqrt_box(body)
   local w = body.w
-  -- the vinculum uses "_" (which sits at the BOTTOM of its cell), so on the row
-  -- above the body it hugs the content instead of floating like an overline.
-  local lines = { " " .. ("_"):rep(w) }
-  for i = 1, body.h do
-    lines[#lines + 1] = ((i - 1) == body.axis and "√" or " ") .. pad_to(body.lines[i], w)
+  -- Single-row body: the compact form. The vinculum uses "_" (bottom of its
+  -- cell) so on the row above it hugs the content rather than floating.
+  if body.h == 1 then
+    return { lines = { " " .. ("_"):rep(w), "√" .. pad_to(body.lines[1], w) }, w = w + 1, h = 2, axis = 1 }
   end
-  return { lines = lines, w = w + 1, h = #lines, axis = body.axis + 1 }
+  -- Tall body: a growing radical. A "╲╱" check at the bottom-left, a "╱"
+  -- diagonal rising one column per row to the top bar, drawn with single-width
+  -- box glyphs so it stays on the grid.
+  local h = body.h
+  local g = h + 1 -- gutter width (the diagonal rises across these columns)
+  -- bar extends one column left so it meets the top of the "╱" diagonal
+  local lines = { spaces(g - 1) .. ("_"):rep(w + 1) }
+  for i = 1, h do
+    local gut = {}
+    for c = 1, g do
+      gut[c] = " "
+    end
+    local col = g - i + 1 -- the diagonal steps left going down
+    gut[col] = "╱"
+    if i == h then
+      gut[col - 1] = "╲" -- the check vertex at the bottom
+    end
+    lines[i + 1] = table.concat(gut) .. pad_to(body.lines[i], w)
+  end
+  return { lines = lines, w = g + w, h = h + 1, axis = body.axis + 1 }
 end
 
 local render_stack
@@ -310,10 +346,58 @@ local function scripts_text(node)
   return out
 end
 
+-- A big operator's limit: rendered SMALL (unicode super/subscript, mimicking
+-- scriptstyle) when every char has a small form, else full-size stacked.
+local function limit_box(nodes, map)
+  local s = render_single(nodes)
+  local small = map_all(s, map)
+  if small then
+    return { lines = { small }, w = dw(small), h = 1, axis = 0 }
+  end
+  return render_stack(nodes)
+end
+
+-- A big operator (∑, ∫, …) with its limits stacked above and below (display).
+local function bigop_box(node)
+  local pieces = BIGOP_PIECES[node.op] or { node.text }
+  local sup = node.sup and limit_box(node.sup, SUP) or nil
+  local sub = node.sub and limit_box(node.sub, SUB) or nil
+  local w = 0
+  for _, l in ipairs(pieces) do
+    w = math.max(w, dw(l))
+  end
+  if sup then
+    w = math.max(w, sup.w)
+  end
+  if sub then
+    w = math.max(w, sub.w)
+  end
+  local lines = {}
+  if sup then
+    for _, l in ipairs(sup.lines) do
+      lines[#lines + 1] = center(l, w)
+    end
+  end
+  -- axis on the operator's middle row, so the summand aligns to its centre
+  local axis = #lines + math.floor((#pieces - 1) / 2)
+  for _, l in ipairs(pieces) do
+    lines[#lines + 1] = center(l, w)
+  end
+  if sub then
+    for _, l in ipairs(sub.lines) do
+      lines[#lines + 1] = center(l, w)
+    end
+  end
+  return { lines = lines, w = w, h = #lines, axis = axis }
+end
+
 local function box_of(node)
   if node.kind == "sym" then
     -- a plain atom (with its scripts) is one inline row
     return text_box(render_single({ node }))
+  end
+  if node.kind == "bigop" then
+    return bigop_box(node) -- limits handled internally (stacked)
   end
   local b
   if node.kind == "frac" then

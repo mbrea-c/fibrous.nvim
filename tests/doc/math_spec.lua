@@ -66,4 +66,32 @@ describe("fibrous.doc.math stacked (display)", function()
     local lines = m.stack("\\frac{1}{\\frac{a}{b}}")
     assert.equal(5, #lines)
   end)
+
+  it("grows a radical over a tall body", function()
+    local lines = m.stack("\\sqrt{\\frac{a}{b}}")
+    local joined = table.concat(lines, "\n")
+    assert.truthy(joined:find("╱", 1, true), "diagonal radical stroke")
+    assert.truthy(joined:find("╲", 1, true), "radical check vertex")
+  end)
+
+  it("renders a big operator with limits stacked above and below", function()
+    local lines = m.stack("\\sum_{k=1}^{n} k")
+    local joined = table.concat(lines, "\n")
+    assert.truthy(joined:find("⎲", 1, true), "big sigma glyph")
+    -- limits render SMALL (unicode super/subscript), upper above lower
+    local up, lo
+    for i, l in ipairs(lines) do
+      if l:find("ⁿ", 1, true) and not up then
+        up = i
+      end
+      if l:find("ₖ", 1, true) then -- ₖ₌₁ (small subscript)
+        lo = i
+      end
+    end
+    assert.is_true(up ~= nil and lo ~= nil and up < lo, "small upper limit above small lower limit")
+  end)
+
+  it("treats LaTeX spacing commands as spaces (not literals)", function()
+    assert.equal("f dx", m.single("f\\,dx"))
+  end)
 end)
