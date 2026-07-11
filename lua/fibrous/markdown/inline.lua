@@ -153,6 +153,26 @@ parse = function(text)
         buf[#buf + 1] = c
         i = i + 1
       end
+    elseif c == "$" and text:sub(i + 1, i + 1) ~= "$" then
+      -- inline math $...$ (GFM rule: opener not followed by a space, closer not
+      -- preceded by a space, and a digit right after the opener does not open —
+      -- so prose like "$5 and $10" is left alone).
+      local after = text:sub(i + 1, i + 1)
+      local close
+      if after ~= "" and not after:match("[%s%d]") then
+        close = find_unescaped(text, i + 1, "$")
+        while close and text:sub(close - 1, close - 1):match("%s") do
+          close = find_unescaped(text, close + 1, "$")
+        end
+      end
+      if close and close > i + 1 then
+        flush()
+        out[#out + 1] = ast.math_inline(text:sub(i + 1, close - 1))
+        i = close + 1
+      else
+        buf[#buf + 1] = c
+        i = i + 1
+      end
     elseif two == "![" then
       local node, nexti = link_like(text, i + 1, true)
       if node then

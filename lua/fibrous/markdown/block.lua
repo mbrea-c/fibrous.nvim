@@ -209,6 +209,28 @@ function parse_lines(lines)
       end
       local lang = info ~= "" and info:match("^(%S+)") or nil
       blocks[#blocks + 1] = { kind = "code_block", lang = lang, text = table.concat(body, "\n") }
+    elseif line:match("^%s*%$%$") then
+      -- display math block: $$ ... $$ (same line, or opening $$ then lines then $$)
+      local rest = line:gsub("^%s*%$%$", "")
+      local closed = rest:match("^(.-)%$%$%s*$")
+      if closed then
+        blocks[#blocks + 1] = { kind = "math", tex = closed }
+        i = i + 1
+      else
+        local body = { rest }
+        i = i + 1
+        while i <= n and not lines[i]:match("%$%$") do
+          body[#body + 1] = lines[i]
+          i = i + 1
+        end
+        if i <= n then
+          body[#body + 1] = (lines[i]:gsub("%$%$.*$", ""))
+          i = i + 1
+        end
+        -- drop a leading empty line from "$$\n..." and trailing empties
+        local tex = table.concat(body, "\n"):gsub("^%s*\n", ""):gsub("%s+$", "")
+        blocks[#blocks + 1] = { kind = "math", tex = tex }
+      end
     elseif thematic(line) then
       blocks[#blocks + 1] = { kind = "thematic_break" }
       i = i + 1

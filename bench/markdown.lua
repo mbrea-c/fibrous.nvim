@@ -132,6 +132,19 @@ do
 	end)
 end
 
+-- Math rendering, single-line and stacked. A FRESH equation per op defeats the
+-- module cache, so these are the cold-render costs (production pays them once
+-- per unique equation, then the cache serves relayouts for free).
+do
+	local mathr = require("fibrous.doc.math")
+	bench("math single-line (fresh eq/op)", 500, function(i)
+		mathr.single(("\\frac{%d}{x_%d + 1} = \\sqrt{a^2 + b^2}"):format(i, i))
+	end)
+	bench("math stacked/display (fresh eq/op)", 500, function(i)
+		mathr.stack(("x = \\frac{-%d \\pm \\sqrt{b^2 - 4ac}}{2a_%d}"):format(i, i))
+	end)
+end
+
 if JSON then
 	io.write(vim.json.encode({ label = LABEL, bench = "markdown", n = N, results = RESULTS }) .. "\n")
 else

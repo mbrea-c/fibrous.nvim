@@ -1,0 +1,69 @@
+-- Pure-Lua LaTeX math rendering (fibrous.doc.math). A shared TeX parser feeds
+-- two renderers: `single` (a flat Unicode line, for inline $...$) and `stack`
+-- (a 2D box layout, for display $$...$$). No treesitter, no binary, so it runs
+-- everywhere fibrous does. Unknown commands degrade to their name/verbatim.
+
+local m = require("fibrous.doc.math")
+
+describe("fibrous.doc.math single-line", function()
+  it("substitutes common symbols", function()
+    assert.equal("α + β", m.single("\\alpha + \\beta"))
+    assert.equal("a ≤ b", m.single("a \\leq b"))
+    assert.equal("2 × 3", m.single("2 \\times 3"))
+    assert.equal("∑ x", m.single("\\sum x"))
+  end)
+
+  it("renders unicode super/subscripts (superscript before subscript)", function()
+    assert.equal("x²", m.single("x^2"))
+    assert.equal("xᵢ", m.single("x_i"))
+    assert.equal("x¹⁰", m.single("x^{10}"))
+    assert.equal("aₙ", m.single("a_n"))
+    assert.equal("x²ᵢ", m.single("x^2_i"))
+  end)
+
+  it("falls back to ^(..)/_(..) when no unicode script char exists", function()
+    assert.equal("x^(β)", m.single("x^{\\beta}"))
+    assert.equal("a_(θ)", m.single("a_{\\theta}"))
+  end)
+
+  it("renders fractions and roots inline", function()
+    assert.equal("1/2", m.single("\\frac{1}{2}"))
+    assert.equal("(a+b)/2", m.single("\\frac{a+b}{2}"))
+    assert.equal("√x", m.single("\\sqrt{x}"))
+    assert.equal("√(a+b)", m.single("\\sqrt{a+b}"))
+  end)
+
+  it("degrades unknown commands to their name", function()
+    assert.equal("foo", m.single("\\foo"))
+  end)
+end)
+
+describe("fibrous.doc.math stacked (display)", function()
+  it("stacks a simple fraction", function()
+    assert.same({ "a", "─", "b" }, m.stack("\\frac{a}{b}"))
+  end)
+
+  it("centers a fraction over its wider part", function()
+    assert.same({ "a+b", "───", " c " }, m.stack("\\frac{a+b}{c}"))
+  end)
+
+  it("keeps inline atoms on the fraction's axis row", function()
+    local lines = m.stack("x = \\frac{a}{b}")
+    assert.equal(3, #lines)
+    assert.truthy(lines[2]:find("x = ", 1, true), "inline text on the axis row")
+    assert.truthy(lines[2]:find("─", 1, true), "bar on the axis row")
+  end)
+
+  it("renders a square root with an overline", function()
+    local lines = m.stack("\\sqrt{x}")
+    assert.equal(2, #lines)
+    assert.truthy(lines[1]:find("_", 1, true), "vinculum (underscore) on the row above")
+    assert.truthy(lines[2]:find("√x", 1, true))
+  end)
+
+  it("nests fractions", function()
+    -- \frac{1}{a/b}: denominator is itself a fraction (3 rows) => 5 rows total
+    local lines = m.stack("\\frac{1}{\\frac{a}{b}}")
+    assert.equal(5, #lines)
+  end)
+end)

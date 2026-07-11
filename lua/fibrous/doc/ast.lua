@@ -63,6 +63,11 @@ function M.hardbreak()
   return { type = "hardbreak" }
 end
 
+---@param tex string  raw LaTeX (no delimiters)
+function M.math_inline(tex)
+  return { type = "math_inline", tex = tex }
+end
+
 -- ── blocks ──────────────────────────────────────────────────────────────────
 
 ---@param level integer  1..6
@@ -89,6 +94,11 @@ end
 
 function M.thematic_break()
   return { type = "thematic_break" }
+end
+
+---@param tex string  raw LaTeX (no delimiters); rendered as a display (2D) block
+function M.math_block(tex)
+  return { type = "math_block", tex = tex }
 end
 
 ---@param children table[]  block content of the item

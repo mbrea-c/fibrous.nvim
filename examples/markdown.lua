@@ -40,6 +40,15 @@ local SOURCE = table.concat({
   "end",
   "```",
   "",
+  "## Math",
+  "",
+  "Inline math like $E = mc^2$ and $\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}$ flows",
+  "with the prose. Display math renders stacked:",
+  "",
+  "$$",
+  "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+  "$$",
+  "",
   "Move the cursor onto the link above and press <CR>.  Press  q  to close.",
 }, "\n")
 

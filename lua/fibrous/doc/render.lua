@@ -95,6 +95,9 @@ local function walk_inline(nodes, ctx, opts, out)
         opts,
         out
       )
+    elseif t == "math_inline" then
+      local ok, s = pcall(require("fibrous.doc.math").single, n.tex)
+      out[#out + 1] = span(ok and s or n.tex, merge(ctx, { text_hl = "@markup.math" }))
     elseif t == "image" then
       -- a terminal shows the alt text; keep it visually link-like
       local alt = (n.alt and n.alt ~= "") and n.alt or (n.url or "image")
@@ -179,6 +182,17 @@ function render_block(node, opts)
     }
   elseif t == "thematic_break" then
     return { comp = ui.col, props = { style = { border = { top = true, hl = "NonText" } } } }
+  elseif t == "math_block" then
+    local ok, lines = pcall(require("fibrous.doc.math").stack, node.tex)
+    if not ok or not lines then
+      lines = { node.tex }
+    end
+    local rows = {}
+    for _, l in ipairs(lines) do
+      rows[#rows + 1] = { comp = ui.label, props = { text = l == "" and " " or l, style = { text_hl = "@markup.math" } } }
+    end
+    -- lines are equal width, so centering the col centers the whole equation
+    return { comp = ui.col, props = { align = "center" }, children = rows }
   elseif t == "list" then
     return render_list(node, opts)
   elseif t == "table" then

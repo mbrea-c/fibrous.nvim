@@ -22,6 +22,8 @@ local function convert(raw)
     return ast.code_block(raw.lang, raw.text)
   elseif k == "thematic_break" then
     return ast.thematic_break()
+  elseif k == "math" then
+    return ast.math_block(raw.tex)
   elseif k == "blockquote" then
     return ast.blockquote(convert_blocks(raw.blocks))
   elseif k == "list" then
