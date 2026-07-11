@@ -60,6 +60,23 @@ describe("fibrous.doc.math single-line", function()
     assert.equal("x\204\135", m.single("\\dot{x}")) -- x + U+0307 combining dot above
   end)
 
+  it("supports \\mid and the \\not overlay", function()
+    assert.equal("a ∣ b", m.single("a \\mid b"))
+    assert.equal("=\204\184", m.single("\\not=")) -- = + U+0338 combining long solidus
+    assert.equal("∈\204\184", m.single("\\not\\in")) -- overlays the next symbol too
+  end)
+
+  it("maps \\mathbb and \\mathcal, including the Letterlike-block holes", function()
+    assert.equal("𝔸", m.single("\\mathbb{A}")) -- U+1D538 main block
+    assert.equal("ℝ", m.single("\\mathbb{R}")) -- U+211D hole
+    assert.equal("𝒜", m.single("\\mathcal{A}")) -- U+1D49C main block
+    assert.equal("ℒ", m.single("\\mathcal{L}")) -- U+2112 hole
+  end)
+
+  it("overlines each char with a combining bar inline", function()
+    assert.equal("A\204\133B\204\133", m.single("\\overline{AB}")) -- each char + U+0305
+  end)
+
   it("wraps content in \\left \\right fences inline", function()
     assert.equal("(a+b)", m.single("\\left(a+b\\right)"))
     assert.equal("|x|", m.single("\\left|x\\right|"))
@@ -139,6 +156,12 @@ describe("fibrous.doc.math stacked (display)", function()
 
   it("stacks an accent glyph over the base", function()
     assert.same({ "^", "x" }, m.stack("\\hat{x}"))
+  end)
+
+  it("draws \\overline as a bar hugging the content in display", function()
+    -- ▁ (lower eighth block) sits at the bottom of the row above, so the bar
+    -- rides just over the content rather than floating high
+    assert.same({ "▁▁▁", "x+y" }, m.stack("\\overline{x+y}"))
   end)
 
   it("raises a superscript on a tall group to its top row (not the centre)", function()

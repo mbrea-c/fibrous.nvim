@@ -76,6 +76,21 @@ M.marks = {
   },
 }
 
+-- FibrousMathVariable is the ONE computed group: ui.markdown italicises math
+-- variables with it, but it must keep the user's @markup.math colour (which the
+-- user owns, and which covers the rest of the equation), so it is derived as
+-- "@markup.math resolved + italic" rather than a static link. `default` so an
+-- explicit user definition still wins; recomputed in apply() to track scheme
+-- and @markup.math changes across a ColorScheme switch.
+local function apply_math_variable()
+  local base = vim.api.nvim_get_hl(0, { name = "@markup.math", link = false })
+  base.link = nil
+  base.default = true
+  base.italic = true
+  base.cterm = vim.tbl_extend("force", base.cterm or {}, { italic = true })
+  vim.api.nvim_set_hl(0, "FibrousMathVariable", base)
+end
+
 -- Define the groups (without overriding existing definitions) and keep them
 -- alive across colorscheme switches. Idempotent; host.new() calls this.
 function M.apply()
@@ -83,6 +98,7 @@ function M.apply()
     local def = vim.tbl_extend("force", { default = true }, spec)
     vim.api.nvim_set_hl(0, name, def)
   end
+  apply_math_variable()
   local group = vim.api.nvim_create_augroup("FibrousTheme", { clear = true })
   vim.api.nvim_create_autocmd("ColorScheme", { group = group, callback = M.apply })
 end

@@ -54,6 +54,17 @@ local function span(text, ctx)
   return sp
 end
 
+-- Math runs -> spans. Variable runs get FibrousMathVariable (which inherits the
+-- user's @markup.math and adds italic); everything else stays @markup.math, so the
+-- whole equation carries the user's math styling and only variables lean.
+local function math_spans(runs, ctx, out)
+  for _, r in ipairs(runs) do
+    local hl = r.var and "FibrousMathVariable" or "@markup.math"
+    out[#out + 1] = span(r.text, merge(ctx, { text_hl = hl }))
+  end
+  return out
+end
+
 local function default_open(url)
   if vim.ui and vim.ui.open then
     pcall(vim.ui.open, url)
@@ -96,8 +107,12 @@ local function walk_inline(nodes, ctx, opts, out)
         out
       )
     elseif t == "math_inline" then
-      local ok, s = pcall(require("fibrous.doc.math").single, n.tex)
-      out[#out + 1] = span(ok and s or n.tex, merge(ctx, { text_hl = "@markup.math" }))
+      local ok, runs = pcall(require("fibrous.doc.math").single_spans, n.tex)
+      if ok and runs then
+        math_spans(runs, ctx, out)
+      else
+        out[#out + 1] = span(n.tex, merge(ctx, { text_hl = "@markup.math" }))
+      end
     elseif t == "image" then
       -- a terminal shows the alt text; keep it visually link-like
       local alt = (n.alt and n.alt ~= "") and n.alt or (n.url or "image")
@@ -183,13 +198,21 @@ function render_block(node, opts)
   elseif t == "thematic_break" then
     return { comp = ui.col, props = { style = { border = { top = true, hl = "NonText" } } } }
   elseif t == "math_block" then
-    local ok, lines = pcall(require("fibrous.doc.math").stack, node.tex)
-    if not ok or not lines then
-      lines = { node.tex }
-    end
+    local ok, rows_runs = pcall(require("fibrous.doc.math").stack_spans, node.tex)
     local rows = {}
-    for _, l in ipairs(lines) do
-      rows[#rows + 1] = { comp = ui.label, props = { text = l == "" and " " or l, style = { text_hl = "@markup.math" } } }
+    if ok and rows_runs then
+      for _, line_runs in ipairs(rows_runs) do
+        local spans = math_spans(line_runs, {}, {})
+        -- an empty stacked row keeps a space so the equation's height is preserved
+        if #spans == 0 then
+          spans = { " " }
+        end
+        rows[#rows + 1] = { comp = ui.label, props = { text = spans } }
+      end
+    else
+      for _, l in ipairs(vim.split(node.tex, "\n", { plain = true })) do
+        rows[#rows + 1] = { comp = ui.label, props = { text = l == "" and " " or l, style = { text_hl = "@markup.math" } } }
+      end
     end
     -- lines are equal width, so centering the col centers the whole equation
     return { comp = ui.col, props = { align = "center" }, children = rows }

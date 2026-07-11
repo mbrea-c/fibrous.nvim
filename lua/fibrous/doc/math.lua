@@ -5,6 +5,10 @@
 -- including the WASM docs site. Anything the parser does not understand degrades
 -- to the command name or the literal source rather than erroring.
 --
+-- M.single / M.stack return plain text; M.single_spans / M.stack_spans return the
+-- same content as { text, var } run lists, where `var` marks identifier variables
+-- so the doc renderer can italicise just those cells (see the proxy note below).
+--
 -- Scope (documented subset, expandable): symbols (Greek, operators, relations,
 -- arrows, big operators), `^`/`_` scripts, `\frac`, `\sqrt`, `{...}` groups,
 -- fonts (`\mathbf`, `\mathit`, `\boldsymbol`, `\mathrm`, `\text`), accents
@@ -45,7 +49,7 @@ local SYMBOLS = {
   partial = "∂", nabla = "∇", infty = "∞",
   -- dots and misc
   cdots = "⋯", ldots = "…", dots = "…", vdots = "⋮", ddots = "⋱",
-  angle = "∠", perp = "⊥", parallel = "∥", hbar = "ℏ", ell = "ℓ", prime = "′",
+  angle = "∠", perp = "⊥", parallel = "∥", mid = "∣", nmid = "∤", hbar = "ℏ", ell = "ℓ", prime = "′",
   langle = "⟨", rangle = "⟩", lceil = "⌈", rceil = "⌉", lfloor = "⌊", rfloor = "⌋",
 }
 
@@ -109,13 +113,32 @@ local BOLD = alphamap({ { "A", "Z", 0x1D400 }, { "a", "z", 0x1D41A }, { "0", "9"
 -- Italic omits digits (upright by convention) and has a reserved slot for h,
 -- which Unicode fills with U+210E (the Planck constant) in Letterlike Symbols.
 local ITALIC = alphamap({ { "A", "Z", 0x1D434 }, { "a", "z", 0x1D44E } }, { h = utf8c(0x210E) })
+-- Blackboard bold (\mathbb) and script (\mathcal). Both blocks reserve slots that
+-- Unicode fills from the Letterlike Symbols block, so those need overrides.
+local BLACKBOARD = alphamap(
+  { { "A", "Z", 0x1D538 }, { "a", "z", 0x1D552 }, { "0", "9", 0x1D7D8 } },
+  {
+    C = utf8c(0x2102), H = utf8c(0x210D), N = utf8c(0x2115), P = utf8c(0x2119),
+    Q = utf8c(0x211A), R = utf8c(0x211D), Z = utf8c(0x2124),
+  }
+)
+-- \mathcal is upright-uppercase in standard LaTeX; lowercase passes through.
+local SCRIPT = alphamap({ { "A", "Z", 0x1D49C } }, {
+  B = utf8c(0x212C), E = utf8c(0x2130), F = utf8c(0x2131), H = utf8c(0x210B),
+  I = utf8c(0x2110), L = utf8c(0x2112), M = utf8c(0x2133), R = utf8c(0x211B),
+})
 -- Style key -> char map; "rm" (upright roman, e.g. \text) is identity (no map).
-local FONTS = { bf = BOLD, it = ITALIC }
+local FONTS = { bf = BOLD, it = ITALIC, bb = BLACKBOARD, cal = SCRIPT }
 
 -- Argument-taking font/wrapper commands: \cmd{...} restyles its argument's glyphs.
 local WRAPCMD = {
   text = "rm", mathrm = "rm", mathbf = "bf", boldsymbol = "bf", mathit = "it",
+  mathbb = "bb", mathcal = "cal",
 }
+
+-- Combining marks that overlay the preceding glyph (no extra row/column).
+local NOT_OVERLAY = utf8c(0x0338) -- combining long solidus (for \not)
+local OVERLINE_MARK = utf8c(0x0305) -- combining overline (inline \overline)
 
 -- Named spacing commands (alphabetic, so they never reach the escaped-punct
 -- SPACING table): a run of spaces standing in for the em-based LaTeX widths.
@@ -272,6 +295,15 @@ parse_nodes = function(s, i, stop)
         local body, i2 = parse_arg(s, ni)
         nodes[#nodes + 1] = { kind = "accent", accent = ACCENTS[cmd], body = body }
         i = i2
+      elseif cmd == "overline" then
+        local body, i2 = parse_arg(s, ni)
+        nodes[#nodes + 1] = { kind = "overline", body = body }
+        i = i2
+      elseif cmd == "not" then
+        -- \not overlays a combining solidus on the following atom (\not= => ≠)
+        local body, i2 = parse_arg(s, ni)
+        nodes[#nodes + 1] = { kind = "overlay", mark = NOT_OVERLAY, body = body }
+        i = i2
       elseif cmd then
         nodes[#nodes + 1] = { kind = "sym", text = SYMBOLS[cmd] or cmd }
         i = ni
@@ -328,6 +360,77 @@ local function restyle(s, map)
   return table.concat(out)
 end
 
+-- ── variable proxies ─────────────────────────────────────────────────────────
+-- A "variable" (a lone identifier letter, not a digit/operator/function name and
+-- not inside \text/\mathbf/…) is rendered as a Private-Use proxy codepoint of the
+-- SAME display width, so the box layout is byte-for-cell identical. M.single /
+-- M.stack strip the proxies back to the real glyph; the *_spans variants split on
+-- them, so the doc renderer can italicise just those cells via a dedicated
+-- (FibrousMathVariable) highlight without touching the user's @markup.math.
+local PROXY0 = 0xE000
+
+local function cp_of(ch)
+  local b = ch:byte(1)
+  if b < 0x80 then
+    return b
+  elseif b < 0xE0 then
+    return (b - 0xC0) * 0x40 + (ch:byte(2) - 0x80)
+  elseif b < 0xF0 then
+    return (b - 0xE0) * 0x1000 + (ch:byte(2) - 0x80) * 0x40 + (ch:byte(3) - 0x80)
+  end
+  return (b - 0xF0) * 0x40000 + (ch:byte(2) - 0x80) * 0x1000 + (ch:byte(3) - 0x80) * 0x40 + (ch:byte(4) - 0x80)
+end
+
+-- ASCII letters and lowercase Greek (α-ω plus its variant glyphs) are variables;
+-- uppercase Greek, digits and operators stay upright, as in real math setting.
+local function is_var_cp(cp)
+  return (cp >= 0x41 and cp <= 0x5A) or (cp >= 0x61 and cp <= 0x7A) or (cp >= 0x3B1 and cp <= 0x3D6)
+end
+
+-- The proxy for a variable glyph, or nil if the glyph is not a variable.
+local function proxy_of(glyph)
+  if #glyph == 0 or #glyph > 2 then
+    return nil
+  end
+  local cp = cp_of(glyph)
+  return is_var_cp(cp) and utf8c(PROXY0 + cp) or nil
+end
+
+local function is_proxy_cp(cp)
+  return cp >= PROXY0 and cp < PROXY0 + 0x1000
+end
+
+-- Replace every proxy with its real glyph (fast path: a proxy's lead byte is 0xEE).
+local function strip_proxies(s)
+  if not s:find("\238", 1, true) then
+    return s
+  end
+  local out = {}
+  for ch in chars(s) do
+    local cp = cp_of(ch)
+    out[#out + 1] = is_proxy_cp(cp) and utf8c(cp - PROXY0) or ch
+  end
+  return table.concat(out)
+end
+
+-- Split `s` into a run list { { text, var }, … }, restoring proxy glyphs and
+-- coalescing adjacent runs of the same kind.
+local function to_runs(s)
+  local runs = {}
+  for ch in chars(s) do
+    local cp = cp_of(ch)
+    local var = is_proxy_cp(cp)
+    local glyph = var and utf8c(cp - PROXY0) or ch
+    local last = runs[#runs]
+    if last and last.var == var then
+      last.text = last.text .. glyph
+    else
+      runs[#runs + 1] = { text = glyph, var = var }
+    end
+  end
+  return runs
+end
+
 local render_single
 
 -- Parenthesize `str` when `nodes` is a compound (more than one atom).
@@ -335,34 +438,51 @@ local function paren(str, nodes)
   return #nodes > 1 and ("(" .. str .. ")") or str
 end
 
-render_single = function(nodes)
+-- `upright` (default false) suppresses variable-proxying: it is set for content
+-- that is explicitly fonted (\text, \mathbf, …) and for scripts/limits (rendered
+-- small, kept plain so the unicode super/subscript maps still apply).
+render_single = function(nodes, upright)
   local parts = {}
   for _, node in ipairs(nodes) do
     local base
     if node.kind == "sym" or node.kind == "bigop" then
-      base = node.text
+      base = (not upright and proxy_of(node.text)) or node.text
     elseif node.kind == "group" then
-      base = render_single(node.body)
+      base = render_single(node.body, upright)
     elseif node.kind == "frac" then
-      base = paren(render_single(node.num), node.num) .. "/" .. paren(render_single(node.den), node.den)
+      base = paren(render_single(node.num, upright), node.num)
+        .. "/"
+        .. paren(render_single(node.den, upright), node.den)
     elseif node.kind == "sqrt" then
-      base = "√" .. paren(render_single(node.body), node.body)
+      base = "√" .. paren(render_single(node.body, upright), node.body)
     elseif node.kind == "styled" then
-      base = restyle(render_single(node.body), FONTS[node.font])
+      base = restyle(render_single(node.body, true), FONTS[node.font])
     elseif node.kind == "accent" then
       -- a combining mark trails each base char; a single base is the common case
-      base = render_single(node.body) .. node.accent.combining
+      base = render_single(node.body, upright) .. node.accent.combining
+    elseif node.kind == "overlay" then
+      -- \not: a combining overlay on the (single) following atom
+      base = render_single(node.body, upright) .. node.mark
+    elseif node.kind == "overline" then
+      -- a combining overline after every char yields a continuous bar
+      local acc = {}
+      for ch in chars(render_single(node.body, upright)) do
+        acc[#acc + 1] = ch .. OVERLINE_MARK
+      end
+      base = table.concat(acc)
     elseif node.kind == "delim" then
-      base = (DELIM[node.left] or node.left) .. render_single(node.body) .. (DELIM[node.right] or node.right)
+      base = (DELIM[node.left] or node.left)
+        .. render_single(node.body, upright)
+        .. (DELIM[node.right] or node.right)
     else
       base = ""
     end
     if node.sup then
-      local s = render_single(node.sup)
+      local s = render_single(node.sup, true)
       base = base .. (map_all(s, SUP) or ("^(" .. s .. ")"))
     end
     if node.sub then
-      local s = render_single(node.sub)
+      local s = render_single(node.sub, true)
       base = base .. (map_all(s, SUB) or ("_(" .. s .. ")"))
     end
     parts[#parts + 1] = base
@@ -382,17 +502,31 @@ local function bump()
   end
 end
 
--- Render `tex` as a single Unicode line (inline math).
----@param tex string
----@return string
-function M.single(tex)
+-- Cached PROXIED single-line render (variables as proxy codepoints); M.single and
+-- M.single_spans derive the plain string and the run list from it.
+local function proxied_single(tex)
   local hit = single_cache[tex]
   if hit == nil then
-    hit = render_single(parse(tex))
+    hit = render_single(parse(tex), false)
     single_cache[tex] = hit
     bump()
   end
   return hit
+end
+
+-- Render `tex` as a single Unicode line (inline math).
+---@param tex string
+---@return string
+function M.single(tex)
+  return strip_proxies(proxied_single(tex))
+end
+
+-- Inline math as a run list { { text, var }, … }; `var` runs are the variables to
+-- italicise. The plain text is the runs concatenated.
+---@param tex string
+---@return { text: string, var: boolean }[]
+function M.single_spans(tex)
+  return to_runs(proxied_single(tex))
 end
 
 -- ── stacked (2D) renderer ────────────────────────────────────────────────────
@@ -515,15 +649,16 @@ end
 
 local render_stack
 
--- Inline scripts (unicode, or ^()/_() fallback) for a tall base box.
+-- Inline scripts (unicode, or ^()/_() fallback) for a tall base box. Scripts are
+-- kept upright (no variable proxies) so the small-form maps still apply.
 local function scripts_text(node)
   local out = ""
   if node.sup then
-    local s = render_single(node.sup)
+    local s = render_single(node.sup, true)
     out = out .. (map_all(s, SUP) or ("^(" .. s .. ")"))
   end
   if node.sub then
-    local s = render_single(node.sub)
+    local s = render_single(node.sub, true)
     out = out .. (map_all(s, SUB) or ("_(" .. s .. ")"))
   end
   return out
@@ -532,7 +667,7 @@ end
 -- One script rendered small (unicode super/subscript) where every char maps,
 -- else the plain string (its raised/lowered position still reads as a script).
 local function script_str(nodes, map)
-  local s = render_single(nodes)
+  local s = render_single(nodes, true)
   return map_all(s, map) or s
 end
 
@@ -638,12 +773,12 @@ end
 -- A big operator's limit: rendered SMALL (unicode super/subscript, mimicking
 -- scriptstyle) when every char has a small form, else full-size stacked.
 local function limit_box(nodes, map)
-  local s = render_single(nodes)
+  local s = render_single(nodes, true)
   local small = map_all(s, map)
   if small then
     return { lines = { small }, w = dw(small), h = 1, axis = 0 }
   end
-  return render_stack(nodes)
+  return render_stack(nodes, true)
 end
 
 -- A big operator (∑, ∫, …), its glyph sized to the summand height `oph`, with
@@ -681,23 +816,23 @@ local function bigop_box(node, oph)
   return { lines = lines, w = w, h = #lines, axis = axis }
 end
 
-local function box_of(node)
+local function box_of(node, upright)
   if node.kind == "sym" then
     -- a plain atom (with its scripts) is one inline row
-    return text_box(render_single({ node }))
+    return text_box(render_single({ node }, upright))
   end
   if node.kind == "bigop" then
     return bigop_box(node, 1) -- fallback size; render_stack sizes to the summand
   end
   local b
   if node.kind == "frac" then
-    b = frac_box(render_stack(node.num), render_stack(node.den))
+    b = frac_box(render_stack(node.num, upright), render_stack(node.den, upright))
   elseif node.kind == "sqrt" then
-    b = sqrt_box(render_stack(node.body))
+    b = sqrt_box(render_stack(node.body, upright))
   elseif node.kind == "group" then
-    b = render_stack(node.body)
+    b = render_stack(node.body, upright)
   elseif node.kind == "styled" then
-    b = render_stack(node.body)
+    b = render_stack(node.body, true)
     local map = FONTS[node.font]
     if map then
       local nl = {}
@@ -708,16 +843,32 @@ local function box_of(node)
     end
   elseif node.kind == "accent" then
     -- stack the accent glyph on a new row above the body, centred on its width
-    b = render_stack(node.body)
+    b = render_stack(node.body, upright)
     local top = center(node.accent.glyph, b.w)
     local lines = { top }
     for _, l in ipairs(b.lines) do
       lines[#lines + 1] = l
     end
     b = { lines = lines, w = b.w, h = b.h + 1, axis = b.axis + 1 }
+  elseif node.kind == "overline" then
+    -- a bar row hugging the top of the content (▁ sits at the bottom of its cell)
+    b = render_stack(node.body, upright)
+    local lines = { ("▁"):rep(b.w) }
+    for _, l in ipairs(b.lines) do
+      lines[#lines + 1] = l
+    end
+    b = { lines = lines, w = b.w, h = b.h + 1, axis = b.axis + 1 }
+  elseif node.kind == "overlay" then
+    -- \not: overlay the combining mark on the base's axis row (width unchanged)
+    b = render_stack(node.body, upright)
+    local lines = {}
+    for i, l in ipairs(b.lines) do
+      lines[i] = (i == b.axis + 1) and (l .. node.mark) or l
+    end
+    b = { lines = lines, w = b.w, h = b.h, axis = b.axis }
   elseif node.kind == "delim" then
     -- fences sized to the content height, drawn to the left/right of its box
-    local inner = render_stack(node.body)
+    local inner = render_stack(node.body, upright)
     local parts = {}
     local lg = fence_lines(DELIM[node.left] or node.left, inner.h)
     if lg then
@@ -735,7 +886,7 @@ local function box_of(node)
   return attach_scripts(b, node)
 end
 
-render_stack = function(nodes)
+render_stack = function(nodes, upright)
   if #nodes == 0 then
     return text_box("")
   end
@@ -743,7 +894,7 @@ render_stack = function(nodes)
   -- sized to its summand, which is the content to its right (look-ahead).
   local boxes = {}
   for idx, node in ipairs(nodes) do
-    boxes[idx] = (node.kind ~= "bigop") and box_of(node) or false
+    boxes[idx] = (node.kind ~= "bigop") and box_of(node, upright) or false
   end
   for idx, node in ipairs(nodes) do
     if node.kind == "bigop" then
@@ -763,17 +914,39 @@ render_stack = function(nodes)
   return hcat(boxes)
 end
 
--- Render `tex` as a 2D block of Unicode lines (display math).
----@param tex string
----@return string[] lines
-function M.stack(tex)
+-- Cached PROXIED display render (lines with variable proxies); M.stack and
+-- M.stack_spans derive plain lines and per-line run lists from it.
+local function proxied_stack(tex)
   local hit = stack_cache[tex]
   if hit == nil then
-    hit = render_stack(parse(tex)).lines
+    hit = render_stack(parse(tex), false).lines
     stack_cache[tex] = hit
     bump()
   end
   return hit
+end
+
+-- Render `tex` as a 2D block of Unicode lines (display math).
+---@param tex string
+---@return string[] lines
+function M.stack(tex)
+  local out = {}
+  for i, l in ipairs(proxied_stack(tex)) do
+    out[i] = strip_proxies(l)
+  end
+  return out
+end
+
+-- Display math as a list of per-line run lists ({ text, var }); `var` runs are
+-- the variables to italicise. Each line's plain text is its runs concatenated.
+---@param tex string
+---@return { text: string, var: boolean }[][]
+function M.stack_spans(tex)
+  local out = {}
+  for i, l in ipairs(proxied_stack(tex)) do
+    out[i] = to_runs(l)
+  end
+  return out
 end
 
 return M
