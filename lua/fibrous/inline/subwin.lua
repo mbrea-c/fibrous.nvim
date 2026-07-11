@@ -45,6 +45,7 @@
 local width = require("fibrous.inline.width")
 local cursorshim = require("fibrous.inline.cursorshim")
 local interact = require("fibrous.inline.interact")
+local targets = require("fibrous.targets")
 
 local M = {}
 
@@ -1455,6 +1456,80 @@ function M.attach(host, root_winid, opts)
 		end
 	end
 
+	-- ── Interactive target geometry (fibrous.targets / flash) ───────────────────
+	-- A resolver mapping a child-buffer content box to the PARENT MIRROR cell it
+	-- currently shows through (root_winid / target.bufnr), for an unfocused
+	-- container standing in as a mirror. Inverts entry.mirror_map (box row i shows
+	-- child line `lnum` from cell `cell0`); nil when that child line isn't in the
+	-- mirror right now (scrolled out) or the box row is off-screen in the parent.
+	local function mirror_resolver(entry)
+		local c = entry.node.content
+		local map = entry.mirror_map or {}
+		local top, bot = targets.visible_range(root_winid)
+		return function(box)
+			local child_line = box.y + 1 -- 1-based child buffer line
+			for i, m in ipairs(map) do
+				if m.lnum == child_line and box.x >= m.cell0 and box.x < m.cell0 + c.w then
+					local prow = c.y + (i - 1) -- parent row, 0-based
+					if top and (prow + 1 < top or prow + 1 > bot) then
+						return nil -- the mirror row is scrolled off-screen in the parent
+					end
+					local pline = targets.line_at(target.bufnr, prow)
+					local ecell = c.x + math.min(box.x + box.w, m.cell0 + c.w) - m.cell0
+					return {
+						winid = root_winid,
+						pos = { prow + 1, width.cell_to_byte(pline, c.x + (box.x - m.cell0)) },
+						end_pos = { prow + 1, width.cell_to_byte(pline, ecell) },
+					}
+				end
+			end
+			return nil
+		end
+	end
+
+	-- Every interactive element under this manager, resolved to the window that
+	-- currently DISPLAYS it: role widgets inside a SHOWN container float (native
+	-- float coords) or an unfocused one (parent mirror cells), an editable
+	-- widget's own float/mirror, and recursively any nested container. Off-screen
+	-- elements drop out (the resolvers viewport-filter).
+	local function collect_targets()
+		local out = {}
+		for _, entry in pairs(floats) do
+			if not entry.dead and vim.api.nvim_win_is_valid(entry.winid) then
+				local shown = not vim.api.nvim_win_get_config(entry.winid).hide
+				if entry.node.subwin == "container" and entry.child_target then
+					-- A container is a LIVE float (forced render="always"): its role
+					-- elements are read from the float in its own window coords. When
+					-- hidden it is fully occluded (scrolled off) — nothing to show.
+					if shown then
+						vim.list_extend(out, targets.extract(entry.child_target, entry.winid))
+						if entry.child_manager then
+							vim.list_extend(out, entry.child_manager.collect_targets())
+						end
+					end
+				else
+					-- text_input / raw_buffer: the widget itself is one target
+					local kind = entry.node.subwin
+					local geo
+					if shown then
+						local info = vim.fn.getwininfo(entry.winid)[1]
+						local ln = info and info.topline or 1
+						local line = vim.api.nvim_buf_get_lines(entry.bufnr, ln - 1, ln, false)[1] or ""
+						geo = { winid = entry.winid, pos = { ln, 0 }, end_pos = { ln, #line } }
+					else
+						local c = entry.node.content
+						geo = mirror_resolver(entry)({ x = 0, y = 0, w = c.w, h = 1 })
+					end
+					if geo then
+						out[#out + 1] =
+							{ winid = geo.winid, pos = geo.pos, end_pos = geo.end_pos, kind = kind, role = nil }
+					end
+				end
+			end
+		end
+		return out
+	end
+
 	return {
 		sync = sync,
 		enter_at = enter_at,
@@ -1462,6 +1537,7 @@ function M.attach(host, root_winid, opts)
 		activate_at = activate_at,
 		hover_at = hover_at,
 		clear_hover = clear_hover,
+		collect_targets = collect_targets,
 		teardown = function()
 			hovered_hover_entry = nil
 			for _, entry in pairs(floats) do

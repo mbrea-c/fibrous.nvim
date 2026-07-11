@@ -80,10 +80,10 @@ end
 function M.create_fiber(spec, env)
 	local fiber = Fiber.new(spec.comp, spec.props)
 	fiber.children_specs = spec.children or {}
-	-- Stable identity for cursor anchoring (interact.lua): the host propagates
-	-- it onto the laid-out node so a relayout can relocate the cursor's entry.
-	-- Reconciliation itself stays POSITIONAL — the key is metadata, not a
-	-- reorder hint — so a shifted entry keeps its key while its fiber is reused.
+	-- Stable identity. `key` drives BOTH keyed reconciliation (reconcile_children
+	-- matches a keyed spec to the old fiber of the same key, so a moved entry keeps
+	-- its fiber + hook state — see there) and cursor anchoring (the host propagates
+	-- it onto the laid-out node so a relayout can relocate the cursor's entry).
 	fiber.key = spec.key
 	fiber.ctx = hooks.make_ctx(env.schedule)
 	local tag = host_tag(spec.comp)
@@ -116,10 +116,12 @@ end
 
 -- Reconcile a parent's existing child fibers against fresh child VNode specs.
 --
--- Matching is positional: at each index, if the existing fiber's component
--- `type` equals the spec's `comp`, the fiber — and its hook state — is reused
--- (design.md §5: reuse when `type` matches), and a host fiber's instance is
--- updated in place. Otherwise the old fiber is unmounted and a new one mounts.
+-- Matching is keyed-or-positional (the detail is in reconcile_children below): a
+-- spec WITH a `key` reuses the old fiber of the same key, so a moved entry keeps
+-- its fiber + hook state; a keyless spec matches the next unclaimed keyless old
+-- fiber in order (the previous positional behavior). Either way a reused fiber
+-- needs its `type` (component) to still match — and a host fiber's instance is
+-- updated in place; otherwise the old fiber is unmounted and a new one mounts.
 -- Trailing fibers left over (the new list is shorter) are unmounted.
 --
 -- Render bailout (React.memo semantics, opted into per call site): a reused

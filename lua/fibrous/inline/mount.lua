@@ -18,6 +18,7 @@ local runtime = require("fibrous.reactive.runtime")
 local inline_host = require("fibrous.inline.host")
 local subwin = require("fibrous.inline.subwin")
 local interact = require("fibrous.inline.interact")
+local targets = require("fibrous.targets")
 
 local M = {}
 
@@ -102,12 +103,28 @@ local function wire(component, props, host, winid, group, attachments, sync, on_
 	local root = runtime.create_root(component, props, { host = host })
 	root:render()
 
+	-- Register this mount with the global target registry (fibrous.targets): its
+	-- provider hands out the interactive elements currently visible in its root
+	-- window PLUS every subwindow (the subwin manager's collect_targets resolves
+	-- container/mirror coordinates), for flash.nvim-style jump-to-widget.
+	-- Deregistered on teardown.
+	local target_token = targets.register(function()
+		local out = targets.extract(host.root_target, winid)
+		for _, attachment in ipairs(attachments) do
+			if attachment.collect_targets then
+				vim.list_extend(out, attachment.collect_targets())
+			end
+		end
+		return out
+	end)
+
 	local unmounted = false
 	local function teardown()
 		if unmounted then
 			return
 		end
 		unmounted = true
+		targets.unregister(target_token)
 		pcall(vim.api.nvim_del_augroup_by_id, group)
 		for _, attachment in ipairs(attachments) do
 			attachment.teardown()
