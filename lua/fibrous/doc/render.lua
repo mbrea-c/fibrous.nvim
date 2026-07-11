@@ -11,9 +11,10 @@
 -- opts:
 --   on_link(url)              fired when a link span is activated; defaults to
 --                             vim.ui.open (falls back to a notify)
---   highlight(text, lang)     optional fenced-code highlighter → span list; the
---                             default renders code plain (@markup.raw), so the
---                             widget stays dependency-free (and WASM-safe)
+--   highlight(text, lang)     override the fenced-code highlighter. The default
+--                             is fibrous.doc.highlight (treesitter via the string
+--                             parser), degrading to plain @markup.raw when no
+--                             parser is available (so it stays WASM-safe)
 
 local ui = require("fibrous.inline.components")
 
@@ -158,11 +159,13 @@ function render_block(node, opts)
     }
   elseif t == "code_block" then
     local text = node.text
-    if opts.highlight then
-      local ok, spans = pcall(opts.highlight, text, node.lang)
-      if ok and spans then
-        return { comp = ui.text, props = { text = spans, wrap = false } }
-      end
+    -- Highlight fenced code by default via treesitter (fibrous.doc.highlight),
+    -- degrading to plain @markup.raw when unavailable. `opts.highlight` overrides
+    -- the default highlighter (e.g. a host that resolves languages differently).
+    local hl = opts.highlight or require("fibrous.doc.highlight").code
+    local ok, spans = pcall(hl, text, node.lang)
+    if ok and spans then
+      return { comp = ui.text, props = { text = spans, wrap = false } }
     end
     return { comp = ui.text, props = { text = text, wrap = false, style = { text_hl = "@markup.raw" } } }
   elseif t == "blockquote" then

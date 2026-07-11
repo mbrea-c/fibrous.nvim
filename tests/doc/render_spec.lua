@@ -44,7 +44,7 @@ describe("fibrous.doc.render blocks", function()
     local doc = ast.document({
       ast.heading(2, { ast.text("Title") }),
       ast.paragraph({ ast.text("body") }),
-      ast.code_block("lua", "x = 1"),
+      ast.code_block(nil, "x = 1"), -- no language → plain (highlighting tested separately)
     })
     local v = render.render(doc, {})
     assert.equal(ui.col, v.comp)

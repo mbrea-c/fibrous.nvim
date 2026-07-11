@@ -38,6 +38,21 @@ describe("ui.markdown", function()
     handle.unmount()
   end)
 
+  it("threads on_key and layout props onto the outer node (both paths)", function()
+    local comp = require("fibrous.markdown.component")
+    local ctx = {
+      use_ref = function()
+        return { current = nil }
+      end,
+    }
+    local parsed = comp(ctx, { text = "# hi", on_key = { x = function() end }, grow = 1 })
+    assert.equal("function", type(parsed.props.on_key.x))
+    assert.equal(1, parsed.props.grow)
+
+    local live = comp(ctx, { text = "raw", live = true, on_key = { y = function() end } })
+    assert.equal("function", type(live.props.on_key.y))
+  end)
+
   it("renders plain, unparsed text while live (streaming)", function()
     local function App()
       return { comp = ui.markdown, props = { text = "# not yet", live = true } }
