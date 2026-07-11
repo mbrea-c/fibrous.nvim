@@ -40,6 +40,7 @@
       #   nix run .#test [-- tests/inline/host_spec.lua]   the suite / one spec
       #   nix run .#bench                                   inline host benchmarks (BENCH_N=…)
       #   nix run .#bench-transcript                        transcript-scale benchmarks
+      #   nix run .#bench-markdown                          markdown parse/render/mount
       #   nix run .#bench-term                              terminal-draw bytes/frame (real pty)
       #   nix run .#bench-history -- --last 12 --reps 8     benches across git history → trend table
       #   nix run .#example [-- counter]                    examples browser in a clean nvim
@@ -78,6 +79,10 @@
           bench-transcript = app [ ] "fibrous-bench-transcript" ''
             cd ${self}
             exec make bench-transcript
+          '';
+          bench-markdown = app [ ] "fibrous-bench-markdown" ''
+            cd ${self}
+            exec make bench-markdown
           '';
           # Terminal-draw throughput: bytes nvim's TUI pushes at a real pty per
           # frame — the tmux+ssh cost (highlight repaints and escape overhead

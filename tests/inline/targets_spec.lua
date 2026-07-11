@@ -139,6 +139,48 @@ describe("fibrous.targets", function()
     handle.unmount()
   end)
 
+  it("includes interactive spans (links) as targets, one per logical span", function()
+    local function App()
+      return {
+        comp = ui.paragraph,
+        props = {
+          text = {
+            "see ",
+            { "the link", on_click = function() end, role = "link" },
+            " now",
+          },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 30, height = 3 })
+
+    local links = targets.targets({ winid = handle.winid, kinds = { "link" } })
+    assert.equal(1, #links)
+    assert.equal("link", links[1].kind)
+    assert.equal("link", links[1].role)
+    assert.equal(handle.winid, links[1].winid)
+    -- single-line, anchored at the span's first cell ("the link" after "see ")
+    assert.equal(links[1].pos[1], links[1].end_pos[1])
+    assert.equal(4, links[1].pos[2])
+
+    handle.unmount()
+  end)
+
+  it("emits ONE target for a link that wrapped across lines", function()
+    local function App()
+      return {
+        comp = ui.paragraph,
+        props = {
+          text = { { "aaaa bbbb", on_click = function() end, role = "link" } },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 4, height = 3 })
+    local links = targets.targets({ winid = handle.winid, kinds = { "link" } })
+    assert.equal(1, #links)
+    handle.unmount()
+  end)
+
   it("only returns elements visible in the window's viewport", function()
     -- a tall column in a short scroll-mode float: buttons past the bottom of the
     -- viewport are NOT returned (flash only labels what's on screen)

@@ -95,6 +95,32 @@ function M.collect(tree, resolve)
         end
       end
     end
+    -- Interactive spans (links) inside a text leaf: one target per logical span,
+    -- anchored at its first VISIBLE fragment's cell (resolve viewport-filters).
+    if node.kind == "text" and node.line_runs then
+      local content = node.content
+      local seen = {}
+      for li, runs in ipairs(node.line_runs) do
+        local cx = content.x
+        for _, run in ipairs(runs) do
+          local w = width.str(run.text)
+          if run.id and (run.on_click or run.role) and not seen[run.id] then
+            local geo = resolve({ x = cx, y = content.y + li - 1, w = w, h = 1 })
+            if geo then
+              seen[run.id] = true
+              out[#out + 1] = {
+                winid = geo.winid,
+                pos = geo.pos,
+                end_pos = geo.end_pos,
+                kind = run.role or "span",
+                role = run.role,
+              }
+            end
+          end
+          cx = cx + w
+        end
+      end
+    end
     for _, child in ipairs(node.children or {}) do
       walk(child)
     end

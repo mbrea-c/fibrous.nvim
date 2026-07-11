@@ -1,0 +1,71 @@
+-- The block phase of the markdown parser: source text to a raw block tree
+-- (structure only; leaf blocks hold raw inline text, parsed later by init.lua).
+-- Line-based, pure Lua.
+
+local block = require("fibrous.markdown.block")
+
+describe("fibrous.markdown.block", function()
+  it("parses ATX headings and paragraphs", function()
+    local b = block.parse("# Title\n\nsome body\ntext")
+    assert.equal("heading", b[1].kind)
+    assert.equal(1, b[1].level)
+    assert.equal("Title", b[1].text)
+    assert.equal("paragraph", b[2].kind)
+    assert.equal("some body\ntext", b[2].text)
+  end)
+
+  it("parses fenced code with an info string, verbatim", function()
+    local b = block.parse("```lua\nlocal x = 1\n-- *not* emphasis\n```")
+    assert.equal("code_block", b[1].kind)
+    assert.equal("lua", b[1].lang)
+    assert.equal("local x = 1\n-- *not* emphasis", b[1].text)
+  end)
+
+  it("parses thematic breaks", function()
+    local b = block.parse("a\n\n---\n\nb")
+    assert.equal("paragraph", b[1].kind)
+    assert.equal("thematic_break", b[2].kind)
+    assert.equal("paragraph", b[3].kind)
+  end)
+
+  it("parses blockquotes, recursively", function()
+    local b = block.parse("> quoted\n> more")
+    assert.equal("blockquote", b[1].kind)
+    assert.equal("paragraph", b[1].blocks[1].kind)
+    assert.equal("quoted\nmore", b[1].blocks[1].text)
+  end)
+
+  it("parses unordered and ordered lists", function()
+    local u = block.parse("- one\n- two")
+    assert.equal("list", u[1].kind)
+    assert.is_false(u[1].ordered)
+    assert.equal(2, #u[1].items)
+    assert.equal("paragraph", u[1].items[1].blocks[1].kind)
+    assert.equal("one", u[1].items[1].blocks[1].text)
+
+    local o = block.parse("3. a\n4. b")
+    assert.is_true(o[1].ordered)
+    assert.equal(3, o[1].start)
+    assert.equal(2, #o[1].items)
+  end)
+
+  it("parses GFM tables with per-column alignment", function()
+    local b = block.parse("| Name | Qty |\n| :--- | ---: |\n| apple | 3 |\n| pear | 12 |")
+    assert.equal("table", b[1].kind)
+    assert.same({ "left", "right" }, b[1].align)
+    assert.same({ "Name", "Qty" }, b[1].header)
+    assert.equal(2, #b[1].rows)
+    assert.same({ "apple", "3" }, b[1].rows[1])
+  end)
+
+  it("does not mistake a plain paragraph with a pipe for a table", function()
+    local b = block.parse("a | b is not a table")
+    assert.equal("paragraph", b[1].kind)
+  end)
+
+  it("parses GFM task list items", function()
+    local b = block.parse("- [ ] todo\n- [x] done")
+    assert.equal(false, b[1].items[1].checked)
+    assert.equal(true, b[1].items[2].checked)
+  end)
+end)

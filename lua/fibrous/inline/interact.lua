@@ -49,6 +49,10 @@ local style = require("fibrous.inline.style")
 local str_width, cell_to_byte = width.str, width.cell_to_byte
 
 local ns_hover = vim.api.nvim_create_namespace("fibrous_inline_hover")
+-- Span-level hover overlay lives in its OWN namespace so it and the node-level
+-- hover (ns_hover) clear independently — a text node with interactive spans is
+-- not itself a role node, so the two paths never contend for the same cells.
+local ns_span = vim.api.nvim_create_namespace("fibrous_inline_span_hover")
 
 -- The deepest node at cell (x, y) whose props satisfy `pred`. Later children
 -- paint over earlier ones, so they are tried in reverse; a non-matching subtree
@@ -79,6 +83,26 @@ end
 
 local function has_role(props)
   return props.role
+end
+
+-- The deepest TEXT leaf (one carrying line_runs, so its spans are addressable)
+-- at cell (x, y), or nil. Interactive spans live inside these.
+local function text_node_at(node, x, y)
+  local r = node.rect
+  if not r or x < r.x or x >= r.x + r.w or y < r.y or y >= r.y + r.h then
+    return nil
+  end
+  local children = node.children or {}
+  for i = #children, 1, -1 do
+    local found = text_node_at(children[i], x, y)
+    if found then
+      return found
+    end
+  end
+  if node.kind == "text" and node.line_runs then
+    return node
+  end
+  return nil
 end
 
 -- The deepest KEYED node at cell (x, y): the innermost entry carrying a stable
@@ -333,6 +357,107 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     end
   end
 
+  -- ── Interactive spans (links) ───────────────────────────────────────────
+  -- A span carrying on_click/_hover is addressed at RUN granularity inside its
+  -- text leaf. Everything a span can do is hl-only, so hover is a plain overlay
+  -- in ns_span (no relayout), and click reuses the activate path.
+
+  -- The run under the cursor, its text leaf, and the run's starting cell col.
+  ---@return SpanRun|nil, table|nil, integer|nil
+  local function run_under_cursor()
+    if not target.tree then
+      return nil
+    end
+    local row, x = cursor_cell()
+    if not row then
+      return nil
+    end
+    local node = text_node_at(target.tree, x, row)
+    if not node then
+      return nil
+    end
+    local content = node.content
+    local runs = node.line_runs[row - content.y + 1]
+    if not runs then
+      return nil
+    end
+    local cx = content.x
+    for _, run in ipairs(runs) do
+      local w = str_width(run.text)
+      if x >= cx and x < cx + w then
+        return run, node, cx
+      end
+      cx = cx + w
+    end
+    return nil
+  end
+
+  -- Every cell range of the runs in `node` sharing logical span `id`, one entry
+  -- per (wrapped) fragment: { y, x0, x1 }.
+  local function span_rects(node, id)
+    local out = {}
+    local content = node.content
+    for li, runs in ipairs(node.line_runs or {}) do
+      local y = content.y + li - 1
+      local cx = content.x
+      for _, run in ipairs(runs) do
+        local w = str_width(run.text)
+        if run.id == id then
+          out[#out + 1] = { y = y, x0 = cx, x1 = cx + w }
+        end
+        cx = cx + w
+      end
+    end
+    return out
+  end
+
+  -- One span-hover extmark at cell range [x0, x1) of row y, above the node
+  -- hover (4200) and the base spans (4096).
+  local function mark_span(y, x0, x1, hl)
+    local line = vim.api.nvim_buf_get_lines(bufnr, y, y + 1, false)[1] or ""
+    vim.api.nvim_buf_set_extmark(bufnr, ns_span, y, cell_to_byte(line, x0), {
+      end_col = cell_to_byte(line, x1),
+      hl_group = hl,
+      priority = 4300,
+    })
+  end
+
+  -- What the span overlay currently shows: the text leaf's fiber + the span id.
+  local span_shown = nil
+  local function span_present()
+    return #vim.api.nvim_buf_get_extmarks(bufnr, ns_span, 0, -1, { limit = 1 }) > 0
+  end
+
+  -- Drop the span-hover overlay.
+  local function clear_span_hover()
+    if span_shown and vim.api.nvim_buf_is_valid(bufnr) then
+      vim.api.nvim_buf_clear_namespace(bufnr, ns_span, 0, -1)
+      span_shown = nil
+    end
+  end
+
+  -- Paint the hover overlay for the interactive span under the cursor (all its
+  -- wrapped runs), or clear it. Interactive = carries a hover group or a click;
+  -- a span with only on_click gets the default FibrousHover cue.
+  local function paint_span_hover()
+    local run, node = run_under_cursor()
+    local key = (run and run.id and (run.hover_hl or run.on_click)) and { fiber = node.fiber, id = run.id }
+      or nil
+    if key and span_shown and span_shown.fiber == key.fiber and span_shown.id == key.id and span_present() then
+      return -- same span, overlay intact
+    end
+    vim.api.nvim_buf_clear_namespace(bufnr, ns_span, 0, -1)
+    span_shown = nil
+    if not key then
+      return
+    end
+    local hl = run.hover_hl or "FibrousHover"
+    for _, rect in ipairs(span_rects(node, run.id)) do
+      mark_span(rect.y, rect.x0, rect.x1, hl)
+    end
+    span_shown = key
+  end
+
   -- Hover state machine. Structural hovers flow through host.set_state +
   -- relayout (which re-enters us via on_flush — `syncing` breaks the cycle);
   -- the settle loop re-evaluates against the moved rects, capped because a
@@ -364,6 +489,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       vim.api.nvim_buf_clear_namespace(bufnr, ns_hover, 0, -1)
       shown_fiber, shown_rect = nil, nil
     end
+    clear_span_hover()
     if subwins and subwins.clear_hover then
       subwins.clear_hover()
     end
@@ -387,8 +513,10 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     end
     if not live then
       clear_hover()
+      clear_span_hover()
       return
     end
+    paint_span_hover()
     local node
     for _ = 1, 3 do
       node = node_under_cursor()
@@ -509,6 +637,13 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       if row and subwins.activate_at(row, x, via_click) then
         return
       end
+    end
+    -- An interactive span under the cursor takes precedence (deepest wins): its
+    -- text leaf is not a role node, so node_under_cursor would miss it anyway.
+    local run, _, rx0 = run_under_cursor()
+    if run and run.on_click then
+      run.on_click(x and rx0 and math.max(x - rx0, 0) or nil)
+      return
     end
     local node = node_under_cursor()
     if not node then

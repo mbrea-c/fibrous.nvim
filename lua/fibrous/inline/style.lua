@@ -129,6 +129,51 @@ function M.normalize(props, defaults)
   return norm
 end
 
+-- Span styling is a STRICT SUBSET of the node vocabulary: a span has no box
+-- (no border/padding/margin), so only the text-appearance key `text_hl` and a
+-- `_hover` state override are meaningful. Everything a span can style is thus
+-- always the hl-only tier (an extmark overlay, never a relayout). Background
+-- fill behind a run is deferred: a run's `text_hl` group can carry its own bg
+-- (that is how inline code renders), so a separate bg key is not needed yet.
+---@class SpanStyle
+---@field base { text_hl?: string }
+---@field hover { text_hl?: string }|nil
+local SPAN_KEYS = { text_hl = true }
+
+---@param spec table
+---@param out table
+---@param where string
+local function resolve_span_level(spec, out, where)
+  for k, v in pairs(spec) do
+    if SPAN_KEYS[k] then
+      out[k] = v
+    elseif not (where == "span" and k == "_hover") then
+      error(("fibrous: unknown span style key '%s' in %s"):format(k, where))
+    end
+  end
+end
+
+-- Normalize a span's `style` (the restricted vocabulary above), or nil.
+---@param spec table|nil
+---@return SpanStyle|nil
+function M.span_style(spec)
+  if spec == nil then
+    return nil
+  end
+  if type(spec) ~= "table" then
+    error("fibrous: a span `style` must be a table")
+  end
+  local base = {}
+  resolve_span_level(spec, base, "span")
+  local out = { base = base }
+  if spec._hover ~= nil then
+    local hover = {}
+    resolve_span_level(spec._hover, hover, "_hover")
+    out.hover = hover
+  end
+  return out
+end
+
 -- Classify a normalized partial by the keys it carries: nil/empty → nil
 -- (nothing to apply), only hl keys → "hl" (extmark-overlay fast path), any
 -- box key → "structural" (relayout + repaint).

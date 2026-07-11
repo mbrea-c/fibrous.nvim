@@ -174,4 +174,14 @@ function M.checkbox(_, props)
   }
 end
 
+-- The markdown widget: renders markdown source as rich, interactive blocks. A
+-- stateful builtin whose body lives in fibrous.markdown.component (next to the
+-- parser); this is a lazy forwarder so importing this module never pulls the
+-- parser/renderer onto the graph for apps that do not use it.
+---@param ctx table
+---@param props { text: string, live?: boolean, on_link?: fun(url: string), highlight?: fun(text: string, lang: string|nil): table, theme?: string|false }
+function M.markdown(ctx, props)
+  return require("fibrous.markdown.component")(ctx, props)
+end
+
 return M

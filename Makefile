@@ -28,6 +28,13 @@ bench:
 bench-transcript:
 	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/transcript.lua
 
+# Markdown workload (parse / render / mount a large markdown document):
+#   make bench-markdown            # default N=200 sections
+#   make bench-markdown BENCH_N=800
+.PHONY: bench-markdown
+bench-markdown:
+	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/markdown.lua
+
 # Terminal-draw throughput — bytes nvim's TUI pushes at a real pty per frame
 # (the tmux+ssh cost, highlight repaints included), "one layer down" from the
 # buffer-write cells/op figure. Spawns child nvim TUIs, so it runs plain (not
