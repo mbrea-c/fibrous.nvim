@@ -72,6 +72,13 @@ local SUB = {
 -- stack vertically to form the tall glyph (a summation top/bottom, an integral
 -- top/extension/bottom); operators without stacking glyphs use the single char.
 local BIGOPS = { sum = true, prod = true, int = true, oint = true, bigcup = true, bigcap = true }
+-- Relation glyphs bound a big operator's operand: `\sum f = g` sizes the sigma
+-- to f, not to the whole line, so a tall right-hand side does not inflate it.
+local RELATIONS = {
+  ["="] = true, ["<"] = true, [">"] = true, ["≤"] = true, ["≥"] = true, ["≠"] = true,
+  ["≈"] = true, ["≡"] = true, ["∼"] = true, ["≃"] = true, ["≅"] = true, ["∝"] = true,
+  ["→"] = true, ["⇒"] = true, ["↦"] = true, ["∈"] = true,
+}
 local BIGOP_PIECES = {
   sum = { "⎲", "⎳" },
   int = { "⌠", "⎮", "⌡" },
@@ -313,8 +320,9 @@ local function sqrt_box(body)
   -- box glyphs so it stays on the grid.
   local h = body.h
   local g = h + 1 -- gutter width (the diagonal rises across these columns)
-  -- bar extends one column left so it meets the top of the "╱" diagonal
-  local lines = { spaces(g - 1) .. ("_"):rep(w + 1) }
+  -- the vinculum sits over the CONTENT (its left end already meets the "╱"
+  -- apex at the cell corner); extending it further left would cover the diagonal
+  local lines = { spaces(g) .. ("_"):rep(w) }
   for i = 1, h do
     local gut = {}
     for c = 1, g do
@@ -346,6 +354,77 @@ local function scripts_text(node)
   return out
 end
 
+-- A scalable box-drawing summation of exact height `h`. Σ's point is on the
+-- RIGHT with its bars opening right: the upper "╲" descends down-right to the
+-- vertex, the lower "╱" returns down-left, and the ▔/▁ bars sit to the right of
+-- the arms. Bars use the top/bottom EDGE eighth-blocks so they meet the
+-- diagonals at cell CORNERS (a mid-height "─" would leave a gap). An EVEN height
+-- puts the vertex on the corner where the two diagonals meet; an ODD height puts
+-- it on its own row as a chevron "❯".
+local function box_sigma(h)
+  local arm = math.floor(h / 2)
+  local odd = (h % 2) == 1
+  local vcol = odd and (arm + 1) or arm -- rightmost column (the vertex)
+  local barw = math.max(arm, 1)
+  local w = vcol + barw
+  local function row()
+    local r = {}
+    for c = 1, w do
+      r[c] = " "
+    end
+    return r
+  end
+  local lines = {}
+  for i = 1, arm do -- upper arm ╲, stepping right toward the vertex
+    local r = row()
+    r[i] = "╲"
+    if i == 1 then
+      for c = 2, 1 + barw do
+        r[c] = "▔"
+      end
+    end
+    lines[#lines + 1] = table.concat(r)
+  end
+  if odd then -- the vertex on its own row
+    local r = row()
+    r[vcol] = "❯"
+    lines[#lines + 1] = table.concat(r)
+  end
+  for i = 1, arm do -- lower arm ╱, stepping left away from the vertex
+    local r = row()
+    r[arm - i + 1] = "╱"
+    if i == arm then
+      for c = 2, 1 + barw do
+        r[c] = "▁"
+      end
+    end
+    lines[#lines + 1] = table.concat(r)
+  end
+  return lines
+end
+
+-- The operator glyph lines, sized to the summand height `oph`. Sum: 1 line uses
+-- the plain ∑, 2 lines the two-halves ⎲⎳, 3+ the box-drawing sigma. Integral
+-- grows via the ⎮ extension; other operators stay single-glyph.
+local function op_pieces(node, oph)
+  if node.op == "sum" then
+    if oph <= 1 then
+      return { "∑" }
+    elseif oph == 2 then
+      return { "⎲", "⎳" }
+    end
+    return box_sigma(oph) -- exact height; even = corner vertex, odd = chevron
+  elseif node.op == "int" or node.op == "oint" then
+    local p = { "⌠" }
+    for _ = 1, math.max(oph - 2, 1) do
+      p[#p + 1] = "⎮"
+    end
+    p[#p + 1] = "⌡"
+    return p
+  end
+  return { node.text }
+end
+
 -- A big operator's limit: rendered SMALL (unicode super/subscript, mimicking
 -- scriptstyle) when every char has a small form, else full-size stacked.
 local function limit_box(nodes, map)
@@ -357,9 +436,10 @@ local function limit_box(nodes, map)
   return render_stack(nodes)
 end
 
--- A big operator (∑, ∫, …) with its limits stacked above and below (display).
-local function bigop_box(node)
-  local pieces = BIGOP_PIECES[node.op] or { node.text }
+-- A big operator (∑, ∫, …), its glyph sized to the summand height `oph`, with
+-- its limits stacked above and below (display).
+local function bigop_box(node, oph)
+  local pieces = op_pieces(node, oph)
   local sup = node.sup and limit_box(node.sup, SUP) or nil
   local sub = node.sub and limit_box(node.sub, SUB) or nil
   local w = 0
@@ -397,7 +477,7 @@ local function box_of(node)
     return text_box(render_single({ node }))
   end
   if node.kind == "bigop" then
-    return bigop_box(node) -- limits handled internally (stacked)
+    return bigop_box(node, 1) -- fallback size; render_stack sizes to the summand
   end
   local b
   if node.kind == "frac" then
@@ -420,9 +500,26 @@ render_stack = function(nodes)
   if #nodes == 0 then
     return text_box("")
   end
+  -- render everything except big operators first; a big operator's glyph is
+  -- sized to its summand, which is the content to its right (look-ahead).
   local boxes = {}
-  for _, node in ipairs(nodes) do
-    boxes[#boxes + 1] = box_of(node)
+  for idx, node in ipairs(nodes) do
+    boxes[idx] = (node.kind ~= "bigop") and box_of(node) or false
+  end
+  for idx, node in ipairs(nodes) do
+    if node.kind == "bigop" then
+      local oph = 1
+      for j = idx + 1, #nodes do
+        local nj = nodes[j]
+        if nj.kind == "sym" and RELATIONS[nj.text] then
+          break -- the operand ends at a relation (= , ≤, …)
+        end
+        if boxes[j] then
+          oph = math.max(oph, boxes[j].h)
+        end
+      end
+      boxes[idx] = bigop_box(node, oph)
+    end
   end
   return hcat(boxes)
 end

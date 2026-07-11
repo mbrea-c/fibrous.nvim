@@ -74,10 +74,10 @@ describe("fibrous.doc.math stacked (display)", function()
     assert.truthy(joined:find("╲", 1, true), "radical check vertex")
   end)
 
-  it("renders a big operator with limits stacked above and below", function()
+  it("stacks a big operator's SMALL limits above and below", function()
     local lines = m.stack("\\sum_{k=1}^{n} k")
     local joined = table.concat(lines, "\n")
-    assert.truthy(joined:find("⎲", 1, true), "big sigma glyph")
+    assert.truthy(joined:find("∑", 1, true), "1-line summand uses the plain ∑")
     -- limits render SMALL (unicode super/subscript), upper above lower
     local up, lo
     for i, l in ipairs(lines) do
@@ -89,6 +89,15 @@ describe("fibrous.doc.math stacked (display)", function()
       end
     end
     assert.is_true(up ~= nil and lo ~= nil and up < lo, "small upper limit above small lower limit")
+  end)
+
+  it("sizes the operator glyph to the summand height", function()
+    -- 2-line summand: the two-halves sigma
+    assert.truthy(table.concat(m.stack("\\sum_{k=1}^{n} \\sqrt{x}"), "\n"):find("⎲", 1, true))
+    -- 3+-line summand (a fraction): the scalable box-drawing sigma
+    local box = table.concat(m.stack("\\sum_{k=1}^{n} \\frac{1}{k^2}"), "\n")
+    assert.truthy(box:find("╱", 1, true) and box:find("╲", 1, true), "box-drawing sigma for a tall summand")
+    assert.truthy(box:find("▔", 1, true), "edge-block bar (no diagonal gap)")
   end)
 
   it("treats LaTeX spacing commands as spaces (not literals)", function()
