@@ -36,6 +36,35 @@ describe("fibrous.doc.math single-line", function()
   it("degrades unknown commands to their name", function()
     assert.equal("foo", m.single("\\foo"))
   end)
+
+  it("renders \\quad and \\qquad as wide spaces", function()
+    -- 4 and 8 spaces from the command, plus the literal space that terminates it
+    assert.equal("a" .. string.rep(" ", 4) .. " b", m.single("a\\quad b"))
+    assert.equal("a" .. string.rep(" ", 8) .. " b", m.single("a\\qquad b"))
+  end)
+
+  it("renders \\text{...} as upright literal text, keeping spaces", function()
+    assert.equal("if x", m.single("\\text{if }x"))
+  end)
+
+  it("maps \\mathbf and \\mathit through the math alphanumeric blocks", function()
+    assert.equal("𝐱", m.single("\\mathbf{x}"))
+    assert.equal("𝐀𝐁", m.single("\\mathbf{AB}"))
+    assert.equal("𝟎", m.single("\\mathbf{0}"))
+    assert.equal("𝑥", m.single("\\mathit{x}"))
+    assert.equal("ℎ", m.single("\\mathit{h}")) -- the italic-h hole uses U+210E
+  end)
+
+  it("places accents as combining marks inline", function()
+    assert.equal("x\204\130", m.single("\\hat{x}")) -- x + U+0302 combining circumflex
+    assert.equal("x\204\135", m.single("\\dot{x}")) -- x + U+0307 combining dot above
+  end)
+
+  it("wraps content in \\left \\right fences inline", function()
+    assert.equal("(a+b)", m.single("\\left(a+b\\right)"))
+    assert.equal("|x|", m.single("\\left|x\\right|"))
+    assert.equal("[y]", m.single("\\left[y\\right]"))
+  end)
 end)
 
 describe("fibrous.doc.math stacked (display)", function()
@@ -102,5 +131,23 @@ describe("fibrous.doc.math stacked (display)", function()
 
   it("treats LaTeX spacing commands as spaces (not literals)", function()
     assert.equal("f dx", m.single("f\\,dx"))
+  end)
+
+  it("applies \\mathbf to atoms inside a display fraction", function()
+    assert.same({ "𝐚", "─", "b" }, m.stack("\\frac{\\mathbf{a}}{b}"))
+  end)
+
+  it("stacks an accent glyph over the base", function()
+    assert.same({ "^", "x" }, m.stack("\\hat{x}"))
+  end)
+
+  it("sizes \\left \\right fences to the body height", function()
+    local lines = m.stack("\\left(\\frac{a}{b}\\right)")
+    assert.equal(3, #lines)
+    assert.truthy(lines[1]:find("⎛", 1, true), "tall left paren top")
+    assert.truthy(lines[2]:find("⎜", 1, true), "left paren extension")
+    assert.truthy(lines[3]:find("⎝", 1, true), "left paren bottom")
+    assert.truthy(lines[1]:find("⎞", 1, true), "tall right paren top")
+    assert.truthy(lines[3]:find("⎠", 1, true), "right paren bottom")
   end)
 end)

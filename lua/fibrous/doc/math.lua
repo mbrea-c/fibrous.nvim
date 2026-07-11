@@ -6,8 +6,11 @@
 -- to the command name or the literal source rather than erroring.
 --
 -- Scope (documented subset, expandable): symbols (Greek, operators, relations,
--- arrows, big operators), `^`/`_` scripts, `\frac`, `\sqrt`, and `{...}` groups.
--- Matrices, \left\right sizing and environments fall through as plain text.
+-- arrows, big operators), `^`/`_` scripts, `\frac`, `\sqrt`, `{...}` groups,
+-- fonts (`\mathbf`, `\mathit`, `\boldsymbol`, `\mathrm`, `\text`), accents
+-- (`\hat`, `\dot`, `\bar`, `\vec`, `\tilde`), spacing (`\quad`, `\qquad`), and
+-- `\left…\right` fences sized to their content. Matrices and environments fall
+-- through as plain text; variables are NOT auto-italicised (opt in via \mathit).
 
 local M = {}
 
@@ -64,6 +67,107 @@ local SUB = {
   a = "ₐ", e = "ₑ", h = "ₕ", i = "ᵢ", j = "ⱼ", k = "ₖ", l = "ₗ", m = "ₘ", n = "ₙ",
   o = "ₒ", p = "ₚ", r = "ᵣ", s = "ₛ", t = "ₜ", u = "ᵤ", v = "ᵥ", x = "ₓ",
 }
+
+-- Encode a Unicode codepoint as UTF-8 (LuaJIT ships no utf8.char). Used to build
+-- the math alphanumeric style blocks (bold, italic), whose glyphs live in plane 1.
+local function utf8c(cp)
+  if cp < 0x80 then
+    return string.char(cp)
+  elseif cp < 0x800 then
+    return string.char(0xC0 + math.floor(cp / 0x40), 0x80 + cp % 0x40)
+  elseif cp < 0x10000 then
+    return string.char(0xE0 + math.floor(cp / 0x1000), 0x80 + math.floor(cp / 0x40) % 0x40, 0x80 + cp % 0x40)
+  end
+  return string.char(
+    0xF0 + math.floor(cp / 0x40000),
+    0x80 + math.floor(cp / 0x1000) % 0x40,
+    0x80 + math.floor(cp / 0x40) % 0x40,
+    0x80 + cp % 0x40
+  )
+end
+
+-- Build an ASCII-char -> styled-glyph map from contiguous codepoint ranges
+-- `{ {ascii_start, ascii_end, cp_start}, ... }`, with optional per-char overrides
+-- (for the reserved holes the math blocks fill from the Letterlike Symbols block).
+local function alphamap(ranges, overrides)
+  local m = {}
+  for _, r in ipairs(ranges) do
+    local a0, a1 = r[1]:byte(), r[2]:byte()
+    for b = a0, a1 do
+      m[string.char(b)] = utf8c(r[3] + (b - a0))
+    end
+  end
+  for k, v in pairs(overrides or {}) do
+    m[k] = v
+  end
+  return m
+end
+
+-- Math alphanumeric symbol blocks: A-Z, a-z, (bold also 0-9). Punctuation has no
+-- styled form, so it falls through unchanged (restyle keeps unmapped chars).
+local BOLD = alphamap({ { "A", "Z", 0x1D400 }, { "a", "z", 0x1D41A }, { "0", "9", 0x1D7CE } })
+-- Italic omits digits (upright by convention) and has a reserved slot for h,
+-- which Unicode fills with U+210E (the Planck constant) in Letterlike Symbols.
+local ITALIC = alphamap({ { "A", "Z", 0x1D434 }, { "a", "z", 0x1D44E } }, { h = utf8c(0x210E) })
+-- Style key -> char map; "rm" (upright roman, e.g. \text) is identity (no map).
+local FONTS = { bf = BOLD, it = ITALIC }
+
+-- Argument-taking font/wrapper commands: \cmd{...} restyles its argument's glyphs.
+local WRAPCMD = {
+  text = "rm", mathrm = "rm", mathbf = "bf", boldsymbol = "bf", mathit = "it",
+}
+
+-- Named spacing commands (alphabetic, so they never reach the escaped-punct
+-- SPACING table): a run of spaces standing in for the em-based LaTeX widths.
+local NAMED_SPACING = { quad = string.rep(" ", 4), qquad = string.rep(" ", 8) }
+
+-- Accent commands: a combining mark placed over the argument. In single-line mode
+-- the mark is a Unicode combining char after the base; display mode stacks a row.
+local ACCENTS = {
+  hat = { combining = utf8c(0x0302), glyph = "^" },
+  dot = { combining = utf8c(0x0307), glyph = utf8c(0x02D9) },
+  bar = { combining = utf8c(0x0304), glyph = utf8c(0x203E) },
+  vec = { combining = utf8c(0x20D7), glyph = utf8c(0x2192) },
+  tilde = { combining = utf8c(0x0303), glyph = "~" },
+}
+
+-- \left<delim> ... \right<delim>: fences sized to their content in display mode
+-- (plain glyphs inline). The token read after \left / \right (a bare char, or an
+-- escaped one like \{ \|, or a named one like \langle) maps to its base glyph; a
+-- "." delimiter is null (no fence drawn).
+local DELIM = {
+  ["("] = "(", [")"] = ")", ["["] = "[", ["]"] = "]", ["|"] = "|",
+  ["<"] = "⟨", [">"] = "⟩", ["."] = "",
+  ["\\{"] = "{", ["\\}"] = "}", ["\\|"] = "‖",
+  ["\\langle"] = "⟨", ["\\rangle"] = "⟩", ["\\lvert"] = "|", ["\\rvert"] = "|",
+  ["\\lVert"] = "‖", ["\\rVert"] = "‖", ["\\lbrace"] = "{", ["\\rbrace"] = "}",
+}
+
+-- Multi-row fence pieces, base glyph -> { top, extension, bottom, mid = ? }. A
+-- glyph absent here (|, ‖, ⟨, ⟩) is simply repeated on every row; the middle
+-- `mid` piece (braces) lands on the centre row.
+local FENCE = {
+  ["("] = { "⎛", "⎜", "⎝" }, [")"] = { "⎞", "⎟", "⎠" },
+  ["["] = { "⎡", "⎢", "⎣" }, ["]"] = { "⎤", "⎥", "⎦" },
+  ["{"] = { "⎧", "⎪", "⎩", mid = "⎨" }, ["}"] = { "⎫", "⎪", "⎭", mid = "⎬" },
+}
+
+-- Read the delimiter token following \left / \right: a bare char, an escaped
+-- char (\{ \} \|), or a named command (\langle).  Returns (token, next_i).
+local function read_delim(s, i)
+  while s:sub(i, i) == " " do
+    i = i + 1
+  end
+  local c = s:sub(i, i)
+  if c == "\\" then
+    local cmd, ni = s:match("^\\(%a+)()", i)
+    if cmd then
+      return "\\" .. cmd, ni
+    end
+    return "\\" .. s:sub(i + 1, i + 1), i + 2
+  end
+  return c, i + 1
+end
 
 -- ── parser ───────────────────────────────────────────────────────────────────
 
@@ -132,7 +236,20 @@ parse_nodes = function(s, i, stop)
       i = ni + 1
     elseif c == "\\" then
       local cmd, ni = s:match("^\\(%a+)()", i)
-      if cmd == "frac" then
+      if cmd == "right" then
+        break -- terminates the enclosing \left; that branch consumes the delim
+      elseif cmd == "left" then
+        local ld, i2 = read_delim(s, ni)
+        local body, i3 = parse_nodes(s, i2, stop)
+        -- consume the matching \right<delim> (leniently, if present)
+        local rcmd, rni = s:match("^\\(%a+)()", i3)
+        local rd = ""
+        if rcmd == "right" then
+          rd, i3 = read_delim(s, rni)
+        end
+        nodes[#nodes + 1] = { kind = "delim", left = ld, right = rd, body = body }
+        i = i3
+      elseif cmd == "frac" then
         local num, i2 = parse_arg(s, ni)
         local den, i3 = parse_arg(s, i2)
         nodes[#nodes + 1] = { kind = "frac", num = num, den = den }
@@ -144,6 +261,17 @@ parse_nodes = function(s, i, stop)
       elseif cmd and BIGOPS[cmd] then
         nodes[#nodes + 1] = { kind = "bigop", text = SYMBOLS[cmd], op = cmd }
         i = ni
+      elseif cmd and NAMED_SPACING[cmd] then
+        nodes[#nodes + 1] = { kind = "sym", text = NAMED_SPACING[cmd] }
+        i = ni
+      elseif cmd and WRAPCMD[cmd] then
+        local body, i2 = parse_arg(s, ni)
+        nodes[#nodes + 1] = { kind = "styled", font = WRAPCMD[cmd], body = body }
+        i = i2
+      elseif cmd and ACCENTS[cmd] then
+        local body, i2 = parse_arg(s, ni)
+        nodes[#nodes + 1] = { kind = "accent", accent = ACCENTS[cmd], body = body }
+        i = i2
       elseif cmd then
         nodes[#nodes + 1] = { kind = "sym", text = SYMBOLS[cmd] or cmd }
         i = ni
@@ -187,6 +315,19 @@ local function map_all(s, tbl)
   return table.concat(out)
 end
 
+-- Map every char of `s` through `map` (a font block), keeping unmapped chars
+-- (punctuation, box-drawing) as-is. `nil` map is identity (upright roman).
+local function restyle(s, map)
+  if not map then
+    return s
+  end
+  local out = {}
+  for ch in chars(s) do
+    out[#out + 1] = map[ch] or ch
+  end
+  return table.concat(out)
+end
+
 local render_single
 
 -- Parenthesize `str` when `nodes` is a compound (more than one atom).
@@ -206,6 +347,13 @@ render_single = function(nodes)
       base = paren(render_single(node.num), node.num) .. "/" .. paren(render_single(node.den), node.den)
     elseif node.kind == "sqrt" then
       base = "√" .. paren(render_single(node.body), node.body)
+    elseif node.kind == "styled" then
+      base = restyle(render_single(node.body), FONTS[node.font])
+    elseif node.kind == "accent" then
+      -- a combining mark trails each base char; a single base is the common case
+      base = render_single(node.body) .. node.accent.combining
+    elseif node.kind == "delim" then
+      base = (DELIM[node.left] or node.left) .. render_single(node.body) .. (DELIM[node.right] or node.right)
     else
       base = ""
     end
@@ -336,6 +484,33 @@ local function sqrt_box(body)
     lines[i + 1] = table.concat(gut) .. pad_to(body.lines[i], w)
   end
   return { lines = lines, w = g + w, h = h + 1, axis = body.axis + 1 }
+end
+
+-- A fence column of height `h` for a base glyph. Height 1 is the plain glyph;
+-- a null delimiter ("") draws no column (nil). Known fences use their piece set
+-- (top/extension/bottom, plus a centre `mid` for braces); others repeat.
+local function fence_lines(glyph, h)
+  if glyph == "" then
+    return nil
+  end
+  if h <= 1 then
+    return { glyph }
+  end
+  local f = FENCE[glyph]
+  if not f then
+    local l = {}
+    for i = 1, h do
+      l[i] = glyph
+    end
+    return l
+  end
+  local midrow = f.mid and math.floor((h + 1) / 2) or nil
+  local l = { f[1] }
+  for i = 2, h - 1 do
+    l[i] = (i == midrow) and f.mid or f[2]
+  end
+  l[h] = f[3]
+  return l
 end
 
 local render_stack
@@ -486,6 +661,39 @@ local function box_of(node)
     b = sqrt_box(render_stack(node.body))
   elseif node.kind == "group" then
     b = render_stack(node.body)
+  elseif node.kind == "styled" then
+    b = render_stack(node.body)
+    local map = FONTS[node.font]
+    if map then
+      local nl = {}
+      for i, l in ipairs(b.lines) do
+        nl[i] = restyle(l, map)
+      end
+      b = { lines = nl, w = b.w, h = b.h, axis = b.axis }
+    end
+  elseif node.kind == "accent" then
+    -- stack the accent glyph on a new row above the body, centred on its width
+    b = render_stack(node.body)
+    local top = center(node.accent.glyph, b.w)
+    local lines = { top }
+    for _, l in ipairs(b.lines) do
+      lines[#lines + 1] = l
+    end
+    b = { lines = lines, w = b.w, h = b.h + 1, axis = b.axis + 1 }
+  elseif node.kind == "delim" then
+    -- fences sized to the content height, drawn to the left/right of its box
+    local inner = render_stack(node.body)
+    local parts = {}
+    local lg = fence_lines(DELIM[node.left] or node.left, inner.h)
+    if lg then
+      parts[#parts + 1] = { lines = lg, w = dw(lg[1]), h = inner.h, axis = inner.axis }
+    end
+    parts[#parts + 1] = inner
+    local rg = fence_lines(DELIM[node.right] or node.right, inner.h)
+    if rg then
+      parts[#parts + 1] = { lines = rg, w = dw(rg[1]), h = inner.h, axis = inner.axis }
+    end
+    b = hcat(parts)
   else
     b = text_box("")
   end
