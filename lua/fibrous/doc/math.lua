@@ -529,6 +529,41 @@ local function scripts_text(node)
   return out
 end
 
+-- One script rendered small (unicode super/subscript) where every char maps,
+-- else the plain string (its raised/lowered position still reads as a script).
+local function script_str(nodes, map)
+  local s = render_single(nodes)
+  return map_all(s, map) or s
+end
+
+-- Attach a node's scripts to its rendered base box. An atom-height base keeps the
+-- compact inline form on its single row (x²ᵢ). A TALL base (fraction, fence,
+-- root) instead gets a right-hand column with the superscript on its TOP row and
+-- the subscript on its BOTTOM row, so neither lands on the vertical centre.
+local function attach_scripts(b, node)
+  if not (node.sup or node.sub) then
+    return b
+  end
+  if b.h == 1 then
+    local sc = scripts_text(node)
+    return sc ~= "" and hcat({ b, text_box(sc) }) or b
+  end
+  local sup = node.sup and script_str(node.sup, SUP) or nil
+  local sub = node.sub and script_str(node.sub, SUB) or nil
+  local cw = math.max(sup and dw(sup) or 0, sub and dw(sub) or 0)
+  local lines = {}
+  for i = 1, b.h do
+    local seg = ""
+    if i == 1 and sup then
+      seg = sup
+    elseif i == b.h and sub then
+      seg = sub
+    end
+    lines[i] = pad_to(seg, cw)
+  end
+  return hcat({ b, { lines = lines, w = cw, h = b.h, axis = b.axis } })
+end
+
 -- A scalable box-drawing summation of exact height `h`. Σ's point is on the
 -- RIGHT with its bars opening right: the upper "╲" descends down-right to the
 -- vertex, the lower "╱" returns down-left, and the ▔/▁ bars sit to the right of
@@ -697,11 +732,7 @@ local function box_of(node)
   else
     b = text_box("")
   end
-  local sc = scripts_text(node)
-  if sc ~= "" then
-    b = hcat({ b, text_box(sc) })
-  end
-  return b
+  return attach_scripts(b, node)
 end
 
 render_stack = function(nodes)
