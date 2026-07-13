@@ -1253,6 +1253,23 @@ function M.attach(host, root_winid, opts)
 				floats[inst] = nil
 			end
 		end
+		-- Restore the canvas under every MOVED entry's old box BEFORE any
+		-- entry paints its new mirror — for the same reason destroys run
+		-- first. Interleaved per-entry (restore-then-paint inside each
+		-- reposition), a downward shift clobbers: entry N's old box overlaps
+		-- entry N-1's NEW box, so N's restore lands on the mirror N-1 painted
+		-- moments earlier in this same sync. Clearing `mirrored` here also
+		-- tells reposition's own restore there is nothing left to sweep.
+		for _, node in ipairs(target.subwins or {}) do
+			local inst = node.fiber and node.fiber.instance
+			local entry = inst and floats[inst]
+			local mb = entry and entry.mirrored
+			local c = node.content
+			if mb and c and (mb.x ~= c.x or mb.y ~= c.y or mb.w ~= c.w or mb.h ~= c.h) then
+				restore_box(mb)
+				entry.mirrored = nil
+			end
+		end
 		for _, node in ipairs(target.subwins or {}) do
 			local inst = node.fiber and node.fiber.instance
 			if inst then
