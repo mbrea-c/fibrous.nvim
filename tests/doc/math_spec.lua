@@ -82,6 +82,34 @@ describe("fibrous.doc.math single-line", function()
     assert.equal("|x|", m.single("\\left|x\\right|"))
     assert.equal("[y]", m.single("\\left[y\\right]"))
   end)
+
+  it("does not truncate multi-letter command names to their first letter", function()
+    -- regression: a 2-char sym text (e.g. an unknown \\ab) was mis-proxied as its
+    -- first letter only, because the variable-proxy guard tested byte length
+    assert.equal("ab", m.single("\\ab"))
+    -- and such a name is upright, not italicised as a one-letter variable
+    assert.same({ { text = "ab", var = false } }, m.single_spans("\\ab"))
+    -- a genuine single-letter variable still proxies (italic run)
+    assert.same({ { text = "x", var = true } }, m.single_spans("x"))
+  end)
+
+  it("renders an nth root with a small index before the radical", function()
+    assert.equal("³√x", m.single("\\sqrt[3]{x}"))
+    assert.equal("ⁿ√(a+b)", m.single("\\sqrt[n]{a+b}"))
+    assert.equal("√x", m.single("\\sqrt{x}")) -- no index unchanged
+  end)
+
+  it("linearises \\binom as the C(n, k) coefficient notation inline", function()
+    assert.equal("C(n, k)", m.single("\\binom{n}{k}"))
+    assert.equal("C(a+b, 2)", m.single("\\binom{a+b}{2}"))
+  end)
+
+  it("renders consecutive apostrophes as prime marks", function()
+    assert.equal("x′", m.single("x'"))
+    assert.equal("x″", m.single("x''"))
+    assert.equal("x‴", m.single("x'''"))
+    assert.equal("f′(x)", m.single("f'(x)"))
+  end)
 end)
 
 describe("fibrous.doc.math stacked (display)", function()
@@ -185,5 +213,256 @@ describe("fibrous.doc.math stacked (display)", function()
     assert.truthy(lines[3]:find("⎝", 1, true), "left paren bottom")
     assert.truthy(lines[1]:find("⎞", 1, true), "tall right paren top")
     assert.truthy(lines[3]:find("⎠", 1, true), "right paren bottom")
+  end)
+
+  it("draws an nth-root index above the radical gutter", function()
+    local lines = m.stack("\\sqrt[3]{x}")
+    assert.truthy(lines[1]:find("³", 1, true), "small index on the top row")
+    assert.truthy(lines[#lines]:find("√x", 1, true), "radical and body on the base row")
+  end)
+
+  it("stacks \\binom as num over den inside sized parens (no bar)", function()
+    assert.same({ "⎛n⎞", "⎝k⎠" }, m.stack("\\binom{n}{k}"))
+  end)
+end)
+
+describe("fibrous.doc.math expanded symbols and fonts", function()
+  it("adds common logic, set and lattice relations", function()
+    assert.equal("a ∧ b", m.single("a \\wedge b"))
+    assert.equal("a ∨ b", m.single("a \\vee b"))
+    assert.equal("a ≺ b", m.single("a \\prec b"))
+    assert.equal("a ≻ b", m.single("a \\succ b"))
+    assert.equal("a ⊑ b", m.single("a \\sqsubseteq b"))
+    assert.equal("A ⊊ B", m.single("A \\subsetneq B"))
+    assert.equal("⊤", m.single("\\top"))
+    assert.equal("⊥", m.single("\\bot"))
+    assert.equal("Γ ⊢ x", m.single("\\Gamma \\vdash x"))
+    assert.equal("a ⊨ b", m.single("a \\models b"))
+  end)
+
+  it("adds Letterlike symbols and misc glyphs", function()
+    assert.equal("ℵ", m.single("\\aleph"))
+    assert.equal("ℜ", m.single("\\Re"))
+    assert.equal("ℑ", m.single("\\Im"))
+    assert.equal("∴", m.single("\\therefore"))
+    assert.equal("∵", m.single("\\because"))
+    assert.equal("†", m.single("\\dagger"))
+    assert.equal("a ⊙ b", m.single("a \\odot b"))
+  end)
+
+  it("adds vertical, long and hooked arrows", function()
+    assert.equal("a ↑ b", m.single("a \\uparrow b"))
+    assert.equal("a ↓ b", m.single("a \\downarrow b"))
+    assert.equal("x ⟶ y", m.single("x \\longrightarrow y"))
+    assert.equal("p ⟹ q", m.single("p \\implies q"))
+    assert.equal("a ↪ b", m.single("a \\hookrightarrow b"))
+    assert.equal("A ← B", m.single("A \\gets B"))
+  end)
+
+  it("maps \\mathfrak (with Letterlike holes), \\mathsf and \\mathtt", function()
+    assert.equal("𝔤", m.single("\\mathfrak{g}"))
+    assert.equal("ℜ", m.single("\\mathfrak{R}")) -- Fraktur R hole = U+211C
+    assert.equal("𝔞𝔟", m.single("\\mathfrak{ab}"))
+    assert.equal("𝖷", m.single("\\mathsf{X}"))
+    assert.equal("𝚔", m.single("\\mathtt{k}"))
+  end)
+
+  it("treats \\dfrac, \\tfrac and \\cfrac as \\frac", function()
+    assert.equal("1/2", m.single("\\tfrac{1}{2}"))
+    assert.same({ "a", "─", "b" }, m.stack("\\dfrac{a}{b}"))
+  end)
+
+  it("renders \\operatorname{...} as an upright multi-letter operator", function()
+    assert.equal("argmax", m.single("\\operatorname{argmax}"))
+    assert.same({ { text = "argmax", var = false } }, m.single_spans("\\operatorname{argmax}"))
+  end)
+
+  it("adds big operators that take limits", function()
+    assert.equal("⨁", m.single("\\bigoplus"))
+    assert.equal("⨂", m.single("\\bigotimes"))
+    assert.equal("∐", m.single("\\coprod"))
+    -- and they stack limits above/below in display, like \\sum
+    local lines = m.stack("\\bigoplus_{i} a_i")
+    local joined = table.concat(lines, "\n")
+    assert.truthy(joined:find("⨁", 1, true), "operator glyph present")
+    assert.is_true(#lines >= 2, "a limit stacked onto its own row")
+  end)
+end)
+
+describe("fibrous.doc.math named operators, wide accents, braces", function()
+  it("keeps \\lim limits inline in single-line mode", function()
+    assert.equal("lim_(x → 0) f", m.single("\\lim_{x \\to 0} f"))
+  end)
+
+  it("stacks \\lim (and \\max, \\sup) limits below in display", function()
+    local lines = m.stack("\\lim_{x \\to 0} f")
+    assert.is_true(#lines >= 2, "operator and its limit on separate rows")
+    assert.truthy(lines[1]:find("lim", 1, true), "operator name on top")
+    assert.truthy(lines[2]:find("x → 0", 1, true), "limit stacked below")
+    assert.truthy(m.stack("\\max_{k} a_k")[2]:find("ₖ", 1, true), "\\max also stacks a small limit below")
+  end)
+
+  it("renders \\bmod and \\pmod", function()
+    assert.equal("a mod b", m.single("a \\bmod b"))
+    assert.equal("a (mod b)", m.single("a \\pmod{b}"))
+  end)
+
+  it("renders wide accents: a spanning arrow in display, combining inline", function()
+    -- the stem is an em dash (U+2014), not box-drawing "─" (U+2500): in Iosevka
+    -- the em dash meets the arrowhead's baseline, the box rule sits too high
+    assert.same({ "—→", "AB" }, m.stack("\\overrightarrow{AB}"))
+    assert.same({ "←—", "AB" }, m.stack("\\overleftarrow{AB}"))
+    -- inline: the combining mark trails EVERY char (U+20D7 = "\226\131\151")
+    assert.equal("A\226\131\151B\226\131\151", m.single("\\overrightarrow{AB}"))
+    assert.equal("x\204\130y\204\130", m.single("\\widehat{xy}")) -- U+0302 per char
+  end)
+
+  it("draws \\overbrace and \\underbrace with an optional label", function()
+    local over = m.stack("\\overbrace{a+b}^{n}")
+    assert.equal("a+b", over[#over], "content on the bottom row")
+    assert.truthy(over[1]:find("n", 1, true), "label above the brace")
+    assert.truthy(table.concat(over, "\n"):find("⏞", 1, true), "top brace glyph")
+    local under = m.stack("\\underbrace{x}_{k}")
+    assert.equal("x", under[1], "content on the top row")
+    assert.truthy(table.concat(under, "\n"):find("⏟", 1, true), "bottom brace glyph")
+  end)
+
+  it("renders \\overset, \\underset and \\stackrel", function()
+    assert.equal("bᵃ", m.single("\\overset{a}{b}"))
+    assert.equal("bₐ", m.single("\\underset{a}{b}"))
+    assert.equal("bᵃ", m.single("\\stackrel{a}{b}"))
+    assert.same({ "a", "b" }, m.stack("\\overset{a}{b}"))
+    assert.same({ "b", "a" }, m.stack("\\underset{a}{b}"))
+  end)
+end)
+
+describe("fibrous.doc.math environments", function()
+  it("renders a pmatrix as a grid inside sized parens (display)", function()
+    local lines = m.stack("\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}")
+    assert.equal(2, #lines)
+    assert.truthy(lines[1]:find("⎛", 1, true), "tall left paren top")
+    assert.truthy(lines[1]:find("a", 1, true) and lines[1]:find("b", 1, true), "first row cells")
+    assert.truthy(lines[2]:find("c", 1, true) and lines[2]:find("d", 1, true), "second row cells")
+    assert.truthy(lines[2]:find("⎠", 1, true), "right paren bottom")
+  end)
+
+  it("flattens a matrix inline with , between cells and ; between rows", function()
+    assert.equal("(a, b; c, d)", m.single("\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}"))
+  end)
+
+  it("uses the right delimiters per environment", function()
+    assert.equal("[a, b]", m.single("\\begin{bmatrix} a & b \\end{bmatrix}"))
+    assert.equal("|a, b|", m.single("\\begin{vmatrix} a & b \\end{vmatrix}"))
+    assert.truthy(m.stack("\\begin{bmatrix} a \\\\ b \\end{bmatrix}")[1]:find("⎡", 1, true), "bracket top")
+  end)
+
+  it("grows determinant and norm bars as connecting box-drawing lines", function()
+    -- a tall bar must be the connecting │ (U+2502), not the gappy ASCII pipe, so
+    -- the determinant reads as one continuous rule down the side
+    local det = m.stack("\\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix}")
+    assert.truthy(det[1]:find("│", 1, true), "box-drawing bar on the top row")
+    assert.truthy(det[2]:find("│", 1, true), "and the bottom row")
+    assert.falsy(det[1]:find("|", 1, true), "no ASCII pipe in the tall form")
+    assert.truthy(table.concat(m.stack("\\left| \\frac{a}{b} \\right|"), "\n"):find("│", 1, true), "\\left|…\\right| too")
+    -- the norm uses the double box line ║
+    assert.truthy(m.stack("\\begin{Vmatrix} a \\\\ b \\end{Vmatrix}")[1]:find("║", 1, true), "double bar for a norm")
+    -- a single bar stays a plain pipe (matches the surrounding text)
+    assert.equal("|x|", m.single("\\left|x\\right|"))
+  end)
+
+  it("renders cases with a left brace and left-aligned rows", function()
+    local lines = m.stack("\\begin{cases} 1 & x > 0 \\\\ 0 & x \\le 0 \\end{cases}")
+    assert.equal(2, #lines)
+    assert.truthy(lines[1]:find("⎧", 1, true), "left brace top")
+    assert.truthy(lines[1]:find("1", 1, true) and lines[1]:find("x > 0", 1, true), "first case")
+    assert.truthy(lines[2]:find("0", 1, true) and lines[2]:find("x ≤ 0", 1, true), "second case")
+  end)
+
+  it("aligns an aligned environment at the & column", function()
+    local lines = m.stack("\\begin{aligned} x &= a + b \\\\ y &= c \\end{aligned}")
+    assert.equal(2, #lines)
+    local e1 = lines[1]:find("=", 1, true)
+    local e2 = lines[2]:find("=", 1, true)
+    assert.is_true(e1 ~= nil and e1 == e2, "the = signs line up across rows")
+  end)
+
+  it("handles a fraction cell (a tall matrix row)", function()
+    local lines = m.stack("\\begin{pmatrix} \\frac{a}{b} & c \\end{pmatrix}")
+    assert.equal(3, #lines) -- fraction is 3 rows tall, parens grow to match
+    assert.truthy(table.concat(lines, "\n"):find("─", 1, true), "fraction bar present")
+  end)
+end)
+
+describe("fibrous.doc.math nested and composite structures", function()
+  it("parenthesises a nested fraction so the linear form is unambiguous", function()
+    assert.equal("(a/b)/c", m.single("\\frac{\\frac{a}{b}}{c}"))
+    assert.equal("1/(a/b)", m.single("\\frac{1}{\\frac{a}{b}}"))
+    assert.equal("a/(b + c/d)", m.single("\\frac{a}{b + \\frac{c}{d}}"))
+    assert.equal("√(a/b)", m.single("\\sqrt{\\frac{a}{b}}"))
+    -- a root or sum operand needs no parens (already unambiguous)
+    assert.equal("√a/√b", m.single("\\frac{\\sqrt{a}}{\\sqrt{b}}"))
+  end)
+
+  it("stacks a fraction nested inside a fraction (numerator and denominator)", function()
+    assert.same({ "a", "─", "b", "─", "c" }, m.stack("\\frac{\\frac{a}{b}}{c}"))
+    assert.same({ "1", "─", "a", "─", "b" }, m.stack("\\frac{1}{\\frac{a}{b}}"))
+  end)
+
+  it("puts an integral inside a fraction numerator, growing the bar to fit", function()
+    local lines = m.stack("\\frac{\\int_0^1 f\\,dx}{2}")
+    assert.equal(7, #lines)
+    local joined = table.concat(lines, "\n")
+    assert.truthy(joined:find("⌠", 1, true), "tall integral sign in the numerator")
+    assert.truthy(lines[#lines]:find("2", 1, true), "denominator on the bottom row")
+    assert.equal("(∫¹₀ f dx)/2", m.single("\\frac{\\int_0^1 f\\,dx}{2}"))
+  end)
+
+  it("nests square roots, growing the radical", function()
+    assert.equal("√(1 + √(1 + x))", m.single("\\sqrt{1 + \\sqrt{1 + x}}"))
+    assert.truthy(table.concat(m.stack("\\sqrt{1 + \\sqrt{1 + x}}"), "\n"):find("╱", 1, true), "growing radical")
+  end)
+
+  it("sizes a big operator to a fractional summand", function()
+    local joined = table.concat(m.stack("\\sum_{i=1}^{n} \\frac{x_i}{2}"), "\n")
+    assert.truthy(joined:find("╱", 1, true) and joined:find("╲", 1, true), "box-drawing sigma for a 3-row summand")
+    assert.truthy(joined:find("─", 1, true), "the summand's own fraction bar")
+  end)
+
+  it("keeps a fraction exponent readable inline", function()
+    assert.equal("x^(a/b)", m.single("x^{\\frac{a}{b}}"))
+    assert.equal("e^(-x²/2)", m.single("e^{-\\frac{x^2}{2}}"))
+  end)
+
+  it("lays out a matrix of tall cells (fraction, root, sum, integral)", function()
+    local lines = m.stack("\\begin{pmatrix} \\frac{a}{b} & \\sqrt{c} \\\\ \\sum_{i} x_i & \\int f \\end{pmatrix}")
+    assert.equal(6, #lines)
+    assert.truthy(lines[1]:find("⎛", 1, true) and lines[#lines]:find("⎠", 1, true), "parens grow to the whole grid")
+    local joined = table.concat(lines, "\n")
+    assert.truthy(joined:find("─", 1, true), "fraction bar in a cell")
+    assert.truthy(joined:find("∑", 1, true), "sum in a cell")
+  end)
+
+  it("raises an exponent off a tall parenthesised group", function()
+    local lines = m.stack("\\left(1 + \\frac{1}{n}\\right)^n")
+    assert.equal(3, #lines)
+    assert.truthy(lines[1]:find("ⁿ", 1, true), "exponent on the top row")
+    assert.falsy(lines[2]:find("ⁿ", 1, true), "not on the centre row")
+  end)
+
+  it("aligns even-height operators on the lower of the two middle rows", function()
+    local lines = m.stack("(x + y)^n = \\sum_{k=0}^{n} \\binom{n}{k}")
+    local function rowof(g)
+      for i, l in ipairs(lines) do
+        if l:find(g, 1, true) then
+          return i
+        end
+      end
+    end
+    -- the 2-row sigma core and the 2-row binom round their centres the same way
+    -- (down to the lower middle row), so their bottoms share the = row and their
+    -- tops share the row above, rather than the two sitting a row apart
+    assert.equal(rowof("⎲"), rowof("⎛"), "sigma top and binom top share a row")
+    assert.equal(rowof("⎳"), rowof("⎝"), "sigma bottom and binom bottom share a row")
+    assert.equal(rowof("="), rowof("⎳"), "and the = sits on that lower middle row")
   end)
 end)

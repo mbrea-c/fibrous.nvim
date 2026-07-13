@@ -10,11 +10,19 @@
 -- so the doc renderer can italicise just those cells (see the proxy note below).
 --
 -- Scope (documented subset, expandable): symbols (Greek, operators, relations,
--- arrows, big operators), `^`/`_` scripts, `\frac`, `\sqrt`, `{...}` groups,
--- fonts (`\mathbf`, `\mathit`, `\boldsymbol`, `\mathrm`, `\text`), accents
--- (`\hat`, `\dot`, `\bar`, `\vec`, `\tilde`), spacing (`\quad`, `\qquad`), and
--- `\left…\right` fences sized to their content. Matrices and environments fall
--- through as plain text; variables are NOT auto-italicised (opt in via \mathit).
+-- arrows, big operators, logic/lattice/Letterlike), `^`/`_` scripts, primes,
+-- `\frac` (and `\dfrac`/`\tfrac`), `\binom`, `\sqrt` including the `\sqrt[n]{}`
+-- index, `{...}` groups, fonts (`\mathbf`, `\mathit`, `\boldsymbol`, `\mathrm`,
+-- `\mathbb`, `\mathcal`, `\mathfrak`, `\mathsf`, `\mathtt`, `\text`,
+-- `\operatorname`), accents (`\hat`, `\dot`, `\bar`, `\vec`, `\tilde`) and wide
+-- accents (`\widehat`, `\widetilde`, `\overrightarrow`, `\overleftarrow`),
+-- `\overline`, `\overbrace`/`\underbrace`, `\overset`/`\underset`/`\stackrel`,
+-- named operators with limits (`\lim`, `\max`, `\min`, `\sup`, `\det`, …),
+-- `\bmod`/`\pmod`, spacing (`\quad`, `\qquad`), `\left…\right` fences sized to
+-- their content, and environments (`matrix`/`pmatrix`/`bmatrix`/`Bmatrix`/
+-- `vmatrix`/`Vmatrix`, `cases`, `aligned`/`align`) laid out as 2D grids in
+-- display and flattened inline. Unknown commands degrade to their name;
+-- variables are NOT auto-italicised (opt in via \mathit).
 
 local M = {}
 
@@ -46,11 +54,44 @@ local SYMBOLS = {
   leftrightarrow = "↔", Leftrightarrow = "⇔", iff = "⇔", mapsto = "↦",
   -- big operators / calculus
   sum = "∑", prod = "∏", int = "∫", oint = "∮", bigcup = "⋃", bigcap = "⋂",
+  coprod = "∐", bigoplus = "⨁", bigotimes = "⨂", bigodot = "⨀", bigwedge = "⋀",
+  bigvee = "⋁", biguplus = "⨄", bigsqcup = "⨆", iint = "∬", iiint = "∭",
   partial = "∂", nabla = "∇", infty = "∞",
   -- dots and misc
   cdots = "⋯", ldots = "…", dots = "…", vdots = "⋮", ddots = "⋱",
   angle = "∠", perp = "⊥", parallel = "∥", mid = "∣", nmid = "∤", hbar = "ℏ", ell = "ℓ", prime = "′",
   langle = "⟨", rangle = "⟩", lceil = "⌈", rceil = "⌉", lfloor = "⌊", rfloor = "⌋",
+  -- logic and lattice
+  wedge = "∧", vee = "∨", lnot = "¬", top = "⊤", bot = "⊥",
+  vdash = "⊢", dashv = "⊣", models = "⊨", vDash = "⊨",
+  -- order and set relations
+  prec = "≺", succ = "≻", preceq = "⪯", succeq = "⪰",
+  sqsubseteq = "⊑", sqsupseteq = "⊒", sqsubset = "⊏", sqsupset = "⊐",
+  subsetneq = "⊊", supsetneq = "⊋", ni = "∋", owns = "∋",
+  asymp = "≍", doteq = "≐", gtrless = "≷", lessgtr = "≶",
+  -- Letterlike and misc symbols
+  aleph = "ℵ", beth = "ℶ", Re = "ℜ", Im = "ℑ", wp = "℘", Bbbk = "𝕜",
+  complement = "∁", therefore = "∴", because = "∵",
+  imath = "ı", jmath = "ȷ", Finv = "Ⅎ", Game = "⅁",
+  dagger = "†", ddagger = "‡", triangle = "△", square = "□", diamond = "⋄",
+  triangleleft = "◁", triangleright = "▷", flat = "♭", sharp = "♯", natural = "♮",
+  clubsuit = "♣", diamondsuit = "♢", heartsuit = "♡", spadesuit = "♠",
+  measuredangle = "∡", sphericalangle = "∢", degree = "°", backslash = "\\",
+  -- ring / boxed operators
+  odot = "⊙", ominus = "⊖", oslash = "⊘", boxplus = "⊞", boxtimes = "⊠",
+  boxminus = "⊟", boxdot = "⊡", sqcup = "⊔", sqcap = "⊓", uplus = "⊎",
+  amalg = "⨿", wr = "≀",
+  -- delimiters / bars
+  vert = "|", Vert = "‖", lbrace = "{", rbrace = "}", lbrack = "[", rbrack = "]",
+  -- vertical, long and hooked arrows
+  uparrow = "↑", downarrow = "↓", updownarrow = "↕", Uparrow = "⇑", Downarrow = "⇓",
+  Updownarrow = "⇕", nearrow = "↗", searrow = "↘", nwarrow = "↖", swarrow = "↙",
+  gets = "←", longrightarrow = "⟶", longleftarrow = "⟵", longleftrightarrow = "⟷",
+  Longrightarrow = "⟹", Longleftarrow = "⟸", Longleftrightarrow = "⟺",
+  implies = "⟹", impliedby = "⟸", hookrightarrow = "↪", hookleftarrow = "↩",
+  rightharpoonup = "⇀", leftharpoonup = "↼", rightharpoondown = "⇁", leftharpoondown = "↽",
+  -- colon-like spacing and modular arithmetic
+  colon = ":", bmod = "mod",
 }
 
 -- Unicode superscript / subscript forms, char -> form. Coverage is partial (this
@@ -127,13 +168,23 @@ local SCRIPT = alphamap({ { "A", "Z", 0x1D49C } }, {
   B = utf8c(0x212C), E = utf8c(0x2130), F = utf8c(0x2131), H = utf8c(0x210B),
   I = utf8c(0x2110), L = utf8c(0x2112), M = utf8c(0x2133), R = utf8c(0x211B),
 })
+-- Fraktur (\mathfrak): the Mathematical Fraktur block, with the usual reserved
+-- slots filled from Letterlike Symbols. Sans-serif (\mathsf) and monospace
+-- (\mathtt) blocks are contiguous (digits included, no holes).
+local FRAKTUR = alphamap({ { "A", "Z", 0x1D504 }, { "a", "z", 0x1D51E } }, {
+  C = utf8c(0x212D), H = utf8c(0x210C), I = utf8c(0x2111), R = utf8c(0x211C), Z = utf8c(0x2128),
+})
+local SANS = alphamap({ { "A", "Z", 0x1D5A0 }, { "a", "z", 0x1D5BA }, { "0", "9", 0x1D7E2 } })
+local MONO = alphamap({ { "A", "Z", 0x1D670 }, { "a", "z", 0x1D68A }, { "0", "9", 0x1D7F6 } })
+
 -- Style key -> char map; "rm" (upright roman, e.g. \text) is identity (no map).
-local FONTS = { bf = BOLD, it = ITALIC, bb = BLACKBOARD, cal = SCRIPT }
+local FONTS = { bf = BOLD, it = ITALIC, bb = BLACKBOARD, cal = SCRIPT, frak = FRAKTUR, sf = SANS, tt = MONO }
 
 -- Argument-taking font/wrapper commands: \cmd{...} restyles its argument's glyphs.
+-- \operatorname is upright roman like \mathrm (a multi-letter operator name).
 local WRAPCMD = {
-  text = "rm", mathrm = "rm", mathbf = "bf", boldsymbol = "bf", mathit = "it",
-  mathbb = "bb", mathcal = "cal",
+  text = "rm", mathrm = "rm", operatorname = "rm", mathbf = "bf", boldsymbol = "bf",
+  mathit = "it", mathbb = "bb", mathcal = "cal", mathfrak = "frak", mathsf = "sf", mathtt = "tt",
 }
 
 -- Combining marks that overlay the preceding glyph (no extra row/column).
@@ -144,6 +195,10 @@ local OVERLINE_MARK = utf8c(0x0305) -- combining overline (inline \overline)
 -- SPACING table): a run of spaces standing in for the em-based LaTeX widths.
 local NAMED_SPACING = { quad = string.rep(" ", 4), qquad = string.rep(" ", 8) }
 
+-- Prime marks: a run of ASCII apostrophes in math mode becomes the prime glyphs
+-- (x' => x′, x'' => x″), like TeX turning ' into a \prime superscript.
+local PRIMES = { "′", "″", "‴" }
+
 -- Accent commands: a combining mark placed over the argument. In single-line mode
 -- the mark is a Unicode combining char after the base; display mode stacks a row.
 local ACCENTS = {
@@ -152,6 +207,26 @@ local ACCENTS = {
   bar = { combining = utf8c(0x0304), glyph = utf8c(0x203E) },
   vec = { combining = utf8c(0x20D7), glyph = utf8c(0x2192) },
   tilde = { combining = utf8c(0x0303), glyph = "~" },
+}
+
+-- Named operators that take LIMITS: their sub/superscripts sit below/above in
+-- display (like \sum); inline they stay ordinary scripts. The name is its own
+-- glyph (upright, multi-letter). Plain functions (\sin, \cos, \log, …) need no
+-- entry: an unknown command already degrades to its upright name.
+local LIMIT_OPS = {
+  lim = true, limsup = true, liminf = true, max = true, min = true, sup = true,
+  inf = true, det = true, gcd = true, Pr = true, injlim = true, projlim = true,
+  varinjlim = true, varprojlim = true,
+}
+
+-- Wide accents: a mark spanning the whole argument. Inline, the combining mark
+-- trails every char; in display, box_of draws a `shape` row spanning the width.
+local WIDE_ACCENTS = {
+  widehat = { combining = utf8c(0x0302), shape = "hat" },
+  widetilde = { combining = utf8c(0x0303), shape = "tilde" },
+  overrightarrow = { combining = utf8c(0x20D7), shape = "aright" },
+  overleftarrow = { combining = utf8c(0x20D6), shape = "aleft" },
+  overleftrightarrow = { combining = utf8c(0x20E1), shape = "aboth" },
 }
 
 -- \left<delim> ... \right<delim>: fences sized to their content in display mode
@@ -167,12 +242,16 @@ local DELIM = {
 }
 
 -- Multi-row fence pieces, base glyph -> { top, extension, bottom, mid = ? }. A
--- glyph absent here (|, ‖, ⟨, ⟩) is simply repeated on every row; the middle
--- `mid` piece (braces) lands on the centre row.
+-- glyph absent here (⟨, ⟩) is simply repeated on every row; the middle `mid`
+-- piece (braces) lands on the centre row. The bar delimiters use box-drawing
+-- verticals (│ single, ║ double) whose top/extension/bottom are the SAME glyph:
+-- they meet across cell edges, so a tall determinant or norm reads as one
+-- continuous rule rather than a column of gappy ASCII pipes.
 local FENCE = {
   ["("] = { "⎛", "⎜", "⎝" }, [")"] = { "⎞", "⎟", "⎠" },
   ["["] = { "⎡", "⎢", "⎣" }, ["]"] = { "⎤", "⎥", "⎦" },
   ["{"] = { "⎧", "⎪", "⎩", mid = "⎨" }, ["}"] = { "⎫", "⎪", "⎭", mid = "⎬" },
+  ["|"] = { "│", "│", "│" }, ["‖"] = { "║", "║", "║" },
 }
 
 -- Read the delimiter token following \left / \right: a bare char, an escaped
@@ -198,7 +277,11 @@ end
 -- multi-row glyph with limits stacked above/below in display mode. The pieces
 -- stack vertically to form the tall glyph (a summation top/bottom, an integral
 -- top/extension/bottom); operators without stacking glyphs use the single char.
-local BIGOPS = { sum = true, prod = true, int = true, oint = true, bigcup = true, bigcap = true }
+local BIGOPS = {
+  sum = true, prod = true, int = true, oint = true, bigcup = true, bigcap = true,
+  coprod = true, bigoplus = true, bigotimes = true, bigodot = true, bigwedge = true,
+  bigvee = true, biguplus = true, bigsqcup = true, iint = true, iiint = true,
+}
 -- Relation glyphs bound a big operator's operand: `\sum f = g` sizes the sigma
 -- to f, not to the whole line, so a tall right-hand side does not inflate it.
 local RELATIONS = {
@@ -212,7 +295,20 @@ local BIGOP_PIECES = {
   oint = { "⌠", "⎮", "⌡" },
 }
 
-local parse_nodes, parse_arg
+-- Delimiters that wrap each matrix-like environment (base glyphs; display sizes
+-- them via fence_lines, inline uses them literally). An empty side draws none.
+local ENV_DELIMS = {
+  matrix = { "", "" }, pmatrix = { "(", ")" }, bmatrix = { "[", "]" },
+  Bmatrix = { "{", "}" }, vmatrix = { "|", "|" }, Vmatrix = { "‖", "‖" },
+  cases = { "{", "" },
+}
+-- Environments whose columns alternate right/left alignment at each & (so the
+-- relation column lines up); everything else centres, cases left-aligns.
+local ALIGN_ALTERNATE = {
+  aligned = true, ["aligned*"] = true, align = true, ["align*"] = true, split = true,
+}
+
+local parse_nodes, parse_arg, parse_env
 
 -- One argument: a `{...}` group (returns its body list) or a single atom.
 ---@return table[] nodes, integer next_i
@@ -257,6 +353,14 @@ parse_nodes = function(s, i, stop)
       local body, ni = parse_nodes(s, i + 1, "}")
       nodes[#nodes + 1] = { kind = "group", body = body }
       i = ni + 1
+    elseif c == "'" then
+      local j = i
+      while s:sub(j, j) == "'" do
+        j = j + 1
+      end
+      local run = j - i
+      nodes[#nodes + 1] = { kind = "sym", text = PRIMES[run] or ("′"):rep(run) }
+      i = j
     elseif c == "\\" then
       local cmd, ni = s:match("^\\(%a+)()", i)
       if cmd == "right" then
@@ -272,15 +376,32 @@ parse_nodes = function(s, i, stop)
         end
         nodes[#nodes + 1] = { kind = "delim", left = ld, right = rd, body = body }
         i = i3
-      elseif cmd == "frac" then
+      elseif cmd == "frac" or cmd == "dfrac" or cmd == "tfrac" or cmd == "cfrac" then
         local num, i2 = parse_arg(s, ni)
         local den, i3 = parse_arg(s, i2)
         nodes[#nodes + 1] = { kind = "frac", num = num, den = den }
         i = i3
       elseif cmd == "sqrt" then
-        local body, i2 = parse_arg(s, ni)
-        nodes[#nodes + 1] = { kind = "sqrt", body = body }
+        -- optional index: \sqrt[n]{x}. The bracketed run is parsed like a group
+        -- but delimited by "]" rather than "}".
+        local j = ni
+        while s:sub(j, j) == " " do
+          j = j + 1
+        end
+        local index = nil
+        if s:sub(j, j) == "[" then
+          local idx, jn = parse_nodes(s, j + 1, "]")
+          index = idx
+          j = jn + 1
+        end
+        local body, i2 = parse_arg(s, j)
+        nodes[#nodes + 1] = { kind = "sqrt", body = body, index = index }
         i = i2
+      elseif cmd == "binom" or cmd == "dbinom" or cmd == "tbinom" then
+        local num, i2 = parse_arg(s, ni)
+        local den, i3 = parse_arg(s, i2)
+        nodes[#nodes + 1] = { kind = "binom", num = num, den = den }
+        i = i3
       elseif cmd and BIGOPS[cmd] then
         nodes[#nodes + 1] = { kind = "bigop", text = SYMBOLS[cmd], op = cmd }
         i = ni
@@ -304,6 +425,44 @@ parse_nodes = function(s, i, stop)
         local body, i2 = parse_arg(s, ni)
         nodes[#nodes + 1] = { kind = "overlay", mark = NOT_OVERLAY, body = body }
         i = i2
+      elseif cmd == "begin" then
+        local name, after = s:match("^%s*{([%a*]+)}()", ni)
+        if name then
+          local node, ai = parse_env(s, after, name)
+          nodes[#nodes + 1] = node
+          i = ai
+        else
+          nodes[#nodes + 1] = { kind = "sym", text = "begin" }
+          i = ni
+        end
+      elseif cmd and LIMIT_OPS[cmd] then
+        -- a named operator whose scripts stack as limits in display; the name
+        -- string is the glyph, reusing the big-operator machinery
+        nodes[#nodes + 1] = { kind = "bigop", text = cmd, op = cmd }
+        i = ni
+      elseif cmd == "pmod" then
+        local body, i2 = parse_arg(s, ni)
+        nodes[#nodes + 1] = { kind = "pmod", body = body }
+        i = i2
+      elseif cmd and WIDE_ACCENTS[cmd] then
+        local body, i2 = parse_arg(s, ni)
+        nodes[#nodes + 1] = { kind = "wideaccent", accent = WIDE_ACCENTS[cmd], body = body }
+        i = i2
+      elseif cmd == "overbrace" or cmd == "underbrace" then
+        local body, i2 = parse_arg(s, ni)
+        nodes[#nodes + 1] = { kind = cmd, body = body }
+        i = i2
+      elseif cmd == "overset" or cmd == "stackrel" then
+        -- \overset{top}{base} and \stackrel{top}{rel}: top set above the base
+        local over, i2 = parse_arg(s, ni)
+        local base, i3 = parse_arg(s, i2)
+        nodes[#nodes + 1] = { kind = "overset", over = over, base = base }
+        i = i3
+      elseif cmd == "underset" then
+        local under, i2 = parse_arg(s, ni)
+        local base, i3 = parse_arg(s, i2)
+        nodes[#nodes + 1] = { kind = "underset", under = under, base = base }
+        i = i3
       elseif cmd then
         nodes[#nodes + 1] = { kind = "sym", text = SYMBOLS[cmd] or cmd }
         i = ni
@@ -325,6 +484,108 @@ end
 
 local function parse(tex)
   return (parse_nodes(tex, 1, nil))
+end
+
+local function trim(s)
+  return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- Split an environment body into a grid: rows at top-level `\\`, cells at
+-- top-level `&`, "top-level" meaning outside any {} group or nested \begin..\end.
+-- Each cell is parsed into its own node list.
+local function parse_matrix_body(body)
+  local rows, cur_row, cur = {}, {}, {}
+  local depth, envd = 0, 0
+  local function push_cell()
+    cur_row[#cur_row + 1] = parse(trim(table.concat(cur)))
+    cur = {}
+  end
+  local function push_row()
+    push_cell()
+    rows[#rows + 1] = cur_row
+    cur_row = {}
+  end
+  local i, n = 1, #body
+  while i <= n do
+    local c = body:sub(i, i)
+    if c == "{" then
+      depth = depth + 1
+      cur[#cur + 1] = c
+      i = i + 1
+    elseif c == "}" then
+      depth = depth - 1
+      cur[#cur + 1] = c
+      i = i + 1
+    elseif c == "&" and depth == 0 and envd == 0 then
+      push_cell()
+      i = i + 1
+    elseif c == "\\" then
+      local word = body:match("^\\(%a+)", i)
+      if word == "begin" then
+        envd = envd + 1
+        cur[#cur + 1] = "\\begin"
+        i = i + 6
+      elseif word == "end" then
+        envd = envd - 1
+        cur[#cur + 1] = "\\end"
+        i = i + 4
+      elseif word then
+        -- keep a full command token intact (do not chop \alpha into \a + lpha)
+        cur[#cur + 1] = "\\" .. word
+        i = i + 1 + #word
+      elseif body:sub(i, i + 1) == "\\\\" then
+        if depth == 0 and envd == 0 then
+          push_row()
+        else
+          cur[#cur + 1] = "\\\\"
+        end
+        i = i + 2
+      else
+        cur[#cur + 1] = body:sub(i, i + 1)
+        i = i + 2
+      end
+    else
+      cur[#cur + 1] = c
+      i = i + 1
+    end
+  end
+  if #cur_row > 0 or trim(table.concat(cur)) ~= "" then
+    push_row()
+  end
+  return rows
+end
+
+-- Consume s from `i` (just past \begin{name}) to the matching \end{name},
+-- honouring nested environments, and return the parsed matrix node.
+parse_env = function(s, i, name)
+  local depth, j, n = 1, i, #s
+  local function skip_group(k)
+    return s:match("^%s*{[%a*]+}()", k) or k
+  end
+  while j <= n do
+    if s:sub(j, j) == "\\" then
+      local w, nj = s:match("^\\(%a+)()", j)
+      if w == "begin" then
+        depth = depth + 1
+        j = skip_group(nj)
+      elseif w == "end" then
+        depth = depth - 1
+        if depth == 0 then
+          local body = s:sub(i, j - 1)
+          return { kind = "matrix", env = name, rows = parse_matrix_body(body) }, skip_group(nj)
+        end
+        j = skip_group(nj)
+      elseif w then
+        j = nj
+      else
+        j = j + 1
+      end
+    else
+      j = j + 1
+    end
+  end
+  -- unterminated: render whatever body we have
+  return { kind = "matrix", env = name, rows = parse_matrix_body(s:sub(i)) }, n + 1
 end
 
 -- ── single-line renderer ─────────────────────────────────────────────────────
@@ -387,12 +648,19 @@ local function is_var_cp(cp)
   return (cp >= 0x41 and cp <= 0x5A) or (cp >= 0x61 and cp <= 0x7A) or (cp >= 0x3B1 and cp <= 0x3D6)
 end
 
--- The proxy for a variable glyph, or nil if the glyph is not a variable.
+-- The proxy for a variable glyph, or nil if the glyph is not a variable. Only a
+-- SINGLE character is a candidate: re-encoding its codepoint must reproduce the
+-- input exactly, which rejects multi-char sym text (an unknown macro like "ab",
+-- a function name like "sin") that would otherwise be truncated to its first
+-- letter, since cp_of only decodes the leading character.
 local function proxy_of(glyph)
-  if #glyph == 0 or #glyph > 2 then
+  if #glyph == 0 then
     return nil
   end
   local cp = cp_of(glyph)
+  if utf8c(cp) ~= glyph then
+    return nil
+  end
   return is_var_cp(cp) and utf8c(PROXY0 + cp) or nil
 end
 
@@ -433,9 +701,12 @@ end
 
 local render_single
 
--- Parenthesize `str` when `nodes` is a compound (more than one atom).
+-- Parenthesize `str` when linearising it could be misread: a compound (more
+-- than one atom), or a lone fraction (whose own "/" would run into the outer
+-- one, e.g. \frac{\frac{a}{b}}{c} must read "(a/b)/c", not "a/b/c").
 local function paren(str, nodes)
-  return #nodes > 1 and ("(" .. str .. ")") or str
+  local ambiguous = #nodes > 1 or (nodes[1] and nodes[1].kind == "frac")
+  return ambiguous and ("(" .. str .. ")") or str
 end
 
 -- `upright` (default false) suppresses variable-proxying: it is set for content
@@ -454,7 +725,15 @@ render_single = function(nodes, upright)
         .. "/"
         .. paren(render_single(node.den, upright), node.den)
     elseif node.kind == "sqrt" then
-      base = "√" .. paren(render_single(node.body, upright), node.body)
+      local prefix = ""
+      if node.index then
+        local s = render_single(node.index, true)
+        prefix = map_all(s, SUP) or s
+      end
+      base = prefix .. "√" .. paren(render_single(node.body, upright), node.body)
+    elseif node.kind == "binom" then
+      -- flat: the standard C(n, k) coefficient notation (the 2D form is display)
+      base = "C(" .. render_single(node.num, upright) .. ", " .. render_single(node.den, upright) .. ")"
     elseif node.kind == "styled" then
       base = restyle(render_single(node.body, true), FONTS[node.font])
     elseif node.kind == "accent" then
@@ -470,6 +749,35 @@ render_single = function(nodes, upright)
         acc[#acc + 1] = ch .. OVERLINE_MARK
       end
       base = table.concat(acc)
+    elseif node.kind == "wideaccent" then
+      -- the combining mark trails every char, so it spans the whole argument
+      local acc = {}
+      for ch in chars(render_single(node.body, upright)) do
+        acc[#acc + 1] = ch .. node.accent.combining
+      end
+      base = table.concat(acc)
+    elseif node.kind == "overbrace" or node.kind == "underbrace" then
+      base = render_single(node.body, upright) -- the brace is a display-only flourish
+    elseif node.kind == "overset" then
+      local t = render_single(node.over, true)
+      base = render_single(node.base, upright) .. (map_all(t, SUP) or ("^(" .. t .. ")"))
+    elseif node.kind == "underset" then
+      local u = render_single(node.under, true)
+      base = render_single(node.base, upright) .. (map_all(u, SUB) or ("_(" .. u .. ")"))
+    elseif node.kind == "pmod" then
+      base = "(mod " .. render_single(node.body, upright) .. ")"
+    elseif node.kind == "matrix" then
+      -- flatten: cells joined by ", ", rows by "; ", wrapped in the delimiters
+      local rws = {}
+      for _, row in ipairs(node.rows) do
+        local cs = {}
+        for _, cell in ipairs(row) do
+          cs[#cs + 1] = render_single(cell, upright)
+        end
+        rws[#rws + 1] = table.concat(cs, ", ")
+      end
+      local d = ENV_DELIMS[node.env] or { "", "" }
+      base = d[1] .. table.concat(rws, "; ") .. d[2]
     elseif node.kind == "delim" then
       base = (DELIM[node.left] or node.left)
         .. render_single(node.body, upright)
@@ -590,12 +898,25 @@ local function frac_box(num, den)
   return { lines = lines, w = w, h = #lines, axis = num.h }
 end
 
-local function sqrt_box(body)
+-- `index` (optional) is the nth-root degree, drawn small in the leading gutter
+-- above the radical (\sqrt[3]{x}). Its width shifts the radical right by `iw`.
+local function sqrt_box(body, index)
   local w = body.w
+  local idx = ""
+  if index then
+    local s = render_single(index, true)
+    idx = map_all(s, SUP) or s
+  end
+  local iw = dw(idx)
   -- Single-row body: the compact form. The vinculum uses "_" (bottom of its
   -- cell) so on the row above it hugs the content rather than floating.
   if body.h == 1 then
-    return { lines = { " " .. ("_"):rep(w), "√" .. pad_to(body.lines[1], w) }, w = w + 1, h = 2, axis = 1 }
+    return {
+      lines = { pad_to(idx, iw) .. " " .. ("_"):rep(w), spaces(iw) .. "√" .. pad_to(body.lines[1], w) },
+      w = iw + w + 1,
+      h = 2,
+      axis = 1,
+    }
   end
   -- Tall body: a growing radical. A "╲╱" check at the bottom-left, a "╱"
   -- diagonal rising one column per row to the top bar, drawn with single-width
@@ -604,7 +925,7 @@ local function sqrt_box(body)
   local g = h + 1 -- gutter width (the diagonal rises across these columns)
   -- the vinculum sits over the CONTENT (its left end already meets the "╱"
   -- apex at the cell corner); extending it further left would cover the diagonal
-  local lines = { spaces(g) .. ("_"):rep(w) }
+  local lines = { pad_to(idx, iw) .. spaces(g) .. ("_"):rep(w) }
   for i = 1, h do
     local gut = {}
     for c = 1, g do
@@ -615,9 +936,9 @@ local function sqrt_box(body)
     if i == h then
       gut[col - 1] = "╲" -- the check vertex at the bottom
     end
-    lines[i + 1] = table.concat(gut) .. pad_to(body.lines[i], w)
+    lines[i + 1] = spaces(iw) .. table.concat(gut) .. pad_to(body.lines[i], w)
   end
-  return { lines = lines, w = g + w, h = h + 1, axis = body.axis + 1 }
+  return { lines = lines, w = iw + g + w, h = h + 1, axis = body.axis + 1 }
 end
 
 -- A fence column of height `h` for a base glyph. Height 1 is the plain glyph;
@@ -645,6 +966,33 @@ local function fence_lines(glyph, h)
   end
   l[h] = f[3]
   return l
+end
+
+-- \binom: numerator over denominator with NO bar, wrapped in parens sized to
+-- the stacked height. Like frac_box minus the vinculum.
+local function binom_box(num, den)
+  local w = math.max(num.w, den.w)
+  local lines = {}
+  for i = 1, num.h do
+    lines[#lines + 1] = center(num.lines[i], w)
+  end
+  for i = 1, den.h do
+    lines[#lines + 1] = center(den.lines[i], w)
+  end
+  local h = #lines
+  -- The binom has no bar row, so its centre falls on the boundary BETWEEN the
+  -- numerator and denominator (num.h - 0.5). Per the house convention every
+  -- even-height stack rounds its axis to the LOWER of the two middle rows, so
+  -- that is num.h (the first denominator row); a big operator and a matrix round
+  -- the same way, keeping them all on one axis (see bigop_box / matrix_box).
+  local inner = { lines = lines, w = w, h = h, axis = num.h }
+  local lg = fence_lines("(", h)
+  local rg = fence_lines(")", h)
+  return hcat({
+    { lines = lg, w = dw(lg[1]), h = h, axis = inner.axis },
+    inner,
+    { lines = rg, w = dw(rg[1]), h = h, axis = inner.axis },
+  })
 end
 
 local render_stack
@@ -803,8 +1151,10 @@ local function bigop_box(node, oph)
       lines[#lines + 1] = center(l, w)
     end
   end
-  -- axis on the operator's middle row, so the summand aligns to its centre
-  local axis = #lines + math.floor((#pieces - 1) / 2)
+  -- axis on the operator's middle piece, so the summand aligns to its centre;
+  -- an even piece count rounds to the LOWER of the two middle rows (house
+  -- convention, shared with binom_box and matrix_box) via ceil
+  local axis = #lines + math.ceil((#pieces - 1) / 2)
   for _, l in ipairs(pieces) do
     lines[#lines + 1] = center(l, w)
   end
@@ -816,6 +1166,93 @@ local function bigop_box(node, oph)
   return { lines = lines, w = w, h = #lines, axis = axis }
 end
 
+-- Pad every line of a box to width `w`, aligned left / right / centre.
+local function pad_cell(box, w, align)
+  local lines = {}
+  for i, l in ipairs(box.lines) do
+    if align == "right" then
+      lines[i] = spaces(w - dw(l)) .. l
+    elseif align == "left" then
+      lines[i] = pad_to(l, w)
+    else
+      lines[i] = center(l, w)
+    end
+  end
+  return { lines = lines, w = w, h = box.h, axis = box.axis }
+end
+
+-- A matrix-like environment: a grid of cell boxes laid out in aligned columns,
+-- stacked into rows, then wrapped in the environment's delimiters (sized to the
+-- grid height). Columns are 2 spaces apart.
+local function matrix_box(node)
+  local cells, ncol = {}, 0
+  for r, row in ipairs(node.rows) do
+    cells[r] = {}
+    for c, cell in ipairs(row) do
+      cells[r][c] = render_stack(cell, false)
+    end
+    ncol = math.max(ncol, #row)
+  end
+  local colw, align = {}, {}
+  for c = 1, ncol do
+    local w = 0
+    for r = 1, #cells do
+      if cells[r][c] then
+        w = math.max(w, cells[r][c].w)
+      end
+    end
+    colw[c] = w
+    if node.env == "cases" then
+      align[c] = "left"
+    elseif ALIGN_ALTERNATE[node.env] then
+      align[c] = (c % 2 == 1) and "right" or "left"
+    else
+      align[c] = "center"
+    end
+  end
+  -- each row: cells padded to their column, joined by a 2-space gap column
+  local rowboxes = {}
+  for r = 1, #cells do
+    local parts = {}
+    for c = 1, ncol do
+      parts[#parts + 1] = pad_cell(cells[r][c] or text_box(""), colw[c], align[c])
+      if c < ncol then
+        parts[#parts + 1] = { lines = { "  " }, w = 2, h = 1, axis = 0 }
+      end
+    end
+    rowboxes[r] = hcat(parts)
+  end
+  -- stack the rows; the grid's axis is its vertical centre
+  local w = 0
+  for _, b in ipairs(rowboxes) do
+    w = math.max(w, b.w)
+  end
+  local lines = {}
+  for _, b in ipairs(rowboxes) do
+    for _, l in ipairs(b.lines) do
+      lines[#lines + 1] = pad_to(l, w)
+    end
+  end
+  -- centre the grid on the row shared by all even-height stacks: the LOWER of
+  -- the two middle rows (ceil), matching binom_box and bigop_box
+  local grid = { lines = lines, w = w, h = #lines, axis = math.ceil((#lines - 1) / 2) }
+  local d = ENV_DELIMS[node.env]
+  if not d then
+    return grid
+  end
+  local parts = {}
+  if d[1] ~= "" then
+    local lg = fence_lines(d[1], grid.h)
+    parts[#parts + 1] = { lines = lg, w = dw(lg[1]), h = grid.h, axis = grid.axis }
+  end
+  parts[#parts + 1] = grid
+  if d[2] ~= "" then
+    local rg = fence_lines(d[2], grid.h)
+    parts[#parts + 1] = { lines = rg, w = dw(rg[1]), h = grid.h, axis = grid.axis }
+  end
+  return hcat(parts)
+end
+
 local function box_of(node, upright)
   if node.kind == "sym" then
     -- a plain atom (with its scripts) is one inline row
@@ -824,11 +1261,55 @@ local function box_of(node, upright)
   if node.kind == "bigop" then
     return bigop_box(node, 1) -- fallback size; render_stack sizes to the summand
   end
+  if node.kind == "matrix" then
+    return attach_scripts(matrix_box(node), node)
+  end
+  -- \overbrace / \underbrace: a horizontal brace hugging the content, with the
+  -- optional ^/_ label set beyond the brace (consumed here, not by attach_scripts).
+  if node.kind == "overbrace" or node.kind == "underbrace" then
+    local body = render_stack(node.body, upright)
+    local label = nil
+    if node.kind == "overbrace" and node.sup then
+      label = render_stack(node.sup, upright)
+    elseif node.kind == "underbrace" and node.sub then
+      label = render_stack(node.sub, upright)
+    end
+    local w = math.max(body.w, label and label.w or 0)
+    local brace = ((node.kind == "overbrace") and "⏞" or "⏟"):rep(w)
+    local lines = {}
+    local axis
+    if node.kind == "overbrace" then
+      if label then
+        for _, l in ipairs(label.lines) do
+          lines[#lines + 1] = center(l, w)
+        end
+      end
+      lines[#lines + 1] = brace
+      axis = #lines - 1 + body.axis
+      for _, l in ipairs(body.lines) do
+        lines[#lines + 1] = center(l, w)
+      end
+    else
+      axis = body.axis
+      for _, l in ipairs(body.lines) do
+        lines[#lines + 1] = center(l, w)
+      end
+      lines[#lines + 1] = brace
+      if label then
+        for _, l in ipairs(label.lines) do
+          lines[#lines + 1] = center(l, w)
+        end
+      end
+    end
+    return { lines = lines, w = w, h = #lines, axis = axis }
+  end
   local b
   if node.kind == "frac" then
     b = frac_box(render_stack(node.num, upright), render_stack(node.den, upright))
   elseif node.kind == "sqrt" then
-    b = sqrt_box(render_stack(node.body, upright))
+    b = sqrt_box(render_stack(node.body, upright), node.index)
+  elseif node.kind == "binom" then
+    b = binom_box(render_stack(node.num, upright), render_stack(node.den, upright))
   elseif node.kind == "group" then
     b = render_stack(node.body, upright)
   elseif node.kind == "styled" then
@@ -858,6 +1339,47 @@ local function box_of(node, upright)
       lines[#lines + 1] = l
     end
     b = { lines = lines, w = b.w, h = b.h + 1, axis = b.axis + 1 }
+  elseif node.kind == "wideaccent" then
+    -- a mark row spanning the content width (an arrow for the vector forms)
+    b = render_stack(node.body, upright)
+    local w, shape = b.w, node.accent.shape
+    local top
+    -- the stem is an em dash (U+2014), which meets the arrowhead's baseline in
+    -- Iosevka; the box-drawing rule "─" sits too high and detaches from the head
+    if shape == "aright" then
+      top = ("—"):rep(math.max(w - 1, 0)) .. "→"
+    elseif shape == "aleft" then
+      top = "←" .. ("—"):rep(math.max(w - 1, 0))
+    elseif shape == "aboth" then
+      top = "←" .. ("—"):rep(math.max(w - 2, 0)) .. "→"
+    elseif shape == "tilde" then
+      top = center("~", w)
+    else
+      top = center("^", w)
+    end
+    local lines = { top }
+    for _, l in ipairs(b.lines) do
+      lines[#lines + 1] = l
+    end
+    b = { lines = lines, w = w, h = b.h + 1, axis = b.axis + 1 }
+  elseif node.kind == "overset" or node.kind == "underset" then
+    local base = render_stack(node.base, upright)
+    local extra = render_stack(node.kind == "overset" and node.over or node.under, upright)
+    local w = math.max(base.w, extra.w)
+    local lines = {}
+    local top = (node.kind == "overset") and extra or base
+    local bot = (node.kind == "overset") and base or extra
+    for _, l in ipairs(top.lines) do
+      lines[#lines + 1] = center(l, w)
+    end
+    for _, l in ipairs(bot.lines) do
+      lines[#lines + 1] = center(l, w)
+    end
+    -- keep the base atom on the math axis (over sets ride above it, under below)
+    local axis = (node.kind == "overset") and (extra.h + base.axis) or base.axis
+    b = { lines = lines, w = w, h = #lines, axis = axis }
+  elseif node.kind == "pmod" then
+    b = hcat({ text_box("(mod "), render_stack(node.body, upright), text_box(")") })
   elseif node.kind == "overlay" then
     -- \not: overlay the combining mark on the base's axis row (width unchanged)
     b = render_stack(node.body, upright)
