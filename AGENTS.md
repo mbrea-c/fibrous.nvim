@@ -69,7 +69,9 @@ component reference (`site/lua/webapp/components_ref.lua`), the API reference
 pass:
 
 ```sh
-cd ../fibrous-docs && nvim --headless -u NONE -i NONE -l tests/run.lua
+# From this fibrous checkout: run the docs suite against THIS fibrous tree.
+# (Stage any docs edits first — nix run uses the docs flake's own snapshot.)
+FIBROUS_PATH="$PWD" nix run ../fibrous-docs#test
 ```
 
 **While you are in the docs, you are the docs reviewer.** If you notice anything
@@ -83,8 +85,20 @@ let the user decide. Never silently walk past a docs problem you saw.
 
 ### Notes
 
-- Indentation: `lua/` uses tabs, `tests/` uses 2 spaces. There is no stylua
-  config, so a bare `stylua` run will retab the specs. Don't.
+- Indentation: **match the file you are editing.** There is no stylua or
+  editorconfig to normalize it, and the tree is not uniform: the original core
+  (`lua/fibrous/inline/host.lua`, `subwin.lua`, `lua/fibrous/reactive/`) is
+  tabs, while the newer subsystems `lua/fibrous/doc/` and `lua/fibrous/markdown/`
+  (and `lua/fibrous/inline/theme.lua`) are 2 spaces; `tests/` is 2 spaces. A bare
+  `stylua` run has no config and will retab whatever it touches, so don't run it
+  across the tree.
+- Prefer the `nix run` / `nix develop` entry points. A bare interactive `nvim`
+  or an ad-hoc `nvim -l some_script.lua` that `require`s fibrous loads whatever
+  fibrous is already on your runtimepath (a home-manager/pack/`weave` install),
+  **not this checkout**. The flake apps and `tests/run.lua` set `package.path`
+  to the working tree, so use them, or pass `--cmd 'set rtp^=$PWD'`.
 - `../fibrous-docs` pins fibrous in its `flake.lock`. A docs *build* (as opposed
-  to its local test run, which uses the sibling working tree) only sees your
-  fibrous changes after you commit, push, and update its lock.
+  to its `nix run .#test` suite, which uses the sibling working tree) only sees
+  your fibrous changes after you commit, push, and update its lock, or with an
+  ad-hoc `--override-input fibrous path:../nui-reactive` (see fibrous-docs'
+  DEVELOPMENT.md).

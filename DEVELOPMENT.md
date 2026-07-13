@@ -45,6 +45,14 @@ make test-file FILE=tests/reactive/use_state_spec.lua
 
 A non-zero exit code means at least one test failed.
 
+> **Runtimepath gotcha.** `make test` / `make test-file` and the `nix run`
+> wrappers work because `tests/run.lua` sets `package.path` to this checkout. A
+> bare interactive `nvim`, or an ad-hoc `nvim -l some_script.lua` that
+> `require`s fibrous, does **not**: it loads whatever fibrous is already on the
+> runtimepath (a home-manager / pack / `weave` install), silently running a
+> different copy than the one you are editing. Use the entry points above, or
+> pass `--cmd 'set rtp^=$PWD'` to any manual `nvim` invocation.
+
 ### Writing tests
 
 Specs use the familiar `describe` / `it` / `before_each` / `after_each` globals
@@ -56,11 +64,16 @@ describe("use_state", function()
     -- ... arrange / act ...
     assert.equal(5, value)        -- strict ==
     assert.same({ a = 1 }, tbl)   -- deep equality
-    assert.is_true(flag)
+    assert.is_true(flag)          -- also is_nil, truthy, falsy
     assert.has_error(function() ... end, "optional substring")
   end)
 end)
 ```
+
+The table is small and deliberately busted-flavored, but it is **not** full
+busted: there is no `assert.not_equal` and no `assert.is_function`. Invert with a
+tracked boolean + `assert.falsy`, or assert on the value directly (e.g.
+`assert.equal("function", type(fn))`).
 
 ### Types
 
