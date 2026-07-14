@@ -451,7 +451,9 @@ function M.window(component, props, opts)
 	if not scroll then
 		pin_restore = pin_view(winid, group)
 	end
-	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1, keys = opts.keys })
+	-- host_winid: <C-w> anywhere in the app (root or nested floats) acts on
+	-- the backing pane, the app's ONE real window in the layout.
+	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1, keys = opts.keys, host_winid = host_winid })
 	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys, opts.anchor)
 
 	-- The pane is reachable by <C-w>-navigation (floats are not part of the

@@ -7,8 +7,9 @@
 --        focuses its float at the corresponding cell; i/I/a/A/o/O focus it
 --        AND replay the key inside, so "type here" costs one keystroke
 --   out  h/j/k/l at the input buffer's edge exit to the root buffer adjacent
---        to the widget; <C-w>h/j/k/l exit unconditionally; <C-d>/<C-u> hand
---        focus back to the root and scroll it (page motions are never trapped)
+--        to the widget; <Esc> pops focus in place; <C-d>/<C-u> hand focus
+--        back to the root and scroll it (page motions are never trapped).
+--        <C-w> is NOT an exit: it acts on the host pane (see below)
 
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
@@ -379,7 +380,16 @@ describe("inline.focus", function()
     handle.unmount()
   end)
 
-  it("<C-w> window motions exit unconditionally, even away from the edge", function()
+  -- requests.md: a fibrous mount should act as ONE window, however many
+  -- floats implement it. <Esc> pops focus and edge h/j/k/l steps out, so
+  -- <C-w> is reserved for real window work: it acts on the HOST pane from
+  -- any depth of the subwindow hierarchy.
+  it("<C-w> motions act on the HOST pane, not the float stack", function()
+    vim.cmd("tabnew")
+    local left = vim.api.nvim_get_current_win()
+    vim.cmd("rightbelow vsplit")
+    local pane = vim.api.nvim_get_current_win()
+
     local function App()
       return {
         comp = ui.col,
@@ -387,28 +397,69 @@ describe("inline.focus", function()
         children = {
           { comp = ui.label, props = { text = "head" } },
           { comp = ui.text_input, props = { value = "l1\nl2", height = 2 } },
-          { comp = ui.label, props = { text = "tail" } },
         },
       }
     end
-    local handle = mount.floating(App, {}, { width = 8, height = 4 })
+    local handle = mount.window(App, {}, { winid = pane })
     local sub = subwin_of(handle)
 
-    -- <C-w>j from the FIRST line still exits below the widget
+    -- from the focused input, <C-w>h moves as if pressed in the pane: to the
+    -- LEFT window — not to the root float, not trapped in the stack
     vim.api.nvim_set_current_win(sub)
-    vim.api.nvim_win_set_cursor(sub, { 1, 0 })
-    press("<C-w>j")
-    assert.equal(handle.winid, vim.api.nvim_get_current_win())
-    assert.same({ 4, 0 }, vim.api.nvim_win_get_cursor(handle.winid))
+    press("<C-w>h")
+    assert.equal(left, vim.api.nvim_get_current_win())
 
-    -- <C-w>k from the last line exits above
+    -- a command that focuses no other window (<C-w>=) hands focus back to
+    -- the app instead of stranding it on the blank backing pane
     vim.api.nvim_set_current_win(sub)
-    vim.api.nvim_win_set_cursor(sub, { 2, 0 })
-    press("<C-w>k")
+    press("<C-w>=")
     assert.equal(handle.winid, vim.api.nvim_get_current_win())
-    assert.same({ 1, 0 }, vim.api.nvim_win_get_cursor(handle.winid))
 
     handle.unmount()
+    vim.cmd("tabclose")
+  end)
+
+  it("<C-w> still reaches the host pane from a NESTED subwindow", function()
+    vim.cmd("tabnew")
+    local left = vim.api.nvim_get_current_win()
+    vim.cmd("rightbelow vsplit")
+    local pane = vim.api.nvim_get_current_win()
+
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "head" } },
+          {
+            comp = ui.container,
+            props = { height = 3 },
+            children = {
+              { comp = ui.text_input, props = { value = "deep", height = 1 } },
+            },
+          },
+        },
+      }
+    end
+    local handle = mount.window(App, {}, { winid = pane })
+    local container = subwin_of(handle)
+    assert.is_not_nil(container)
+    -- the input's float is anchored to the CONTAINER's float, one level down
+    local inner
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      local cfg = vim.api.nvim_win_get_config(win)
+      if cfg.relative == "win" and cfg.win == container then
+        inner = win
+      end
+    end
+    assert.is_not_nil(inner)
+
+    vim.api.nvim_set_current_win(inner)
+    press("<C-w>h")
+    assert.equal(left, vim.api.nvim_get_current_win())
+
+    handle.unmount()
+    vim.cmd("tabclose")
   end)
 
   it("<C-d> inside a subwindow hands focus back to the root and scrolls it", function()

@@ -110,6 +110,8 @@ end
 ---@field mouse? InlineMouseOpts|false  threaded into nested containers' interaction layers
 ---@field keys? string[]  component keybindings, threaded into nested containers' interaction layers (routed to on_key handlers)
 ---@field zindex? integer  this level's float zindex; the mounts pass root+1 (see InlineWindowMountOpts for the stacking policy) and each nesting level stacks +1 so children always cover their container. Default 60 for standalone attaches.
+---@field host_winid? integer  the app's ONE real window in the layout — the backing pane of a window/split mount; <C-w> in any subwindow replays against it. Defaults to root_winid (floating mounts). Threaded into nested levels.
+---@field app_winid? integer  the top-level root float, where focus returns when a replayed window command goes nowhere. Defaults to root_winid; threaded into nested levels.
 
 -- Attach a manager to one of `host`'s flush targets, whose buffer is shown in
 -- `root_winid` (the mount's root float, or — one level down — a container's
@@ -124,6 +126,14 @@ function M.attach(host, root_winid, opts)
 	opts = opts or {}
 	local target = opts.target or host.root_target
 	local zindex = opts.zindex or 60
+	-- The native window this whole app stands in: the backing pane of a
+	-- window/split mount, or the root float itself for floating mounts —
+	-- threaded down every nesting level (create() passes both through), so
+	-- <C-w> can act on the HOST pane from any depth. app_winid is the
+	-- top-level root float, the window focus returns to when a window
+	-- command goes nowhere.
+	local host_winid = opts.host_winid or root_winid
+	local app_winid = opts.app_winid or root_winid
 	local group = vim.api.nvim_create_augroup("FibrousInlineSubwin_" .. root_winid, { clear = true })
 
 	-- One float per live subwindow leaf, keyed by the fiber's host instance
@@ -816,14 +826,50 @@ function M.attach(host, root_winid, opts)
 					vim.cmd("normal! " .. vim.v.count1 .. key)
 				end
 			end)
-			map("n", "<C-w>" .. key, function()
-				if vim.api.nvim_get_current_win() == entry.winid then
-					exit_dir(entry, key)
-				else
-					vim.cmd(vim.v.count1 .. "wincmd " .. key)
-				end
-			end)
 		end
+		-- <C-w> acts on the HOST pane from any depth (requests.md): a fibrous
+		-- mount is ONE window, however many floats implement it. <Esc> pops
+		-- focus and edge h/j/k/l steps out, so window commands are reserved
+		-- for real window work. The argument key(s) are read here ("g" takes
+		-- one more), then [count]<C-w>{arg} replays natively FROM the pane; a
+		-- command that focuses no other window hands focus back to the app
+		-- instead of stranding it on the blank backing pane.
+		map("n", "<C-w>", function()
+			if vim.api.nvim_get_current_win() ~= entry.winid then
+				vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-w>", true, false, true), "n", false)
+				return
+			end
+			local count = vim.v.count
+			local ok, ch = pcall(vim.fn.getcharstr)
+			if not ok or ch == "" then
+				return
+			end
+			if ch == "g" then
+				local gok, gch = pcall(vim.fn.getcharstr)
+				if not gok then
+					return
+				end
+				ch = ch .. gch
+			end
+			if not (vim.api.nvim_win_is_valid(app_winid) and vim.api.nvim_win_is_valid(host_winid)) then
+				return
+			end
+			-- pop the float stack with normal autocmds (the unfocus
+			-- bookkeeping must run), then hop UNDER the pane's WinEnter
+			-- focus-forwarder onto the pane itself
+			vim.api.nvim_set_current_win(app_winid)
+			vim.cmd(("noautocmd call win_gotoid(%d)"):format(host_winid))
+			vim.cmd(
+				("normal! %s%s%s"):format(
+					count > 0 and count or "",
+					vim.api.nvim_replace_termcodes("<C-w>", true, false, true),
+					ch
+				)
+			)
+			if host_winid ~= app_winid and vim.api.nvim_get_current_win() == host_winid then
+				vim.api.nvim_set_current_win(app_winid)
+			end
+		end)
 		-- <Esc> in normal mode pops focus back to the parent (requests.md), for
 		-- every focusable subwindow. A raw_buffer may be shown elsewhere too, so
 		-- outside OUR float it stays native (cancel pending / clear hlsearch).
@@ -1126,6 +1172,8 @@ function M.attach(host, root_winid, opts)
 				mouse = opts.mouse,
 				zindex = zindex + 1,
 				keys = opts.keys,
+				host_winid = host_winid,
+				app_winid = app_winid,
 			})
 			entry.child_interact =
 				interact.attach(host, winid, opts.mouse, entry.child_manager, entry.child_target, opts.keys, props.anchor)

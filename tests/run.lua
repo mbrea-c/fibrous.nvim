@@ -10,6 +10,10 @@ local root = vim.fn.getcwd()
 
 -- Only our own lua/ goes on the module path; nothing else is loaded, so test
 -- failures can never be confused with a stray plugin or user config.
+-- Neovim's runtimepath loader beats package.path, so a fibrous installed in
+-- the running nvim (e.g. a nix vim-pack-dir) would silently shadow the
+-- working tree under test. Prepend the tree so the suite tests THIS checkout.
+vim.opt.runtimepath:prepend(root)
 package.path = table.concat({
   root .. "/lua/?.lua",
   root .. "/lua/?/init.lua",
