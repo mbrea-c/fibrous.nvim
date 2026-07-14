@@ -53,7 +53,7 @@ local M = {}
 ---@field sync fun(damage?: { top: integer, bot: integer }|false)  reconcile floats against host.subwins and reposition them; damage = the flush's spliced rows (false: none, nil: assume all)
 ---@field enter_at fun(row: integer, x: integer, insert?: boolean): boolean  focus the subwindow at root cell (row, x), in insert mode when `insert` and the policy allows; false if none there
 ---@field activate_at fun(row: integer, x: integer, via_click?: boolean): boolean  focus the subwindow at (row, x) AND run its interaction once (press a role / hop deeper) — one-keystroke activation across the boundary; false if none there
----@field hover_at fun(row: integer, x: integer)  parent-driven hover: nudge the (unfocused) container at (row, x) to paint hover under the parent's pointer, without moving focus
+---@field hover_at fun(row: integer, x: integer)  parent-driven hover: drive the (unfocused) container's interaction at (row, x) to paint hover under the parent's pointer, without moving focus or its cursor
 ---@field clear_hover fun()  drop any parent-driven container hover
 ---@field teardown fun()  destroy all floats/buffers and the autocmds
 
@@ -271,6 +271,13 @@ function M.attach(host, root_winid, opts)
 		entry.mirror_map = map
 
 		local last = vim.api.nvim_buf_line_count(target.bufnr) - 1
+		-- Row-diffed: only rows whose cells actually changed are written. A
+		-- redundant set_text is not free — rewriting the line the CURRENT
+		-- window's cursor sits on, in the same tick the covering float changes,
+		-- makes nvim recomposite the whole float (~a full-float terminal repaint
+		-- per streamed append with the cursor parked over the transcript). And
+		-- marks only need repair where a write inverted them.
+		local wrote_y0, wrote_y1
 		vim.bo[target.bufnr].modifiable = true
 		for i = 0, c.h - 1 do
 			local y = c.y + i
@@ -278,13 +285,17 @@ function M.attach(host, root_winid, opts)
 				local root_line = vim.api.nvim_buf_get_lines(target.bufnr, y, y + 1, false)[1] or ""
 				local b0 = width.cell_to_byte(root_line, c.x)
 				local b1 = width.cell_to_byte(root_line, c.x + c.w)
-				if b1 <= #root_line then
+				if b1 <= #root_line and root_line:sub(b0 + 1, b1) ~= rows[i + 1] then
 					vim.api.nvim_buf_set_text(target.bufnr, y, b0, y, b1, { rows[i + 1] })
+					wrote_y0 = wrote_y0 or y
+					wrote_y1 = y
 				end
 			end
 		end
 		vim.bo[target.bufnr].modifiable = false
-		repaint_row_marks(c.y, c.y + c.h - 1)
+		if wrote_y0 then
+			repaint_row_marks(wrote_y0, wrote_y1)
+		end
 		-- what we painted over, so the box can be restored when it moves or dies
 		entry.mirrored = { x = c.x, y = c.y, w = c.w, h = c.h }
 	end
@@ -1484,12 +1495,14 @@ function M.attach(host, root_winid, opts)
 
 	-- Parent-driven hover across the boundary: the parent's cursor is over the
 	-- container at (row, x) but focus stays on the parent, so the container's own
-	-- (unfocused) cursor never tracks it. We nudge that cursor to the translated,
-	-- always-visible cell (no scroll — see translate) WITHOUT focusing the float,
-	-- then run the container's own interaction so it paints hover on the float
-	-- the user actually sees. Only containers carry an interaction layer; a bare
-	-- text_input/raw_buffer has no roles to hover. Recurses: the delegated
-	-- update() propagates into deeper containers.
+	-- (unfocused) cursor never tracks it. We DRIVE the translated cell into the
+	-- container's interaction layer as data (update_at) — never by writing the
+	-- float's real cursor, which invalidates the float and repaints it whole on
+	-- every keystroke over the mirror and every flush under a parked pointer (the
+	-- requests.md full-redraw bug); it also leaves the real cursor to the app's
+	-- follow-to-bottom, which owns it while unfocused. Only containers carry an
+	-- interaction layer; a bare text_input/raw_buffer has no roles to hover.
+	-- Recurses: the driven update() propagates into deeper containers.
 	---@param row integer  parent-buffer row (0-indexed)
 	---@param x integer  parent-buffer display cell (0-indexed)
 	local function hover_at(row, x)
@@ -1514,9 +1527,7 @@ function M.attach(host, root_winid, opts)
 			clear_hover()
 		end
 		if target then
-			local line = vim.api.nvim_buf_get_lines(target.bufnr, lnum - 1, lnum, false)[1] or ""
-			pcall(vim.api.nvim_win_set_cursor, target.winid, { lnum, width.cell_to_byte(line, cell) })
-			target.child_interact.update(true) -- propagate: drive deeper containers too
+			target.child_interact.update_at(lnum - 1, cell)
 			hovered_hover_entry = target
 		end
 	end

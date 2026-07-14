@@ -176,6 +176,7 @@ end
 
 ---@class InteractHandle
 ---@field update fun(propagate?: boolean)  re-evaluate hover at the current cursor (CursorMoved / post-flush); `propagate` forces driving hover into child containers (nil = only when this window is current)
+---@field update_at fun(row: integer, x: integer)  re-evaluate hover at a parent-DRIVEN pointer (buffer row / display cell, 0-indexed) without touching this surface's real cursor
 ---@field reanchor fun(damage: any)  after a flush, put the cursor back on its anchored keyed entry (no-op when damage is false/nil or the surface is unfocused)
 ---@field activate fun(enter_subwins: boolean, via_click?: boolean)  run activation at the current cursor (roles + subwindow entry); a parent delegates into this after focusing the layer
 ---@field clear_hover fun()  drop this layer's hover (and any it drives in nested containers)
@@ -207,11 +208,24 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
   local bufnr = target.bufnr
   local group = vim.api.nvim_create_augroup("FibrousInlineInteract_" .. root_winid, { clear = true })
 
+  -- A parent-DRIVEN pointer (buffer row, display cell), delegated here by the
+  -- parent's subwin.hover_at when its cursor sits over this (container)
+  -- surface. Consulted instead of the real cursor while this window is not
+  -- current: writing the float's cursor to track the parent — the old nudge —
+  -- invalidated the float and made the compositor repaint it WHOLE, once per
+  -- root keystroke over the mirror and once per flush while streaming with the
+  -- cursor parked on it (requests.md full-redraw bug). Cleared with the hover.
+  ---@type { row: integer, x: integer }|nil
+  local driven_cell = nil
+
   -- The root cursor as a buffer cell (row, x), both 0-indexed; nil when the
   -- root window is gone.
   local function cursor_cell()
     if not vim.api.nvim_win_is_valid(root_winid) then
       return nil
+    end
+    if driven_cell and vim.api.nvim_get_current_win() ~= root_winid then
+      return driven_cell.row, driven_cell.x
     end
     local pos = vim.api.nvim_win_get_cursor(root_winid)
     local row = pos[1] - 1
@@ -471,6 +485,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
   -- this surface's cursor isn't the live pointer — an unfocused container the
   -- parent isn't pointing at, or a parent pointer that has left the container.
   local function clear_hover()
+    driven_cell = nil
     if hovered_fiber and hovered_structural then
       host.set_state(hovered_fiber, "hover", nil)
       -- `syncing` guards re-entry: a relayout re-runs flush → update(), and a
@@ -550,6 +565,18 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
         subwins.hover_at(row, x)
       end
     end
+  end
+
+  -- Drive hover from a PARENT's pointer at (row, x) — this surface's buffer
+  -- coords — without focusing the surface or touching its real cursor. The
+  -- parent's subwin.hover_at delegates here; deeper containers are reached
+  -- through update's own subwins.hover_at recursion, which reads the driven
+  -- cell back out of cursor_cell.
+  ---@param row integer  buffer row (0-indexed)
+  ---@param x integer  display cell (0-indexed)
+  local function update_at(row, x)
+    driven_cell = { row = row, x = x }
+    update(true)
   end
 
   -- The target's Tab stops in document order: every role-carrying node plus
@@ -918,6 +945,10 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
 
   return {
     update = update,
+    -- Exposed so a parent's subwin manager can drive hover into this
+    -- (container) layer at its translated pointer — the paint half of
+    -- `subwins.hover_at` — without a cursor write into the float.
+    update_at = update_at,
     -- Called by the mount / subwin manager after a flush: restore the cursor to
     -- its anchored entry once the buffer has been re-spliced.
     reanchor = reanchor,

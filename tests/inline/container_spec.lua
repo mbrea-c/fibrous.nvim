@@ -598,13 +598,16 @@ describe("inline.container", function()
   it("hover tracks the container's LIVE scroll (no offset, no scroll) when the float scrolled since the last sync", function()
     -- follow-mode (and any code) scrolls a container float via a deferred
     -- set_cursor AFTER sync captured the mirror base — so base goes stale. The
-    -- parent-driven hover must read the float's live topline, or it lands on a
-    -- line offset by the scroll amount AND, being off-screen, its set_cursor
-    -- scrolls the float to reveal it.
+    -- parent-driven hover must read the float's live topline, or it acts on a
+    -- line offset by the scroll amount. Hover is DRIVEN as data (update_at) —
+    -- never by writing the float's cursor, which would recomposite the float
+    -- per keystroke (the full-redraw bug) — so the observable is the hover
+    -- overlay landing on the live topline's row, with the float's scroll AND
+    -- its follow-parked cursor both untouched.
     local function App()
       local kids = {}
       for i = 1, 8 do
-        kids[i] = { comp = ui.label, props = { text = "line" .. i } }
+        kids[i] = { comp = ui.button, props = { label = "line" .. i, style = { _hover = { hl = "Search" } } } }
       end
       return {
         comp = ui.col,
@@ -617,6 +620,7 @@ describe("inline.container", function()
     end
     local handle = mount.floating(App, {}, { width = 12, height = 6 })
     local csub = subwin_of(handle.winid)
+    local cbuf = vim.api.nvim_win_get_buf(csub)
 
     handle.focus()
     -- scroll the float to the bottom, like follow-mode, WITHOUT a parent sync
@@ -632,8 +636,12 @@ describe("inline.container", function()
     vim.api.nvim_win_set_cursor(handle.winid, { 2, 1 })
     vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
 
-    assert.equal(topline, vim.api.nvim_win_get_cursor(csub)[1]) -- landed on the live line
-    assert.equal(topline, vim.fn.getwininfo(csub)[1].topline) -- and didn't scroll the float
+    local ns = vim.api.nvim_create_namespace("fibrous_inline_hover")
+    local marks = vim.api.nvim_buf_get_extmarks(cbuf, ns, 0, -1, {})
+    assert.is_true(#marks > 0) -- hover painted in the container
+    assert.equal(topline - 1, marks[1][2]) -- on the LIVE topline's row
+    assert.equal(topline, vim.fn.getwininfo(csub)[1].topline) -- didn't scroll the float
+    assert.equal(8, vim.api.nvim_win_get_cursor(csub)[1]) -- follow's cursor untouched
 
     handle.unmount()
   end)

@@ -167,6 +167,121 @@ describe("bench.termdraw", function()
     )
   end)
 
+  it("hjkl over a container mirror draws ~nothing extra per keystroke", function()
+    -- Regression guard for the requests.md full-redraw bug, motion half: with
+    -- the root focused, each CursorMoved over a container's mirror drove hover
+    -- by WRITING the container float's cursor — and a cursor write into a float
+    -- recomposites it whole (~800 B per j/k on a transcript-sized float). Hover
+    -- is now driven as data (interact.update_at); the float's cursor is never
+    -- touched. Self-calibrating: the SAME ten j's, once over plain inline rows
+    -- (the floor — pure cursor-move cost) and once over a container's mirror.
+    local PRE = [[
+      local mount = require("fibrous.inline.mount")
+      local ui = require("fibrous.inline.components")
+      local function rows(n)
+        local k = {}
+        for i = 1, n do k[i] = { comp = ui.label, props = { text = ("static row %d — lorem ipsum"):format(i) } } end
+        return k
+      end
+    ]]
+    local function per_key(body)
+      local res = termdraw.drive({
+        rtp = { vim.fn.getcwd() },
+        cols = 60,
+        rows = 20,
+        init = PRE .. body,
+        steps = { { label = "keys", send = ("j"):rep(10), wait_ms = 1200 } },
+      })
+      return res.steps[1].bytes / 10
+    end
+
+    local inline = per_key([[
+      local function App() return { comp = ui.col, props = {}, children = rows(16) } end
+      local handle = mount.floating(App, {}, { width = 50, height = 16, mode = "scroll" })
+      handle.focus()
+      vim.api.nvim_win_set_cursor(handle.winid, { 2, 0 })
+    ]])
+    local mirrored = per_key([[
+      local function App() return { comp = ui.col, props = {}, children = {
+        { comp = ui.label, props = { text = "header" } },
+        { comp = ui.container, props = { height = 14, scroll_x = false }, children = rows(30) },
+      } } end
+      local handle = mount.floating(App, {}, { width = 50, height = 16, mode = "scroll" })
+      handle.focus()
+      vim.api.nvim_win_set_cursor(handle.winid, { 3, 0 })
+    ]])
+
+    assert.is_true(
+      mirrored - inline < 200,
+      ("hjkl over a mirror costs too much: %.0f B/keystroke (inline %.0f, mirrored %.0f)"):format(
+        mirrored - inline,
+        inline,
+        mirrored
+      )
+    )
+  end)
+
+  it("streaming into a container stays append-only under a parked cursor", function()
+    -- The streaming half of the same bug: each appended row re-mirrored EVERY
+    -- box row via set_text, and rewriting the line the current window's cursor
+    -- sits on — in the same tick the covering float changes — makes nvim
+    -- recomposite the whole float (~950 B/append with the cursor parked over
+    -- the transcript, vs ~100 append-only). The mirror repaint is now
+    -- row-diffed. Self-calibrating: the SAME streaming scene, cursor parked
+    -- once on the mirror and once on the header row above it (the floor).
+    local PRE = [[
+      local mount = require("fibrous.inline.mount")
+      local ui = require("fibrous.inline.components")
+      local function rows(n)
+        local k = {}
+        for i = 1, n do k[i] = { comp = ui.label, props = { text = ("static row %d — lorem ipsum"):format(i) } } end
+        return k
+      end
+      local set
+      local function App(ctx)
+        local st = ctx.use_state(3)
+        set = st.set
+        return { comp = ui.col, props = {}, children = {
+          { comp = ui.label, props = { text = "header" } },
+          { comp = ui.container, props = { height = 16, scroll_x = false }, children = rows(st.get()) },
+        } }
+      end
+    ]]
+    local function per_append(cur_row)
+      local res = termdraw.drive({
+        rtp = { vim.fn.getcwd() },
+        cols = 60,
+        rows = 24,
+        init = PRE .. ([[
+          local handle = mount.floating(App, {}, { width = 50, height = 20, mode = "scroll" })
+          handle.focus()
+          vim.api.nvim_win_set_cursor(handle.winid, { %d, 0 })
+          local n = 3
+          local t = vim.uv.new_timer()
+          t:start(200, 80, vim.schedule_wrap(function()
+            n = n + 1
+            set(n)
+            if n >= 13 then t:stop() end
+          end))
+        ]]):format(cur_row),
+        steps = { { label = "stream", wait_ms = 1800 } },
+      })
+      return res.steps[1].bytes / 10
+    end
+
+    local parked_off = per_append(1) -- header row: cursor line never re-mirrored
+    local parked_on = per_append(3) -- over the mirror: the bug's posture
+
+    assert.is_true(
+      parked_on - parked_off < 200,
+      ("streaming under a parked cursor costs too much: %.0f B/append (off-mirror %.0f, on-mirror %.0f)"):format(
+        parked_on - parked_off,
+        parked_off,
+        parked_on
+      )
+    )
+  end)
+
   it("an UNFOCUSED surface holds its view without redrawing per frame", function()
     -- The companion guard for unfocused anchoring (requests.md: "if transcript
     -- is not focused, there's no anchoring … we should still anchor buffers that
