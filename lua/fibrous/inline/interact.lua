@@ -178,6 +178,7 @@ end
 ---@field update fun(propagate?: boolean)  re-evaluate hover at the current cursor (CursorMoved / post-flush); `propagate` forces driving hover into child containers (nil = only when this window is current)
 ---@field update_at fun(row: integer, x: integer)  re-evaluate hover at a parent-DRIVEN pointer (buffer row / display cell, 0-indexed) without touching this surface's real cursor
 ---@field reanchor fun(damage: any)  after a flush, put the cursor back on its anchored keyed entry (no-op when damage is false/nil or the surface is unfocused)
+---@field recapture fun()  re-capture the anchor at the current cursor NOW (subwin.enter calls this after placing the cursor, before any CursorMoved can run)
 ---@field activate fun(enter_subwins: boolean, via_click?: boolean)  run activation at the current cursor (roles + subwindow entry); a parent delegates into this after focusing the layer
 ---@field clear_hover fun()  drop this layer's hover (and any it drives in nested containers)
 ---@field teardown fun()
@@ -952,6 +953,13 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     -- Called by the mount / subwin manager after a flush: restore the cursor to
     -- its anchored entry once the buffer has been re-spliced.
     reanchor = reanchor,
+    -- Called by subwin.enter after it PLACES this surface's cursor: the anchor
+    -- must become the entry the user just landed on, NOW. No CursorMoved runs
+    -- between the placement and an activation's relayout, so without this the
+    -- post-flush reanchor restores whatever was anchored before focus crossed
+    -- in (follow-to-bottom's last line) and yanks the cursor off the very
+    -- thing the user pressed (the requests.md <CR> teleport).
+    recapture = capture_anchor,
     -- Exposed so a parent's subwin manager can delegate activation into this
     -- (container) layer after focusing it — the recursive half of
     -- `subwins.activate_at`.

@@ -738,6 +738,13 @@ function M.attach(host, root_winid, opts)
 		local line = vim.api.nvim_buf_get_lines(entry.bufnr, lnum - 1, lnum, false)[1] or ""
 		vim.api.nvim_set_current_win(entry.winid)
 		vim.api.nvim_win_set_cursor(entry.winid, { lnum, width.cell_to_byte(line, cell) })
+		-- The anchor must follow the cursor we just placed, NOW: activation can
+		-- relayout the container before any CursorMoved fires, and reanchoring
+		-- to the pre-entry anchor (follow-to-bottom's last line) would yank the
+		-- cursor off the very cell the user targeted (the <CR> teleport).
+		if entry.child_interact then
+			entry.child_interact.recapture()
+		end
 		if insert and click_insert(entry) then
 			-- takes effect when the calling mapping ends; a click past the end
 			-- of the line appends (GUI caret lands after the text)
@@ -769,23 +776,40 @@ function M.attach(host, root_winid, opts)
 		end)
 	end
 
-	-- The parent box cell (row, col) that currently SHOWS the float's cursor: the
-	-- mirror's row map inverted (enter()'s translation the other way — under wrap
-	-- the mapping is non-linear, and the widget's own scroll offsets it), with an
-	-- arithmetic fallback for a widget that never mirrored, clamped into the
-	-- content box. Both the directional exit and the <Esc> pop-out land off this.
+	-- The parent box cell (row, col) that currently SHOWS the float's cursor —
+	-- enter()'s translation the other way, clamped into the content box. Both
+	-- the directional exit and the <Esc> pop-out land off this.
+	--
+	-- Like translate(), a SHOWN, NOWRAP float's LIVE view is the source of
+	-- truth: a focused float scrolls WITHOUT a mirror refresh (only a root
+	-- scroll resyncs), so the cached mirror_map/base go stale the moment the
+	-- user scrolls — the stale inversion clamped every exit to the box bottom
+	-- (the requests.md <Esc> teleport in a scrolled transcript). The mirror map
+	-- stays as the inversion for a hidden or WRAPPING float (raw_buffer), where
+	-- box row ≠ buffer line, with the arithmetic fallback for a widget that
+	-- never mirrored.
 	local function cursor_box_cell(entry)
 		local pos, cell = float_cursor(entry)
 		local c = entry.node.content
 		local drow, dcell
-		for i, mm in ipairs(entry.mirror_map or {}) do
-			if mm.lnum == pos[1] and cell >= mm.cell0 and cell < mm.cell0 + c.w then
-				drow, dcell = i - 1, cell - mm.cell0
-				break
+		if
+			vim.api.nvim_win_is_valid(entry.winid)
+			and not vim.api.nvim_win_get_config(entry.winid).hide
+			and not vim.wo[entry.winid].wrap
+		then
+			local v = vim.api.nvim_win_call(entry.winid, vim.fn.winsaveview)
+			drow = pos[1] - v.topline + (entry.clip or 0)
+			dcell = math.max(cell - (v.leftcol or 0), 0)
+		else
+			for i, mm in ipairs(entry.mirror_map or {}) do
+				if mm.lnum == pos[1] and cell >= mm.cell0 and cell < mm.cell0 + c.w then
+					drow, dcell = i - 1, cell - mm.cell0
+					break
+				end
 			end
+			drow = drow or (pos[1] - (entry.base or 1))
+			dcell = dcell or math.max(cell - (entry.leftcol or 0), 0)
 		end
-		drow = drow or (pos[1] - (entry.base or 1))
-		dcell = dcell or math.max(cell - (entry.leftcol or 0), 0)
 		local srow = math.min(math.max(c.y + drow, c.y), c.y + c.h - 1)
 		local scol = math.min(math.max(c.x + dcell, c.x), c.x + c.w - 1)
 		return srow, scol

@@ -646,6 +646,118 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
+  it("<Esc> from a SCROLLED container lands on the row showing the cursor (no teleport)", function()
+    -- requests.md: "When unfocusing the transcript in weave using <Esc>, the
+    -- cursor sometimes teleports; maybe scroll related". cursor_box_cell
+    -- inverted the cursor's buffer line through the cached mirror_map/base —
+    -- but a focused container scrolls WITHOUT a re-mirror (only a root scroll
+    -- resyncs), so after any scroll the inversion ran off stale data and the
+    -- clamp dumped the root cursor at the box bottom. Like translate() on the
+    -- way in, the exit must read the float's LIVE view.
+    local function App()
+      local kids = {}
+      for i = 1, 8 do
+        kids[i] = { comp = ui.label, props = { text = "line" .. i } }
+      end
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "top" } },
+          { comp = ui.container, props = { height = 3 }, children = kids },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 12, height = 6 })
+    local csub = subwin_of(handle.winid)
+
+    handle.focus()
+    vim.api.nvim_set_current_win(csub)
+    -- scroll to the bottom (topline 6), then sit on the TOP visible line
+    vim.api.nvim_win_set_cursor(csub, { 8, 0 })
+    vim.api.nvim_win_call(csub, function()
+      vim.cmd("normal! zb")
+    end)
+    vim.api.nvim_win_set_cursor(csub, { 6, 0 })
+    assert.equal(6, vim.fn.getwininfo(csub)[1].topline)
+
+    press("<Esc>")
+    assert.equal(handle.winid, vim.api.nvim_get_current_win())
+    -- line 6 shows on the container's FIRST box row = root row 2; the stale
+    -- inversion clamped to the box bottom (root row 4) instead
+    assert.equal(2, vim.api.nvim_win_get_cursor(handle.winid)[1])
+    handle.unmount()
+  end)
+
+  it("<CR>-activating a button that reflows the container keeps the cursor ON it (no teleport)", function()
+    -- requests.md: "if I focus-and-activate the transcript with <CR> over a
+    -- tool call (starting from unfocused hovered), the cursor will teleport
+    -- (likely a result of the underlying transcript changing as the tool call
+    -- gets expanded)". While the container was UNFOCUSED, follow-to-bottom's
+    -- scrolls captured an anchor at the BOTTOM entry (cursor = true). enter()
+    -- then places the cursor on the tool call, but no CursorMoved runs before
+    -- the press's relayout — so the post-flush reanchor restored the STALE
+    -- bottom anchor and yanked the cursor (and view) away from what the user
+    -- just pressed. enter() must re-capture the anchor at the entry cell.
+    local expanded_set
+    local function App(ctx)
+      local expanded = ctx.use_state(false)
+      expanded_set = expanded.set
+      local kids = {}
+      for i = 1, 15 do
+        kids[i] = { comp = ui.label, props = { text = "line" .. i } }
+      end
+      kids[#kids + 1] = {
+        comp = ui.button,
+        props = {
+          label = "tool",
+          on_press = function()
+            expanded.set(true)
+          end,
+        },
+      }
+      if expanded.get() then
+        for i = 1, 5 do
+          kids[#kids + 1] = { comp = ui.label, props = { text = "detail" .. i } }
+        end
+      end
+      for i = 17, 20 do
+        kids[#kids + 1] = { comp = ui.label, props = { text = "line" .. i } }
+      end
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "top" } },
+          { comp = ui.container, props = { height = 6, scroll_x = false }, children = kids },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 14, height = 9 })
+    local csub = subwin_of(handle.winid)
+    local cbuf = vim.api.nvim_win_get_buf(csub)
+
+    -- follow-to-bottom era: unfocused float scrolled to the bottom, cursor
+    -- parked on the last line; the follow scroll fires WinScrolled, which
+    -- captures the (bottom) anchor
+    vim.api.nvim_win_set_cursor(csub, { 20, 0 })
+    vim.api.nvim_exec_autocmds("WinScrolled", { pattern = tostring(csub) })
+    assert.equal(15, vim.fn.getwininfo(csub)[1].topline)
+
+    -- the tool button (line 16) shows on box row 1 → root row 3; <CR> there
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 3, 1 })
+    press("<CR>")
+
+    -- the press expanded the container: details inserted after the button
+    assert.is_true(vim.tbl_contains(vim.tbl_map(vim.trim, buf_lines(cbuf)), "detail1"))
+    -- focus crossed in, and the cursor is STILL on the pressed button
+    assert.equal(csub, vim.api.nvim_get_current_win())
+    local line = vim.api.nvim_get_current_line()
+    assert.is_true(line:find("tool") ~= nil, "cursor teleported off the tool button onto: " .. line)
+    handle.unmount()
+  end)
+
   it("hovering an unfocused container never scrolls it, whatever the global scrolloff", function()
     -- The parent-driven hover nudges the (unfocused) container's cursor to
     -- follow the pointer. With the user's global 'scrolloff' set, landing that
