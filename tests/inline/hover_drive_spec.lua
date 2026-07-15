@@ -24,8 +24,7 @@ local NS = vim.api.nvim_create_namespace("fibrous_inline_hover")
 -- First float anchored to `winid`.
 local function subwin_of(winid)
   for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local cfg = vim.api.nvim_win_get_config(win)
-    if cfg.relative == "win" and cfg.win == winid then
+    if vim.w[win].fibrous_anchor == winid then
       return win
     end
   end

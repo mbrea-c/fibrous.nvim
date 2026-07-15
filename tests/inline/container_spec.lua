@@ -10,12 +10,20 @@
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
 
--- All floats anchored to `winid`, in creation order.
+-- All floats anchored to `winid`, in creation order. Subwindow floats are
+-- editor-anchored (see subwin's anchoring note), so the association is the
+-- fibrous_anchor window var; the returned cfg's row/col are reconstructed in
+-- ROOT coordinates — what these specs assert against.
 local function subwins_of(winid)
   local out = {}
   for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local cfg = vim.api.nvim_win_get_config(win)
-    if cfg.relative == "win" and cfg.win == winid then
+    if vim.w[win].fibrous_anchor == winid then
+      local cfg = vim.api.nvim_win_get_config(win)
+      if not cfg.hide then
+        local fp = vim.api.nvim_win_get_position(win)
+        local rp = vim.api.nvim_win_get_position(winid)
+        cfg.row, cfg.col = fp[1] - rp[1], fp[2] - rp[2]
+      end
       out[#out + 1] = { winid = win, cfg = cfg }
     end
   end
@@ -247,7 +255,10 @@ describe("inline.container", function()
     handle.relayout()
     icfg = vim.api.nvim_win_get_config(isub)
     assert.is_false(icfg.hide)
-    assert.equal(1, icfg.row) -- inner row 2, one row scrolled off
+    -- editor-anchored float: row relative to the CONTAINER via positions
+    local ip = vim.api.nvim_win_get_position(isub)
+    local cp = vim.api.nvim_win_get_position(csub)
+    assert.equal(1, ip[1] - cp[1]) -- inner row 2, one row scrolled off
 
     handle.unmount()
   end)

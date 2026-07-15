@@ -11,8 +11,15 @@ local ui = require("fibrous.inline.components")
 
 local function subwin_of(handle)
   for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local cfg = vim.api.nvim_win_get_config(win)
-    if cfg.relative == "win" and cfg.win == handle.winid then
+    if vim.w[win].fibrous_anchor == handle.winid then
+      -- editor-anchored floats: reconstruct row/col in ROOT coordinates,
+      -- what this spec asserts against
+      local cfg = vim.api.nvim_win_get_config(win)
+      if not cfg.hide then
+        local fp = vim.api.nvim_win_get_position(win)
+        local rp = vim.api.nvim_win_get_position(handle.winid)
+        cfg.row, cfg.col = fp[1] - rp[1], fp[2] - rp[2]
+      end
       return win, cfg
     end
   end

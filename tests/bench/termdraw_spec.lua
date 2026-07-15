@@ -221,6 +221,80 @@ describe("bench.termdraw", function()
     )
   end)
 
+  it("hjkl across hover boundaries in a container repaints rows, not the float", function()
+    -- Regression guard for the requests.md full-redraw bug's RETURN: with role
+    -- nodes (weave's tool calls) inside the container, each keystroke that
+    -- crosses a hover boundary toggles ONE FibrousHover extmark in the
+    -- container float's buffer — and on a float anchored relative="win" to the
+    -- window the cursor is moving in, nvim redraws the float WHOLE when its
+    -- buffer changed in the same cycle (~2.7 KB per j on a transcript-sized
+    -- float; reproduced in raw nvim, no fibrous). Subwindow floats anchor
+    -- relative="editor" now, which keeps the redraw line-granular.
+    --
+    -- Two things hid this from the guard above: its container holds only inert
+    -- labels (no hover target to cross), and it sends all ten j's in ONE
+    -- chansend — they collapse into a single redraw cycle, so per-keystroke
+    -- costs vanish. Here every row boundary flips hover and every key is its
+    -- own step (one key per event-loop tick, like a human). Self-calibrating:
+    -- the SAME keystrokes over a container of inert labels are the floor.
+    local PRE = [[
+      local mount = require("fibrous.inline.mount")
+      local ui = require("fibrous.inline.components")
+      local function rows(n, interactive)
+        local k = {}
+        for i = 1, n do
+          if interactive and i % 2 == 1 then
+            k[i] = { comp = ui.button, props = { label = ("button %d"):format(i), role = "button", on_press = function() end } }
+          else
+            k[i] = { comp = ui.label, props = { text = ("static row %d — lorem ipsum"):format(i) } }
+          end
+        end
+        return k
+      end
+    ]]
+    local KEYS = 8
+    local function per_key(interactive)
+      local steps = { { label = "settle", wait_ms = 400 } }
+      for i = 1, KEYS do
+        steps[#steps + 1] = { label = "key", send = "j", wait_ms = 120 }
+      end
+      local res = termdraw.drive({
+        rtp = { vim.fn.getcwd() },
+        cols = 60,
+        rows = 20,
+        init = PRE .. ([[
+          local function App() return { comp = ui.col, props = {}, children = {
+            { comp = ui.label, props = { text = "header" } },
+            { comp = ui.container, props = { height = 14, scroll_x = false }, children = rows(30, %s) },
+          } } end
+          local handle = mount.floating(App, {}, { width = 50, height = 16, mode = "scroll" })
+          handle.focus()
+          vim.api.nvim_win_set_cursor(handle.winid, { 3, 4 })
+        ]]):format(tostring(interactive)),
+        steps = steps,
+      })
+      local total = 0
+      for _, s in ipairs(res.steps) do
+        if s.label == "key" then
+          total = total + s.bytes
+        end
+      end
+      return total / KEYS
+    end
+
+    local inert = per_key(false)
+    local hovering = per_key(true)
+
+    assert.is_true(
+      hovering - inert < 200,
+      ("hover-boundary hjkl costs too much: %.0f B/keystroke (inert %.0f, hovering %.0f)"):format(
+        hovering - inert,
+        inert,
+        hovering
+      )
+    )
+  end)
+
   it("streaming into a container stays append-only under a parked cursor", function()
     -- The streaming half of the same bug: each appended row re-mirrored EVERY
     -- box row via set_text, and rewriting the line the current window's cursor

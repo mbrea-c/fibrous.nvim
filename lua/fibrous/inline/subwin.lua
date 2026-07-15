@@ -563,14 +563,30 @@ function M.attach(host, root_winid, opts)
 
 		-- Only reconfigure when the visible geometry actually moved (see above):
 		-- an unchanged box under a busy root stays put, no redraw.
-		local geo = table.concat({ vis_top, vis_left, vis_right - vis_left + 1, vis_bot - vis_top + 1 }, ":")
+		--
+		-- Anchored relative="editor" at (root origin + box cell), NOT
+		-- relative="win" to the root: nvim redraws a win-anchored float WHOLE
+		-- whenever its buffer changed in the same cycle its ANCHOR window had any
+		-- redraw-worthy activity — a plain cursor move suffices (raw nvim 0.12,
+		-- no fibrous involved). Hover painting toggles one extmark in a
+		-- container's buffer per boundary crossing, so hjkl over role rows
+		-- (weave's tool calls) was a full-float terminal repaint per keystroke —
+		-- the requests.md full-redraw regression; same for streaming while the
+		-- user navigates. Editor anchoring keeps those redraws line-granular.
+		-- The origin is part of the geometry memo, so any sync after the root
+		-- moved reconfigures the float; mount relayouts on WinResized/VimResized,
+		-- which covers layout-driven moves between flushes.
+		local origin = vim.api.nvim_win_get_position(root_winid)
+		local geo = table.concat(
+			{ origin[1], origin[2], vis_top, vis_left, vis_right - vis_left + 1, vis_bot - vis_top + 1 },
+			":"
+		)
 		local geo_changed = entry.applied_geo ~= geo
 		if geo_changed then
 			vim.api.nvim_win_set_config(entry.winid, {
-				relative = "win",
-				win = root_winid,
-				row = vis_top,
-				col = vis_left,
+				relative = "editor",
+				row = origin[1] + vis_top,
+				col = origin[2] + vis_left,
 				width = vis_right - vis_left + 1,
 				height = vis_bot - vis_top + 1,
 				hide = false,
@@ -1109,8 +1125,10 @@ function M.attach(host, root_winid, opts)
 			end
 		end
 		local winid = vim.api.nvim_open_win(bufnr, false, {
-			relative = "win",
-			win = root_winid,
+			-- editor-anchored like reposition (never relative="win" to the root:
+			-- see the anchoring note there); born hidden at a placeholder cell,
+			-- reposition assigns the real geometry
+			relative = "editor",
 			row = 0,
 			col = 0,
 			width = math.max(node.content.w, 1),
@@ -1119,6 +1137,10 @@ function M.attach(host, root_winid, opts)
 			zindex = zindex, -- one above this level's root (the mount's, or a container's)
 			hide = true, -- reposition below decides visibility
 		})
+		-- The float no longer carries its parent in the window config (editor
+		-- anchoring), so record the association explicitly — the discriminator
+		-- tests (and any tooling) use to find a surface's subwindow floats.
+		vim.w[winid].fibrous_anchor = root_winid
 		-- text_input never wraps (rect math); raw_buffer is the native-wrapping
 		-- escape hatch and wraps unless told not to.
 		vim.wo[winid].wrap = node.subwin == "raw_buffer" and props.wrap ~= false

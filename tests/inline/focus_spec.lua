@@ -17,8 +17,7 @@ local ui = require("fibrous.inline.components")
 -- The (single) subwindow float anchored to the root float of `handle`.
 local function subwin_of(handle)
   for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local cfg = vim.api.nvim_win_get_config(win)
-    if cfg.relative == "win" and cfg.win == handle.winid then
+    if vim.w[win].fibrous_anchor == handle.winid then
       return win
     end
   end
@@ -447,8 +446,7 @@ describe("inline.focus", function()
     -- the input's float is anchored to the CONTAINER's float, one level down
     local inner
     for _, win in ipairs(vim.api.nvim_list_wins()) do
-      local cfg = vim.api.nvim_win_get_config(win)
-      if cfg.relative == "win" and cfg.win == container then
+      if vim.w[win].fibrous_anchor == container then
         inner = win
       end
     end

@@ -50,8 +50,7 @@ end
 -- The (single) subwindow float anchored to the root float, or nil.
 local function subwin_of(handle)
 	for _, w in ipairs(vim.api.nvim_list_wins()) do
-		local cfg = vim.api.nvim_win_get_config(w)
-		if cfg.relative == "win" and cfg.win == handle.winid then
+		if vim.w[w].fibrous_anchor == handle.winid then
 			return w
 		end
 	end

@@ -21,15 +21,35 @@ local function lines_of(bufnr)
   return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 end
 
--- The (single) subwindow float anchored to the root float, or nil.
+-- The (single) subwindow float anchored to the root float, or nil. Floats are
+-- editor-anchored (see subwin's anchoring note), so the association is the
+-- fibrous_anchor window var; the returned cfg's row/col are reconstructed in
+-- ROOT coordinates — what these specs assert against.
 local function subwin_of(handle)
   for _, w in ipairs(vim.api.nvim_list_wins()) do
-    local cfg = vim.api.nvim_win_get_config(w)
-    if cfg.relative == "win" and cfg.win == handle.winid then
+    if vim.w[w].fibrous_anchor == handle.winid then
+      local cfg = vim.api.nvim_win_get_config(w)
+      if not cfg.hide then
+        local fp = vim.api.nvim_win_get_position(w)
+        local rp = vim.api.nvim_win_get_position(handle.winid)
+        cfg.row, cfg.col = fp[1] - rp[1], fp[2] - rp[2]
+      end
       return w, cfg
     end
   end
   return nil
+end
+
+-- The float's config with row/col reconstructed in ROOT coordinates (floats
+-- are editor-anchored; these specs assert positions relative to the root).
+local function rel_cfg(sub, handle)
+  local cfg = vim.api.nvim_win_get_config(sub)
+  if not cfg.hide then
+    local fp = vim.api.nvim_win_get_position(sub)
+    local rp = vim.api.nvim_win_get_position(handle.winid)
+    cfg.row, cfg.col = fp[1] - rp[1], fp[2] - rp[2]
+  end
+  return cfg
 end
 
 -- Scroll the root float so `topline` is the first visible buffer line.
@@ -103,7 +123,7 @@ describe("inline.subwin", function()
     scroll_root(handle, 2) -- one content row scrolled off above
     handle.relayout()
 
-    local cfg = vim.api.nvim_win_get_config(sub)
+    local cfg = rel_cfg(sub, handle)
     assert.falsy(cfg.hide)
     assert.equal(0, cfg.row)
     assert.equal(2, cfg.height)
@@ -123,7 +143,7 @@ describe("inline.subwin", function()
 
     scroll_root(handle, 1)
     handle.relayout()
-    local cfg = vim.api.nvim_win_get_config(sub)
+    local cfg = rel_cfg(sub, handle)
     assert.falsy(cfg.hide)
     assert.equal(0, cfg.row)
     assert.equal(3, cfg.height)
@@ -415,7 +435,7 @@ describe("inline.subwin", function()
       hscroll_root(handle, 3)
       handle.relayout()
 
-      local cfg = vim.api.nvim_win_get_config(sub)
+      local cfg = rel_cfg(sub, handle)
       assert.falsy(cfg.hide)
       assert.equal(0, cfg.col)
       assert.equal(9, cfg.width)
@@ -428,7 +448,7 @@ describe("inline.subwin", function()
 
       hscroll_root(handle, 0)
       handle.relayout()
-      cfg = vim.api.nvim_win_get_config(sub)
+      cfg = rel_cfg(sub, handle)
       assert.equal(0, cfg.col)
       assert.equal(12, cfg.width)
       vim.api.nvim_win_call(sub, function()
@@ -460,12 +480,12 @@ describe("inline.subwin", function()
       end
       local handle = mount.floating(App, {}, { width = 14, height = 4 })
       local sub = subwin_of(handle)
-      assert.equal(6, vim.api.nvim_win_get_config(sub).col)
+      assert.equal(6, rel_cfg(sub, handle).col)
 
       hscroll_root(handle, 4)
       handle.relayout()
 
-      local cfg = vim.api.nvim_win_get_config(sub)
+      local cfg = rel_cfg(sub, handle)
       assert.falsy(cfg.hide)
       assert.equal(2, cfg.col) -- 6 - 4
       assert.equal(5, cfg.width) -- untouched: no clip
@@ -498,7 +518,7 @@ describe("inline.subwin", function()
 
       hscroll_root(handle, 0)
       handle.relayout()
-      local cfg = vim.api.nvim_win_get_config(sub)
+      local cfg = rel_cfg(sub, handle)
       assert.falsy(cfg.hide)
       assert.equal(0, cfg.col)
       assert.equal(4, cfg.width)
