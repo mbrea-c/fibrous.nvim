@@ -397,6 +397,7 @@ function M.split(component, props, opts)
 			zindex = opts.zindex,
 			keys = opts.keys,
 			on_unmount = opts.on_unmount,
+			own_window = true,
 		})
 
 	return handle
@@ -409,6 +410,7 @@ end
 ---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer  root float zindex; default 10. Pane-anchored apps are page furniture — the whole stack (root + subwindow levels, +1 each) stays below nvim's float default (50), so genuine floats (float-mounted fibrous apps, other plugins' popups) always render above them.
 ---@field on_unmount? fun()  fired once after teardown, whoever initiated it (handle.unmount or :q on the app's windows)
+---@field own_window? boolean  teardown closes the mounted-on window. M.split sets it (the pane is fibrous's own creation); default false — the window belongs to the embedder, who reacts through on_unmount
 
 -- Mount `component` over a native split pane.
 ---@param component Component
@@ -518,7 +520,7 @@ function M.window(component, props, opts)
 	end
 
 	local handle, teardown = wire(component, props, host, winid, group, { manager, interaction }, sync, function()
-		if vim.api.nvim_win_is_valid(host_winid) then
+		if opts.own_window and vim.api.nvim_win_is_valid(host_winid) then
 			pcall(vim.api.nvim_win_close, host_winid, true)
 		end
 	end, opts.on_unmount)

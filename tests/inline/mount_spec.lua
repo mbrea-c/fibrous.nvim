@@ -384,6 +384,39 @@ describe("inline.mount", function()
     handle.unmount()
   end)
 
+  it("window: teardown leaves the mounted-on window alone (the embedder owns it)", function()
+    -- M.split closes its pane on teardown because it OPENED that pane;
+    -- M.window mounts over a window somebody else created (perijove: the
+    -- window the .ipynb buffer is open in) — unmounting the app, however it
+    -- happens, must hand that window back, not close it. Whoever mounted
+    -- decides window policy through on_unmount.
+    vim.cmd("tabnew")
+    vim.cmd("vsplit")
+    local target = vim.api.nvim_get_current_win()
+    local target_buf = vim.api.nvim_win_get_buf(target)
+
+    local handle = mount.window(Hello, {}, { winid = target, mode = "scroll" })
+    handle.unmount()
+    assert.is_true(vim.api.nvim_win_is_valid(target))
+    assert.equal(target_buf, vim.api.nvim_win_get_buf(target))
+
+    -- :q on the root float: app dies, window survives
+    local unmounted = false
+    handle = mount.window(Hello, {}, {
+      winid = target,
+      mode = "scroll",
+      on_unmount = function()
+        unmounted = true
+      end,
+    })
+    vim.api.nvim_win_close(handle.winid, true)
+    vim.wait(500, function()
+      return unmounted
+    end, 10)
+    assert.is_true(vim.api.nvim_win_is_valid(target))
+    vim.cmd("tabclose")
+  end)
+
   it("set_props re-renders through the mounted root", function()
     local function App(_, props)
       return { comp = text, props = { text = props.msg } }
