@@ -241,6 +241,46 @@ describe("inline.mount", function()
     assert.equal(wins_before, #vim.api.nvim_list_wins())
   end)
 
+  it("on_unmount fires exactly once, however the app dies", function()
+    -- Embedders (perijove notebook sessions) must learn about teardown they
+    -- did not initiate (:q on the pane or the float), or their session state
+    -- dangles on a dead mount.
+    local counts = { 0, 0, 0 }
+
+    local h1 = mount.split(Hello, {}, {
+      on_unmount = function()
+        counts[1] = counts[1] + 1
+      end,
+    })
+    h1.unmount()
+    h1.unmount() -- teardown is idempotent; the callback must be too
+    assert.equal(1, counts[1])
+
+    local h2 = mount.split(Hello, {}, {
+      on_unmount = function()
+        counts[2] = counts[2] + 1
+      end,
+    })
+    vim.api.nvim_win_close(h2.host_winid, true)
+    vim.wait(500, function()
+      return counts[2] > 0
+    end, 10)
+    assert.equal(1, counts[2])
+
+    local h3 = mount.floating(Hello, {}, {
+      width = 10,
+      height = 3,
+      on_unmount = function()
+        counts[3] = counts[3] + 1
+      end,
+    })
+    vim.api.nvim_win_close(h3.winid, true)
+    vim.wait(500, function()
+      return counts[3] > 0
+    end, 10)
+    assert.equal(1, counts[3])
+  end)
+
   it("split: entering the pane behind the float forwards focus to the app", function()
     local handle = mount.split(Hello, {}, {})
 

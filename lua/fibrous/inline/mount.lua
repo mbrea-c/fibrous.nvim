@@ -98,8 +98,11 @@ end
 -- autocmds, and build the handle. Callers supply the geometry logic:
 --   sync()        re-apply window geometry, then host.relayout()
 --   on_teardown() close this target's windows (buffer deletion is the host's)
+--   on_unmount() the embedder's notification, fired once after cleanup —
+--                teardown can start on nvim's side (:q on the pane or the
+--                root float), and whoever mounted the app must hear about it
 ---@return InlineAppHandle handle, fun() teardown
-local function wire(component, props, host, winid, group, attachments, sync, on_teardown)
+local function wire(component, props, host, winid, group, attachments, sync, on_teardown, on_unmount)
 	local root = runtime.create_root(component, props, { host = host })
 	root:render()
 
@@ -134,6 +137,9 @@ local function wire(component, props, host, winid, group, attachments, sync, on_
 		end
 		root:unmount()
 		on_teardown()
+		if on_unmount then
+			pcall(on_unmount)
+		end
 	end
 
 	local relayout_pending = false
@@ -195,6 +201,7 @@ end
 ---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer   root float zindex (default 50, nvim's float default); subwindow levels stack root+1
 ---@field border? string|string[]  nvim_open_win border for the root float
+---@field on_unmount? fun()  fired once after teardown, whoever initiated it (handle.unmount or :q on the app's windows)
 ---@field backdrop? boolean|integer  dim the editor behind the app: a full-screen, non-focusable float one z-level below the root (FibrousBackdrop + winblend; a number IS the blend, true = 60). NB nvim's compositor can't blend floats through a winblend float: normal windows behind the backdrop DIM, floats behind it (pane-anchored fibrous apps included) are hidden outright — the intended modal effect. Needs termguicolors to blend rather than block.
 
 -- Mount `component` as a standalone floating application.
@@ -320,8 +327,17 @@ function M.floating(component, props, opts)
 			end
 		end,
 	}
-	local handle =
-		wire(component, props, host, winid, group, { manager, interaction, close_backdrop }, sync, function() end)
+	local handle = wire(
+		component,
+		props,
+		host,
+		winid,
+		group,
+		{ manager, interaction, close_backdrop },
+		sync,
+		function() end,
+		opts.on_unmount
+	)
 	return handle
 end
 
@@ -331,6 +347,7 @@ end
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
 ---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer   root float zindex (default 10 — see M.window)
+---@field on_unmount? fun()  fired once after teardown, whoever initiated it (handle.unmount or :q on the app's windows)
 
 -- Open a native split pane and return its winid. The pane holds a throwaway
 -- scratch buffer; the root float over it does the real drawing.
@@ -379,6 +396,7 @@ function M.split(component, props, opts)
 			mouse = opts.mouse,
 			zindex = opts.zindex,
 			keys = opts.keys,
+			on_unmount = opts.on_unmount,
 		})
 
 	return handle
@@ -390,6 +408,7 @@ end
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
 ---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer  root float zindex; default 10. Pane-anchored apps are page furniture — the whole stack (root + subwindow levels, +1 each) stays below nvim's float default (50), so genuine floats (float-mounted fibrous apps, other plugins' popups) always render above them.
+---@field on_unmount? fun()  fired once after teardown, whoever initiated it (handle.unmount or :q on the app's windows)
 
 -- Mount `component` over a native split pane.
 ---@param component Component
@@ -502,7 +521,7 @@ function M.window(component, props, opts)
 		if vim.api.nvim_win_is_valid(host_winid) then
 			pcall(vim.api.nvim_win_close, host_winid, true)
 		end
-	end)
+	end, opts.on_unmount)
 
 	-- Closing the pane (:q, <C-w>q) unmounts the whole app; deferred because
 	-- windows can't be closed from inside WinClosed.
