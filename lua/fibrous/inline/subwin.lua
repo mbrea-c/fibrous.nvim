@@ -112,6 +112,8 @@ end
 ---@field zindex? integer  this level's float zindex; the mounts pass root+1 (see InlineWindowMountOpts for the stacking policy) and each nesting level stacks +1 so children always cover their container. Default 60 for standalone attaches.
 ---@field host_winid? integer  the app's ONE real window in the layout — the backing pane of a window/split mount; <C-w> in any subwindow replays against it. Defaults to root_winid (floating mounts). Threaded into nested levels.
 ---@field app_winid? integer  the top-level root float, where focus returns when a replayed window command goes nowhere. Defaults to root_winid; threaded into nested levels.
+---@field anchor_winid? integer  an INERT layout window to anchor subwindow floats to (relative="win"): the backing pane of a window/split mount. Nil (floating mounts) anchors relative="editor". Unlike host_winid this never defaults to root_winid: anchoring to a window with cursor activity is exactly the whole-float-redraw pathology (see reposition). Threaded into nested levels.
+---@field get_origin? fun(): integer[]  pane-anchored levels only: this manager's root offset relative to anchor_winid, {row, col}. The top level is the root float pinned at pane (0,0); a nested level is its container's last APPLIED offset, maintained by the parent manager. A function, never a win_get_position read: a float's reported position between a set_config and the next redraw is a stale composite (anchor + old position: the doubled-offset teleport).
 
 -- Attach a manager to one of `host`'s flush targets, whose buffer is shown in
 -- `root_winid` (the mount's root float, or — one level down — a container's
@@ -134,6 +136,13 @@ function M.attach(host, root_winid, opts)
 	-- command goes nowhere.
 	local host_winid = opts.host_winid or root_winid
 	local app_winid = opts.app_winid or root_winid
+	-- The float anchor: the inert backing pane when the mount has one (window/
+	-- split mounts), nil for floating mounts (editor anchoring). Deliberately
+	-- NOT defaulted to root_winid: see the anchoring note in reposition.
+	local anchor_winid = opts.anchor_winid
+	local get_origin = opts.get_origin or function()
+		return { 0, 0 }
+	end
 	local group = vim.api.nvim_create_augroup("FibrousInlineSubwin_" .. root_winid, { clear = true })
 
 	-- One float per live subwindow leaf, keyed by the fiber's host instance
@@ -564,27 +573,46 @@ function M.attach(host, root_winid, opts)
 		-- Only reconfigure when the visible geometry actually moved (see above):
 		-- an unchanged box under a busy root stays put, no redraw.
 		--
-		-- Anchored relative="editor" at (root origin + box cell), NOT
-		-- relative="win" to the root: nvim redraws a win-anchored float WHOLE
-		-- whenever its buffer changed in the same cycle its ANCHOR window had any
-		-- redraw-worthy activity — a plain cursor move suffices (raw nvim 0.12,
-		-- no fibrous involved). Hover painting toggles one extmark in a
-		-- container's buffer per boundary crossing, so hjkl over role rows
-		-- (weave's tool calls) was a full-float terminal repaint per keystroke —
-		-- the requests.md full-redraw regression; same for streaming while the
-		-- user navigates. Editor anchoring keeps those redraws line-granular.
-		-- The origin is part of the geometry memo, so any sync after the root
-		-- moved reconfigures the float; mount relayouts on WinResized/VimResized,
-		-- which covers layout-driven moves between flushes.
-		local origin = vim.api.nvim_win_get_position(root_winid)
+		-- NEVER anchored relative="win" to the ROOT: nvim redraws a win-anchored
+		-- float WHOLE whenever its buffer changed in the same cycle its ANCHOR
+		-- window had any redraw-worthy activity: a plain cursor move suffices
+		-- (raw nvim 0.12, no fibrous involved). Hover painting toggles one
+		-- extmark in a container's buffer per boundary crossing, so hjkl over
+		-- role rows (weave's tool calls) was a full-float terminal repaint per
+		-- keystroke: the requests.md full-redraw regression; same for streaming
+		-- while the user navigates.
+		--
+		-- Pane-backed mounts anchor to the backing PANE instead: it is inert (a
+		-- scratch buffer nobody edits, no cursor ever rests there), so the
+		-- pathology cannot trigger, and nvim recomputes the float's position
+		-- from the pane during every redraw: the floats ride layout moves
+		-- (terminal resize, new splits) ATOMICALLY, no stale frame between the
+		-- move and the deferred relayout.
+		--
+		-- The pane-relative origin comes from get_origin (the parent's last
+		-- APPLIED offset; {0,0} at the top, where the root float is pinned to
+		-- the pane), NEVER from nvim_win_get_position on a float: between a
+		-- set_config and the next redraw a float reports a stale composite
+		-- (anchor position + its old position). Editor anchoring read exactly
+		-- that lie: every WinResized-triggered sync (terminal resize, the pum
+		-- info popup resizing per keystroke) planted the subwindows at roughly
+		-- DOUBLE the pane offset for a frame, then snapped them back: the
+		-- transcript's teleport-right-and-back.
+		-- The origin joins the geometry memo either way, so a sync after the
+		-- root moved relative to its anchor reconfigures the float; mount
+		-- relayouts on WinResized/VimResized cover size changes between flushes.
+		local origin = anchor_winid and get_origin() or vim.api.nvim_win_get_position(root_winid)
 		local geo = table.concat(
 			{ origin[1], origin[2], vis_top, vis_left, vis_right - vis_left + 1, vis_bot - vis_top + 1 },
 			":"
 		)
 		local geo_changed = entry.applied_geo ~= geo
+		-- the anchor-relative offset a nested manager's get_origin hands out
+		entry.applied_origin = { origin[1] + vis_top, origin[2] + vis_left }
 		if geo_changed then
 			vim.api.nvim_win_set_config(entry.winid, {
-				relative = "editor",
+				relative = anchor_winid and "win" or "editor",
+				win = anchor_winid,
 				row = origin[1] + vis_top,
 				col = origin[2] + vis_left,
 				width = vis_right - vis_left + 1,
@@ -1125,10 +1153,12 @@ function M.attach(host, root_winid, opts)
 			end
 		end
 		local winid = vim.api.nvim_open_win(bufnr, false, {
-			-- editor-anchored like reposition (never relative="win" to the root:
-			-- see the anchoring note there); born hidden at a placeholder cell,
-			-- reposition assigns the real geometry
-			relative = "editor",
+			-- anchored like reposition (pane when the mount has one, editor
+			-- otherwise; never relative="win" to the root, see the anchoring
+			-- note there); born hidden at a placeholder cell, reposition
+			-- assigns the real geometry
+			relative = anchor_winid and "win" or "editor",
+			win = anchor_winid,
 			row = 0,
 			col = 0,
 			width = math.max(node.content.w, 1),
@@ -1231,6 +1261,12 @@ function M.attach(host, root_winid, opts)
 				keys = opts.keys,
 				host_winid = host_winid,
 				app_winid = app_winid,
+				anchor_winid = anchor_winid,
+				-- the container's own anchor-relative offset, as last applied by
+				-- THIS manager's reposition: never a win_get_position read
+				get_origin = function()
+					return entry.applied_origin or { 0, 0 }
+				end,
 			})
 			entry.child_interact =
 				interact.attach(host, winid, opts.mouse, entry.child_manager, entry.child_target, opts.keys, props.anchor)

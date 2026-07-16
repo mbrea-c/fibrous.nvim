@@ -105,6 +105,106 @@ describe("inline.mount", function()
     handle.unmount()
   end)
 
+  it("split: subwindow floats anchor to the inert pane, never to a float's read position", function()
+    -- The anchoring contract for pane-backed mounts. relative="win" to the
+    -- PANE: it is inert (no cursor, no buffer edits), so the whole-float
+    -- redraw pathology can't trigger, and nvim moves the floats with the
+    -- pane atomically on layout changes. And the offset must come from the
+    -- manager's own applied geometry, never nvim_win_get_position on a
+    -- float: between a set_config and the next redraw a float reports a
+    -- stale composite (anchor + old position), which planted subwindows at
+    -- roughly DOUBLE the pane offset for a frame per WinResized-triggered
+    -- sync: the transcript's teleport-right-and-back while typing with the
+    -- pum open (its info float resizes per keystroke) and while resizing.
+    local ui = require("fibrous.inline.components")
+    local function App(_, props)
+      local children = {}
+      for i = 1, (props.headers or 1) do
+        children[#children + 1] = { comp = text, props = { text = "header " .. i } }
+      end
+      children[#children + 1] = {
+        comp = ui.container,
+        props = { height = 3 },
+        children = { { comp = text, props = { text = "inside" } } },
+      }
+      return { comp = col, props = {}, children = children }
+    end
+
+    local handle = mount.split(App, { headers = 1 }, { split = { size = 20 }, mode = "scroll" })
+    local sub
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if vim.w[w].fibrous_anchor == handle.winid then
+        sub = w
+      end
+    end
+    assert.is_not_nil(sub)
+
+    local cfg = vim.api.nvim_win_get_config(sub)
+    assert.equal("win", cfg.relative)
+    assert.equal(handle.host_winid, cfg.win) -- the pane, NOT the root float
+    assert.equal(1, cfg.row) -- pane-relative: one header above
+    assert.equal(0, cfg.col)
+
+    -- Open the lie window: re-apply the root float's config exactly like
+    -- mount's sync() does, then reposition through a layout change. The
+    -- subwindow's offset must stay pane-relative: on the win_get_position
+    -- diet it came out pane-absolute (the doubled offset).
+    local root_cfg = vim.api.nvim_win_get_config(handle.winid)
+    vim.api.nvim_win_set_config(handle.winid, {
+      relative = "win",
+      win = root_cfg.win,
+      row = root_cfg.row,
+      col = root_cfg.col,
+      width = root_cfg.width,
+      height = root_cfg.height,
+    })
+    handle.set_props({ headers = 2 })
+
+    -- unkeyed children re-indexed: the container fiber (and its float) was
+    -- recreated: find it again; creation goes through the same reposition
+    sub = nil
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if vim.w[w].fibrous_anchor == handle.winid then
+        sub = w
+      end
+    end
+    assert.is_not_nil(sub)
+    cfg = vim.api.nvim_win_get_config(sub)
+    assert.equal("win", cfg.relative)
+    assert.equal(handle.host_winid, cfg.win)
+    assert.equal(2, cfg.row) -- moved one row down, still pane-relative
+    assert.equal(0, cfg.col)
+
+    handle.unmount()
+  end)
+
+  it("floating: subwindow floats stay editor-anchored (no pane exists)", function()
+    local ui = require("fibrous.inline.components")
+    local function App()
+      return {
+        comp = col,
+        props = {},
+        children = {
+          {
+            comp = ui.container,
+            props = { height = 3 },
+            children = { { comp = text, props = { text = "inside" } } },
+          },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 20, height = 6 })
+    local sub
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if vim.w[w].fibrous_anchor == handle.winid then
+        sub = w
+      end
+    end
+    assert.is_not_nil(sub)
+    assert.equal("editor", vim.api.nvim_win_get_config(sub).relative)
+    handle.unmount()
+  end)
+
   it("resize-sync autocmds are wired while mounted and cleared on unmount", function()
     local handle = mount.split(Hello, {}, {})
 

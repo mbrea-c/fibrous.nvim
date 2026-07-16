@@ -229,7 +229,9 @@ describe("bench.termdraw", function()
     -- window the cursor is moving in, nvim redraws the float WHOLE when its
     -- buffer changed in the same cycle (~2.7 KB per j on a transcript-sized
     -- float; reproduced in raw nvim, no fibrous). Subwindow floats anchor
-    -- relative="editor" now, which keeps the redraw line-granular.
+    -- relative="editor" (floating mounts, as here) or to the mount's inert
+    -- backing pane, never to a window with cursor activity, which keeps the
+    -- redraw line-granular.
     --
     -- Two things hid this from the guard above: its container holds only inert
     -- labels (no hover target to cross), and it sends all ten j's in ONE
@@ -291,6 +293,84 @@ describe("bench.termdraw", function()
         hovering - inert,
         inert,
         hovering
+      )
+    )
+  end)
+
+  it("a WinResized during a damage flush leaves pane-anchored floats alone", function()
+    -- Regression guard for the teleport-right-and-back: on a pane-backed
+    -- mount, a WinResized (any float resizing fires it; the native pum's
+    -- completeopt+=popup info float does so per keystroke) schedules mount's
+    -- sync(), which re-applies the root float's config. Between that
+    -- set_config and the next redraw, nvim_win_get_position on the root
+    -- reports a stale composite (anchor + old position), so an origin read
+    -- off the root planted every subwindow at roughly DOUBLE the pane offset
+    -- and snapped it back a flush later: two full-float repaints (~2.3 KB
+    -- per keystroke on this scene) and a visible jump, per keystroke, while
+    -- typing with the pum open. Pane-anchored floats take their origin from
+    -- the manager's own applied geometry instead, so the same event is
+    -- position-silent. Self-calibrating: the same damage flushes without the
+    -- WinResized are the floor.
+    local PRE = [[
+      local mount = require("fibrous.inline.mount")
+      local ui = require("fibrous.inline.components")
+      local function rows(n)
+        local k = {}
+        for i = 1, n do
+          k[i] = { comp = ui.label, props = { text = ("static row %d, lorem ipsum dolor"):format(i) } }
+        end
+        return k
+      end
+      local function App(_, props)
+        return { comp = ui.col, props = {}, children = {
+          { comp = ui.label, props = { text = "typed: " .. string.rep("x", props.n or 0) } },
+          { comp = ui.container, props = { height = 14, scroll_x = false }, children = rows(30) },
+        } }
+      end
+      local handle = mount.split(App, { n = 0 }, { split = { direction = "vertical", position = "right", size = 46 }, mode = "scroll" })
+      local fb = vim.api.nvim_create_buf(false, true)
+      local fw = vim.api.nvim_open_win(fb, false, { relative = "editor", row = 18, col = 2, width = 8, height = 1 })
+      local i = 0
+    ]]
+    local KEYS = 8
+    local function per_key(resizing)
+      local steps = { { label = "settle", wait_ms = 400 } }
+      for _ = 1, KEYS do
+        steps[#steps + 1] = { label = "key", send = "p", wait_ms = 150 }
+      end
+      local res = termdraw.drive({
+        rtp = { vim.fn.getcwd() },
+        cols = 60,
+        rows = 20,
+        init = PRE .. ([[
+          vim.keymap.set("n", "p", function()
+            i = i + 1
+            handle.set_props({ n = i })
+            if %s then
+              vim.api.nvim_win_set_config(fw, { relative = "editor", row = 18, col = 2, width = 8 + (i %% 2) * 4, height = 1 })
+            end
+          end)
+        ]]):format(tostring(resizing)),
+        steps = steps,
+      })
+      local total = 0
+      for _, s in ipairs(res.steps) do
+        if s.label == "key" then
+          total = total + s.bytes
+        end
+      end
+      return total / KEYS
+    end
+
+    local damage_only = per_key(false)
+    local with_resize = per_key(true)
+
+    assert.is_true(
+      with_resize - damage_only < 300,
+      ("a WinResized beside a damage flush costs too much: %.0f B/keystroke (damage %.0f, +resize %.0f)"):format(
+        with_resize - damage_only,
+        damage_only,
+        with_resize
       )
     )
   end)
