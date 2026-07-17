@@ -938,9 +938,19 @@ function M.attach(host, root_winid, opts)
 		end
 		entry.map = map
 
+		-- capture_cursor (requests.md): the widget HOLDS the cursor — edge
+		-- h/j/k/l and <C-d>/<C-u> stay native motions inside the float instead
+		-- of stepping out into the page; <Esc> (and <C-w>, which acts on the
+		-- host pane anyway) remain the ways out. Off by default; a notebook
+		-- cell is the kind of widget that wants deliberate exits only. Read at
+		-- fire time from the latest committed props, like every handler here.
+		local function captures(e)
+			return (e.node.props or {}).capture_cursor and true or false
+		end
+
 		for _, key in ipairs({ "h", "j", "k", "l" }) do
 			map("n", key, function()
-				if vim.api.nvim_get_current_win() == entry.winid and at_edge(entry, key) then
+				if vim.api.nvim_get_current_win() == entry.winid and at_edge(entry, key) and not captures(entry) then
 					exit_dir(entry, key)
 				else
 					vim.cmd("normal! " .. vim.v.count1 .. key)
@@ -1002,11 +1012,16 @@ function M.attach(host, root_winid, opts)
 		end)
 		-- Page motions hand off to the root so they are never trapped in a
 		-- one-line input — EXCEPT in a container, which is a scrolling region
-		-- in its own right: there they stay native (the float scrolls).
+		-- in its own right: there they stay native (the float scrolls). A
+		-- capturing widget keeps them native too (its own float scrolls).
 		if entry.node.subwin ~= "container" then
 			for _, key in ipairs({ "<C-d>", "<C-u>" }) do
 				map("n", key, function()
-					if vim.api.nvim_get_current_win() == entry.winid and vim.api.nvim_win_is_valid(root_winid) then
+					if
+						vim.api.nvim_get_current_win() == entry.winid
+						and vim.api.nvim_win_is_valid(root_winid)
+						and not captures(entry)
+					then
 						vim.api.nvim_set_current_win(root_winid)
 					end
 					vim.cmd("normal! " .. vim.api.nvim_replace_termcodes(key, true, false, true))
