@@ -43,22 +43,30 @@ local function open_root_float(bufnr, cfg)
 	return winid
 end
 
--- A fixed-mode root has nothing to scroll to (the canvas IS the viewport),
--- but nvim happily scrolls any window until its last line hits the top: pin
--- the view. Wired BEFORE subwin.attach — autocmds run in definition order,
--- so the manager's own WinScrolled resync sees the restored view and the
--- floats never swim.
+-- Pin the root's view on the locked axes. A fixed-mode root has nothing to
+-- scroll to at all (the canvas IS the viewport), and even a scroll-mode root
+-- has no horizontal content to reveal (its canvas lays out at exactly the
+-- viewport width) — but nvim happily scrolls any window until its last line
+-- hits the top, or sideways off its floats. Wired BEFORE subwin.attach —
+-- autocmds run in definition order, so the manager's own WinScrolled resync
+-- sees the restored view and the floats never swim.
 ---@param winid integer  the root float
 ---@param group integer
+---@param axes { x: boolean, y: boolean }  which axes to PIN
 ---@return fun() restore  pin the view NOW (call it after a relayout too)
-local function pin_view(winid, group)
+local function pin_view(winid, group, axes)
 	-- A resize hands the cursor no margin to push the view around with: nvim
 	-- shrinking the window would otherwise scroll the root to keep the cursor
 	-- (plus the user's global 'scrolloff') on screen, and that resize-time
 	-- scroll delivers no WinScrolled the handler below can catch — the panel
 	-- stayed scrolled until a manual scroll. sync() re-pins directly besides.
-	vim.wo[winid].scrolloff = 0
-	vim.wo[winid].sidescrolloff = 0
+	-- Only the pinned axes: a y-scrollable root keeps the user's 'scrolloff'.
+	if axes.y then
+		vim.wo[winid].scrolloff = 0
+	end
+	if axes.x then
+		vim.wo[winid].sidescrolloff = 0
+	end
 
 	local pending = false
 	local function restore()
@@ -68,8 +76,15 @@ local function pin_view(winid, group)
 		end
 		vim.api.nvim_win_call(winid, function()
 			local v = vim.fn.winsaveview()
-			if v.topline ~= 1 or (v.leftcol or 0) ~= 0 then
-				vim.fn.winrestview({ topline = 1, leftcol = 0 })
+			local fix = {}
+			if axes.y and v.topline ~= 1 then
+				fix.topline = 1
+			end
+			if axes.x and (v.leftcol or 0) ~= 0 then
+				fix.leftcol = 0
+			end
+			if next(fix) then
+				vim.fn.winrestview(fix)
 			end
 		end)
 	end
@@ -91,6 +106,27 @@ local function pin_view(winid, group)
 		end,
 	})
 	return restore
+end
+
+-- Which root axes are LOCKED, from the mount opts. `mode` sets the defaults:
+-- "fixed" pins both (the canvas is the viewport), "scroll" frees the
+-- vertical axis only — a scroll-mode root lays its canvas out at exactly the
+-- viewport width, so a horizontal scroll can never reveal content, it only
+-- drags the page off its floats (requests.md: the perijove page could be
+-- dragged sideways). opts.scroll_x / opts.scroll_y override either axis,
+-- mirroring the container subwindow props of the same names.
+---@param opts { mode?: string, scroll_x?: boolean, scroll_y?: boolean }
+---@return { x: boolean, y: boolean } pinned
+local function pinned_axes(opts)
+	local sx = opts.scroll_x
+	if sx == nil then
+		sx = false
+	end
+	local sy = opts.scroll_y
+	if sy == nil then
+		sy = opts.mode == "scroll"
+	end
+	return { x = not sx, y = not sy }
 end
 
 -- Shared mount plumbing: create the root, wire coalesced resize sync (one
@@ -197,6 +233,8 @@ end
 ---@field row? integer      default centered
 ---@field col? integer      default centered
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field scroll_x? boolean  free the root's horizontal axis; default false (a scroll-mode canvas lays out at the viewport width, so x-scroll only drags the page off its floats)
+---@field scroll_y? boolean  free the root's vertical axis; default follows mode ("scroll" frees it, "fixed" pins it)
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
 ---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer   root float zindex (default 50, nvim's float default); subwindow levels stack root+1
@@ -287,9 +325,10 @@ function M.floating(component, props, opts)
 		border = opts.border,
 	})
 	local group = vim.api.nvim_create_augroup("FibrousInlineFloat_" .. winid, { clear = true })
+	local axes = pinned_axes(opts)
 	local pin_restore
-	if not scroll then
-		pin_restore = pin_view(winid, group)
+	if axes.x or axes.y then
+		pin_restore = pin_view(winid, group, axes)
 	end
 	manager = subwin.attach(host, winid, { mouse = opts.mouse, zindex = zindex + 1, keys = opts.keys })
 	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys, opts.anchor)
@@ -344,6 +383,8 @@ end
 ---@class InlineSplitOpts
 ---@field split? SplitOpts   direction/position/size of the host pane; default vertical/left/40
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field scroll_x? boolean  free the root's horizontal axis; default false (a scroll-mode canvas lays out at the viewport width, so x-scroll only drags the page off its floats)
+---@field scroll_y? boolean  free the root's vertical axis; default follows mode ("scroll" frees it, "fixed" pins it)
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
 ---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer   root float zindex (default 10 — see M.window)
@@ -393,6 +434,8 @@ function M.split(component, props, opts)
 		M.window(component, props, {
 			winid = host_winid,
 			mode = opts.mode,
+			scroll_x = opts.scroll_x,
+			scroll_y = opts.scroll_y,
 			mouse = opts.mouse,
 			zindex = opts.zindex,
 			keys = opts.keys,
@@ -406,6 +449,8 @@ end
 ---@class InlineWindowMountOpts
 ---@field winid integer which window to mount on
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field scroll_x? boolean  free the root's horizontal axis; default false (a scroll-mode canvas lays out at the viewport width, so x-scroll only drags the page off its floats)
+---@field scroll_y? boolean  free the root's vertical axis; default follows mode ("scroll" frees it, "fixed" pins it)
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
 ---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer  root float zindex; default 10. Pane-anchored apps are page furniture — the whole stack (root + subwindow levels, +1 each) stays below nvim's float default (50), so genuine floats (float-mounted fibrous apps, other plugins' popups) always render above them.
@@ -468,9 +513,10 @@ function M.window(component, props, opts)
 		zindex = zindex,
 	})
 	local group = vim.api.nvim_create_augroup("FibrousInlineSplit_" .. host_winid, { clear = true })
+	local axes = pinned_axes(opts)
 	local pin_restore
-	if not scroll then
-		pin_restore = pin_view(winid, group)
+	if axes.x or axes.y then
+		pin_restore = pin_view(winid, group, axes)
 	end
 	-- host_winid: <C-w> anywhere in the app (root or nested floats) acts on
 	-- the backing pane, the app's ONE real window in the layout.

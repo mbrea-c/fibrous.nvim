@@ -68,6 +68,61 @@ describe("inline.mount", function()
     handle.unmount()
   end)
 
+  it("scroll mode: topline scrolls free, leftcol snaps back (x locked by default)", function()
+    local function App()
+      local children = {}
+      for i = 1, 6 do
+        children[i] = { comp = text, props = { text = "line " .. i } }
+      end
+      return { comp = col, props = {}, children = children }
+    end
+    local handle = mount.floating(App, {}, { width = 8, height = 3, mode = "scroll" })
+
+    vim.api.nvim_win_call(handle.winid, function()
+      vim.fn.winrestview({ topline = 2, leftcol = 3 })
+    end)
+    -- deterministic re-pin through the same restore the WinScrolled path
+    -- defers (the subwin specs drive scroll resyncs the same way)
+    handle.relayout()
+
+    local v = vim.api.nvim_win_call(handle.winid, vim.fn.winsaveview)
+    assert.equal(0, v.leftcol) -- sideways drag undone: no content ever lives there
+    assert.equal(2, v.topline) -- the vertical scroll is the mode's whole point
+
+    handle.unmount()
+  end)
+
+  it("scroll_x = true frees the horizontal axis explicitly", function()
+    local function App()
+      return { comp = text, props = { text = "wide" } }
+    end
+    local handle = mount.floating(App, {}, { width = 8, height = 3, mode = "scroll", scroll_x = true })
+
+    vim.api.nvim_win_call(handle.winid, function()
+      vim.fn.winrestview({ leftcol = 2 })
+    end)
+    vim.wait(100)
+    local v = vim.api.nvim_win_call(handle.winid, vim.fn.winsaveview)
+    assert.equal(2, v.leftcol)
+
+    handle.unmount()
+  end)
+
+  it("fixed mode still pins both axes", function()
+    local handle = mount.floating(Hello, {}, { width = 10, height = 3 })
+
+    vim.api.nvim_win_call(handle.winid, function()
+      vim.fn.winrestview({ topline = 2, leftcol = 2 })
+    end)
+    handle.relayout()
+
+    local v = vim.api.nvim_win_call(handle.winid, vim.fn.winsaveview)
+    assert.equal(1, v.topline)
+    assert.equal(0, v.leftcol)
+
+    handle.unmount()
+  end)
+
   it("split: opens a pane fully covered by the root float", function()
     local function App()
       return { comp = text, props = { text = "sidebar" } }
