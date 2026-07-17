@@ -174,6 +174,78 @@ function M.checkbox(_, props)
   }
 end
 
+-- The `image` host leaf: internal — apps go through M.image below, which owns
+-- provider/spec resolution and the terminal-protocol lifecycle.
+local image_leaf = { __host = "image" }
+
+-- Inline image (kitty Unicode placeholders; see fibrous.image). Content is
+-- `b64` (base64 PNG, ipynb-style whitespace tolerated) or `data` (raw PNG
+-- bytes). Sizing: explicit `cols`/`rows` win (one given, the other derives
+-- from the aspect ratio); otherwise natural size = pixel dims / cell size,
+-- scaled down aspect-preserving to fit `max_cols`/`max_rows`. When the
+-- provider resolves to "text" (unsupported terminal) or the content cannot be
+-- decoded, renders `alt` styled as a comment instead — nothing regresses on
+-- terminals without image support.
+--
+-- Lifecycle (the animation pattern): the spec is resolved at render, memoized
+-- on content + sizing props; use_effect keyed on the image id retains on
+-- mount / releases on unmount, so the same content shown N times transmits
+-- once and deletes after the last unmount.
+---@param ctx table
+---@param props { b64?: string, data?: string, cols?: integer, rows?: integer, max_cols?: integer, max_rows?: integer, alt?: string }
+function M.image(ctx, props)
+  local image = require("fibrous.image")
+  local memo = ctx.use_ref()
+  local m = memo.current
+  local same = m
+    and m.content == (props.b64 or props.data)
+    and m.cols == props.cols
+    and m.rows == props.rows
+    and m.max_cols == props.max_cols
+    and m.max_rows == props.max_rows
+  if not same then
+    local spec, err = image.spec(props)
+    m = {
+      content = props.b64 or props.data,
+      cols = props.cols,
+      rows = props.rows,
+      max_cols = props.max_cols,
+      max_rows = props.max_rows,
+      spec = spec,
+      err = err,
+    }
+    memo.current = m
+  end
+  local spec = m.spec
+
+  ctx.use_effect(function()
+    if not spec then
+      return
+    end
+    image.retain(spec)
+    return function()
+      image.release(spec)
+    end
+  end, { spec and spec.id or false })
+
+  if not spec then
+    return {
+      comp = M.text,
+      props = node_props(props, {
+        text = props.alt or "<image>",
+        wrap = false,
+        style = props.style or { text_hl = "Comment" },
+      }),
+    }
+  end
+  return {
+    comp = image_leaf,
+    props = node_props(props, {
+      image = { id = spec.id, hl = spec.hl, cols = spec.cols, rows = spec.rows },
+    }),
+  }
+end
+
 -- The markdown widget: renders markdown source as rich, interactive blocks. A
 -- stateful builtin whose body lives in fibrous.markdown.component (next to the
 -- parser); this is a lazy forwarder so importing this module never pulls the

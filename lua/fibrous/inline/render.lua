@@ -7,13 +7,18 @@
 local Canvas = require("fibrous.inline.canvas")
 
 local width = require("fibrous.inline.width")
-local char_width, str_width = width.char, width.str
+local char_width, str_width, clusters = width.char, width.str, width.clusters
 
 local M = {}
 
 local CONTAINERS = { col = true, row = true }
 
--- Crop `str` to at most `max_w` display cells.
+-- fibrous.image.kitty.cell, required on first image paint so apps without
+-- images never load the image modules (the markdown-widget precedent).
+local kitty_cell
+
+-- Crop `str` to at most `max_w` display cells. Cluster-wise, so a combining
+-- char never separates from its head at the crop point.
 ---@param str string
 ---@param max_w integer
 ---@return string
@@ -22,7 +27,7 @@ local function crop(str, max_w)
 		return str
 	end
 	local out, w = {}, 0
-	for ch in str:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+	for ch in clusters(str) do
 		local cw = char_width(ch)
 		if w + cw > max_w then
 			break
@@ -164,6 +169,28 @@ local function visit(c, node)
 				end
 			else
 				c:text(content.x, y, crop(line, content.w), text_hl)
+			end
+		end
+	elseif node.kind == "image" then
+		-- Paint the placeholder grid procedurally: one self-describing cluster
+		-- per cell (fibrous.image.kitty.cell), the id-encoding hl group on every
+		-- cell, clipped by the content box. Each cell names its own (row, col),
+		-- so cropping N columns simply shows N fewer image columns. One extmark
+		-- per row falls out of the row_spans merge like any other text.
+		local img = props.image
+		if img then
+			if not kitty_cell then
+				kitty_cell = require("fibrous.image.kitty").cell
+			end
+			local content = node.content
+			local rows = math.min(img.rows, content.h)
+			local cols = math.min(img.cols, content.w)
+			for r = 0, rows - 1 do
+				local y = content.y + r
+				local x = content.x
+				for cl = 0, cols - 1 do
+					c:put(x + cl, y, kitty_cell(r, cl), img.hl, 1)
+				end
 			end
 		end
 	elseif CONTAINERS[node.kind] then

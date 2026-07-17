@@ -13,7 +13,8 @@
 -- and per-cell tables made allocation dominate. `text` takes a byte-indexed
 -- fast path for printable-ASCII strings (the overwhelmingly common case).
 
-local char_width = require("fibrous.inline.width").char
+local width = require("fibrous.inline.width")
+local char_width, clusters = width.char, width.clusters
 
 ---@class Canvas
 ---@field w integer
@@ -40,11 +41,6 @@ function M.new(w, h)
 		ch[y], cw[y], hl[y] = cr, wr, {}
 	end
 	return setmetatable({ w = w, h = h, ch = ch, cw = cw, hl = hl }, Canvas)
-end
-
--- Iterate the UTF-8 characters of `s`.
-local function chars(s)
-	return s:gmatch("[%z\1-\127\194-\244][\128-\191]*")
 end
 
 -- Write one char into cell (x, y); out-of-bounds writes are ignored.
@@ -114,7 +110,10 @@ function Canvas:text(x, y, str, hl)
 		return
 	end
 
-	for ch in chars(str) do
+	-- Cluster-wise: a combining char composed onto its head must land in the
+	-- SAME cell (a lone combining char has width 1, so per-codepoint iteration
+	-- would smear it into its own cell).
+	for ch in clusters(str) do
 		local w = char_width(ch)
 		if x + w > self.w then
 			if x >= 0 and x < self.w then

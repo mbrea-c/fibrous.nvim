@@ -297,6 +297,14 @@ function measure(node, avail_w)
 			measure(node.inner, content_avail)
 			node.content_size = { w = node.inner.size.w, h = node.inner.size.h }
 		end
+	elseif node.kind == "image" then
+		-- The placeholder grid's size in cells, resolved by the component
+		-- (fibrous.image.spec). Fixed content: a narrower assignment clips at
+		-- paint time (each placeholder cell self-describes its image position,
+		-- so right-edge clipping degrades gracefully). This branch is the seam
+		-- for aspect-aware fit-to-available-width measuring later.
+		local img = props.image
+		node.content_size = { w = img and img.cols or 0, h = img and img.rows or 0 }
 	elseif CONTAINERS[node.kind] then
 		local children = node.children or {}
 		local gap = props.gap or 0

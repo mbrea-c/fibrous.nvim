@@ -59,7 +59,7 @@ local CONTAINERS = { col = true, row = true }
 -- subwin.lua manages — the node carries `subwin` so the manager can find it.
 -- container is the multi-buffer boundary: a subwindow leaf here, whose
 -- CHILDREN build into a separate tree flushed to the container's own buffer.
-local LEAVES = { text = true, text_input = true, raw_buffer = true, container = true }
+local LEAVES = { text = true, text_input = true, raw_buffer = true, container = true, image = true }
 
 -- One namespace for all inline hosts; each host only ever clears its own buffer.
 local ns = vim.api.nvim_create_namespace("fibrous_inline")
@@ -222,6 +222,12 @@ local function build_node(fiber, ctx)
 			node.text = ("\n"):rep(count - 1)
 			node._rb_count = count
 		end
+	elseif tag == "image" then
+		-- A first-class leaf (node.kind = "image", already set from the tag):
+		-- props.image carries the RESOLVED display spec ({ id, hl, cols, rows },
+		-- produced by fibrous.image.spec inside ui.image). Layout measures the
+		-- placeholder grid, render paints it; the terminal-protocol lifecycle
+		-- stays in the component's use_effect, not in the host.
 	else
 		node.kind = "text"
 		node.text = props.text or ""
