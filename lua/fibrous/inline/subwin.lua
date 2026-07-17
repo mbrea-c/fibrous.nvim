@@ -339,17 +339,20 @@ function M.attach(host, root_winid, opts)
 	end
 
 	-- Copy the sub buffer's queryable highlights onto the mirror region (only
-	-- for render="focus", where the mirror is looked at). Two sources cover a
+	-- for render="focus", where the mirror is looked at). Three sources cover a
 	-- typical buffer almost completely:
 	--   * persistent extmarks — diagnostics, LSP semantic tokens, inlay-hint
 	--     and plugin marks; anything nvim_buf_get_extmarks returns. hl_group
 	--     spans translate through entry.mirror_map (wrap-aware).
 	--   * regex :syntax — sampled per cell with synID when the buffer declares
 	--     a syntax (b:current_syntax), compressed into runs.
-	-- NOT copyable, by nvim design: ephemeral decoration-provider highlights
-	-- (treesitter's, indent guides, ...) — they exist only during a redraw.
-	-- Layout-changing features (conceal, inline virt_text, folds) are not
-	-- modeled either; the mirror shows buffer text.
+	--   * treesitter — its decoration-provider marks are ephemeral (they exist
+	--     only during a redraw, never queryable), but when a highlighter is
+	--     ACTIVE on the buffer the same captures recompute from the parse tree:
+	--     the highlights query runs per mirrored line, injections included.
+	-- Still not modeled: other decoration providers (indent guides, ...) and
+	-- layout-changing features (conceal, inline virt_text, folds) — the mirror
+	-- shows buffer text.
 	local function transcribe(entry)
 		local c = entry.node.content
 		entry.ns = entry.ns or vim.api.nvim_create_namespace("fibrous_inline_mirror_" .. entry.winid)
@@ -362,16 +365,18 @@ function M.attach(host, root_winid, opts)
 		local map = entry.mirror_map or {}
 		local ts = vim.bo[entry.bufnr].tabstop
 		local syn = vim.b[entry.bufnr].current_syntax
+		local ts_hl = vim.treesitter.highlighter.active[entry.bufnr]
 
-		-- synID sampling costs milliseconds per widget: cache whole-line runs
-		-- keyed by changedtick + syntax name, so flush frames over an unchanged
-		-- buffer only re-place extmarks. Runs are absolute cells over the full
-		-- line (window-independent): wrap continuation rows and later
-		-- repositions all reuse them.
+		-- synID sampling and treesitter query runs cost milliseconds per
+		-- widget: cache whole-line runs keyed by changedtick (+ source
+		-- presence), so flush frames over an unchanged buffer only re-place
+		-- extmarks. Runs are absolute cells over the full line
+		-- (window-independent): wrap continuation rows and later repositions
+		-- all reuse them.
 		local tick = vim.api.nvim_buf_get_changedtick(entry.bufnr)
 		local cache = entry.syn_cache
-		if not cache or cache.tick ~= tick or cache.syntax ~= syn then
-			cache = { tick = tick, syntax = syn, rows = {} }
+		if not cache or cache.tick ~= tick or cache.syntax ~= syn or cache.has_ts ~= (ts_hl ~= nil) then
+			cache = { tick = tick, syntax = syn, has_ts = ts_hl ~= nil, rows = {}, ts_rows = {} }
 			entry.syn_cache = cache
 		end
 		local function syn_runs(lnum, sline)
@@ -404,6 +409,58 @@ function M.attach(host, root_winid, opts)
 				end
 			end)
 			cache.rows[lnum] = runs
+			return runs
+		end
+
+		-- Treesitter runs for one buffer line (1-based lnum), from the ACTIVE
+		-- highlighter's language tree: parse the row, then run each language's
+		-- highlights query over it — the same captures the float would show,
+		-- injections included. Cells are absolute over the full line, like
+		-- syn_runs. Priorities keep the capture order above the syntax runs, and
+		-- an explicit (#set! priority n) offsets within that band.
+		local function ts_runs(lnum, sline)
+			local runs = cache.ts_rows[lnum]
+			if runs then
+				return runs
+			end
+			runs = {}
+			cache.ts_rows[lnum] = runs
+			local row = lnum - 1
+			local ltree_root = ts_hl.tree
+			ltree_root:parse({ row, row + 1 })
+			local function visit(ltree)
+				local lang = ltree:lang()
+				local query = vim.treesitter.query.get(lang, "highlights")
+				if query then
+					for _, tstree in pairs(ltree:trees()) do
+						local root = tstree:root()
+						local sr, _, er = root:range()
+						if sr <= row and er >= row then
+							for capture, node, metadata in query:iter_captures(root, entry.bufnr, row, row + 1) do
+								local name = query.captures[capture]
+								if name ~= "spell" and name ~= "nospell" and name ~= "conceal" and name:sub(1, 1) ~= "_" then
+									local nsr, nsc, ner, nec = node:range()
+									local s_byte = nsr < row and 0 or nsc
+									local e_byte = ner > row and #sline or nec
+									if s_byte < e_byte then
+										local mprio = (metadata[capture] or {}).priority or metadata.priority
+										runs[#runs + 1] = {
+											s = width.str(sline:sub(1, s_byte)),
+											e = width.str(sline:sub(1, e_byte)),
+											hl = "@" .. name .. "." .. lang,
+											prio = 4100 + (tonumber(mprio) or 100),
+										}
+									end
+								end
+							end
+						end
+					end
+				end
+				for _, child in pairs(ltree:children()) do
+					visit(child)
+				end
+			end
+			visit(ltree_root)
 			return runs
 		end
 
@@ -456,6 +513,16 @@ function M.attach(host, root_winid, opts)
 						local e = math.min(run.e, m.cell0 + c.w)
 						if s < e then
 							mark(i, s - m.cell0, e - m.cell0, run.hl, 4100)
+						end
+					end
+				end
+
+				if ts_hl then
+					for _, run in ipairs(ts_runs(m.lnum, sline)) do
+						local s = math.max(run.s, m.cell0)
+						local e = math.min(run.e, m.cell0 + c.w)
+						if s < e then
+							mark(i, s - m.cell0, e - m.cell0, run.hl, run.prio)
 						end
 					end
 				end

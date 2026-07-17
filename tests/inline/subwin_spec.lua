@@ -891,6 +891,61 @@ describe("inline.subwin", function()
       vim.api.nvim_buf_delete(buf, { force = true })
     end)
 
+    it("treesitter highlights transcribe onto the mirror", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "-- c", "return 1" })
+      vim.treesitter.start(buf, "lua")
+
+      local handle = mount.floating(focus_app(buf), {}, { width = 8, height = 4 })
+
+      local comment, keyword
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+        local hl = m[4].hl_group
+        if type(hl) == "string" and hl:find("^@comment") and m[2] == 1 then
+          comment = { col = m[3], end_col = m[4].end_col }
+        elseif type(hl) == "string" and hl:find("^@keyword") and m[2] == 2 then
+          keyword = { col = m[3], end_col = m[4].end_col }
+        end
+      end
+      -- widget rows 0/1 are root rows 1/2; "-- c" spans 4 cells, "return" 6
+      assert.same({ col = 0, end_col = 4 }, comment)
+      assert.same({ col = 0, end_col = 6 }, keyword)
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
+    -- Guards the treesitter-run cache: an edit must invalidate cached runs.
+    it("editing the sub buffer refreshes transcribed treesitter highlights", function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "x = 1", "y = 2" })
+      vim.treesitter.start(buf, "lua")
+      local handle = mount.floating(focus_app(buf), {}, { width = 8, height = 4 })
+
+      vim.api.nvim_buf_set_lines(buf, 0, 1, false, { "return 9" })
+      vim.wait(200, function()
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+          local hl = m[4].hl_group
+          if type(hl) == "string" and hl:find("^@keyword") and m[2] == 1 then
+            return true
+          end
+        end
+        return false
+      end)
+
+      local found
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(handle.bufnr, -1, 0, -1, { details = true })) do
+        local hl = m[4].hl_group
+        if type(hl) == "string" and hl:find("^@keyword") and m[2] == 1 then
+          found = { col = m[3], end_col = m[4].end_col }
+        end
+      end
+      assert.same({ col = 0, end_col = 6 }, found)
+
+      handle.unmount()
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+
     it("render='always' does NOT transcribe highlights (mirror is invisible)", function()
       local buf = vim.api.nvim_create_buf(false, true)
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "b1", "b2" })
