@@ -46,6 +46,7 @@ local width = require("fibrous.inline.width")
 local cursorshim = require("fibrous.inline.cursorshim")
 local interact = require("fibrous.inline.interact")
 local targets = require("fibrous.targets")
+local Fiber = require("fibrous.reactive.fiber")
 
 local M = {}
 
@@ -671,6 +672,46 @@ function M.attach(host, root_winid, opts)
 		-- and the next entry teleports.
 		entry.clip = clipped
 		entry.lclip = lclip
+
+		-- A focused CONTENT-SIZED widget (box h == line count: the auto-sized
+		-- cell) gets the view guarantees a real buffer would give while its
+		-- content grows under the cursor (requests.md autoresize wonkiness):
+		--   * growth past the viewport bottom scrolls the PAGE, like typing at
+		--     the bottom of any window. The root scroll fires WinScrolled,
+		--     whose resync re-runs reposition against the new offsets
+		--     (converging: once the row is visible nothing more is asked).
+		--     Fixed-mode roots are naturally immune — their canvas exactly
+		--     fills the viewport, so the clamp holds topline at 1;
+		--   * its own viewport stays pinned to base+clip — between the edit
+		--     and the relayout nvim scrolls the stale-height float internally
+		--     to chase the cursor, and that drift must not survive the resize
+		--     (content-sized means every line has a box row, so once the
+		--     root shows the cursor's row the pin cannot hide the cursor).
+		if focused and vim.api.nvim_buf_line_count(entry.bufnr) == c.h then
+			local pos = vim.api.nvim_win_get_cursor(entry.winid)
+			local row = c.y + pos[1] - 1 -- 0-based root-buffer row of the cursor's line
+			local want
+			if row - top_off > view_h - 1 then
+				want = row - view_h + 2 -- 1-based topline landing the row on the last row
+			elseif row - top_off < 0 then
+				want = row + 1 -- landing it on the first
+			end
+			if want then
+				vim.api.nvim_win_call(root_winid, function()
+					vim.fn.winrestview({ topline = want })
+				end)
+				return -- the WinScrolled resync reruns this with fresh offsets
+			end
+			local fv
+			vim.api.nvim_win_call(entry.winid, function()
+				fv = vim.fn.winsaveview()
+			end)
+			if fv.topline ~= 1 + clipped then
+				vim.api.nvim_win_call(entry.winid, function()
+					vim.fn.winrestview({ topline = 1 + clipped })
+				end)
+			end
+		end
 	end
 
 	-- Move the root cursor to buffer cell (row, x) [0-indexed] and focus the
@@ -979,6 +1020,15 @@ function M.attach(host, root_winid, opts)
 	-- reposition — which recaptures the widget's view and rewrites the mirror.
 	-- Coalesced like wire_input's watcher; skipped while focused (the float
 	-- covers the mirror), the WinLeave refresh below settles it on exit.
+	--
+	-- An AUTO-SIZED raw_buffer is the exception to "skip while focused": its
+	-- BOX is its line count, and no other path schedules a flush for a plain
+	-- buffer edit (build_node's rb_count memo bust only helps once a flush
+	-- runs for some other reason) — so typing in a focused content-sized cell
+	-- scrolled inside a stale-height float until an unrelated flush resized
+	-- it around the drifted view (requests.md). A drifted line count goes
+	-- through a full host relayout instead, focused or not; on_flush then
+	-- syncs every entry, subsuming the plain reposition.
 	local function wire_mirror(entry)
 		local pending = false
 		local function refresh()
@@ -989,6 +1039,15 @@ function M.attach(host, root_winid, opts)
 			vim.schedule(function()
 				pending = false
 				if entry.dead or not vim.api.nvim_win_is_valid(entry.winid) then
+					return
+				end
+				local node = entry.node
+				if node._rb_count and vim.api.nvim_buf_line_count(entry.bufnr) ~= node._rb_count then
+					-- Dirty the fiber's path first: a buffer edit renders nothing, so
+					-- without the touch the ROOT's subtree memo returns the whole old
+					-- tree before build ever reaches this node's rb_count bust.
+					Fiber.touch(node.fiber, Fiber.next_tick())
+					host.relayout()
 					return
 				end
 				if entry.winid ~= vim.api.nvim_get_current_win() then
