@@ -33,6 +33,7 @@ closes the current one first.
 | `hello`             | floating        | a function component → bordered `col` of labels; static render                  |
 | `counter`           | floating        | `use_state` + `use_effect`; buttons (`<CR>`/`<Space>`) and external keymaps     |
 | `form`              | floating        | uncontrolled `text_input`: live `on_change` mirror, `<CR>` submit, cursor focus |
+| `dropdown`          | floating        | `ui.dropdown`: filtering select field over a zero-footprint `ui.popup` overlay  |
 | `markdown`          | window (scroll) | `ui.markdown`: rich markdown — interactive links, lists, GFM tables/tasks, code |
 | `image`             | floating        | `ui.image`: inline images (kitty placeholders), sizing caps, alt fallback       |
 | `sidebar`           | split           | `mount_split`; a cursor-driven list (hover follows `j`/`k`, `<CR>` selects)     |

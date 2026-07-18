@@ -59,7 +59,7 @@ local CONTAINERS = { col = true, row = true }
 -- subwin.lua manages — the node carries `subwin` so the manager can find it.
 -- container is the multi-buffer boundary: a subwindow leaf here, whose
 -- CHILDREN build into a separate tree flushed to the container's own buffer.
-local LEAVES = { text = true, text_input = true, raw_buffer = true, container = true, image = true }
+local LEAVES = { text = true, text_input = true, raw_buffer = true, container = true, popup = true, image = true }
 
 -- One namespace for all inline hosts; each host only ever clears its own buffer.
 local ns = vim.api.nvim_create_namespace("fibrous_inline")
@@ -201,6 +201,37 @@ local function build_node(fiber, ctx)
 			end
 		end
 		local inner = new_node("col", { gap = props.gap, align = props.align, justify = props.justify }, fiber)
+		inner.children = children
+		attach_style(inner, ctx.states)
+		node.inner = inner
+	elseif tag == "popup" then
+		-- A zero-footprint overlay boundary (ui.popup): like container, the
+		-- children build into a SEPARATE tree flushed to the popup's own buffer
+		-- — but the leaf occupies no cells in THIS tree (layout measures it
+		-- 0x0); its rect is just the anchor point subwin places the float at.
+		-- The app's style props travel to the INNER root, so borders and
+		-- backgrounds paint inside the float (nothing can paint inline in a
+		-- zero box); min/max_width and max_height bound the inner layout the
+		-- same way.
+		node.kind = "text"
+		node.subwin = "popup"
+		node.text = ""
+		local children = {}
+		for _, cf in ipairs(fiber.child_fibers or {}) do
+			local child = build_node(cf, ctx)
+			if child then
+				children[#children + 1] = child
+			end
+		end
+		local inner = new_node("col", {
+			gap = props.gap,
+			align = props.align,
+			justify = props.justify,
+			style = props.style,
+			min_width = props.min_width,
+			max_width = props.max_width,
+			max_height = props.max_height,
+		}, fiber)
 		inner.children = children
 		attach_style(inner, ctx.states)
 		node.inner = inner
@@ -624,7 +655,23 @@ function M.new(opts)
 			collect_subwins(t_tree, subs)
 			target.subwins = subs
 			for _, node in ipairs(subs) do
-				if node.inner then
+				if node.inner and node.subwin == "popup" then
+					seen[node.fiber] = true
+					-- Overlay: no boundary box to fill — the inner tree lays out at
+					-- its own NATURAL width. The first compute (at an effectively
+					-- unconstrained width) is a measuring pass, memoized on the
+					-- node across flushes; the real one runs at the width it
+					-- reported. The float clamps DISPLAY against the editor
+					-- (subwin's popup placement), never the layout.
+					local inner = node.inner
+					local nat = inner._memo and inner._natural_w
+					if not nat then
+						layout.compute(inner, { width = 500 })
+						nat = math.max(inner.size.w, 1)
+						inner._natural_w = nat
+					end
+					process(node.fiber, inner, nat, nil)
+				elseif node.inner then
 					seen[node.fiber] = true
 					local c = node.content
 					local props = node.props or {}

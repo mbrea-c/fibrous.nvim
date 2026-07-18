@@ -39,6 +39,9 @@ M.groups = {
   FibrousButton = { link = "Pmenu" },
   FibrousButtonHover = { link = "PmenuSel" },
   FibrousCheckboxMark = { link = "Special" },
+  -- overlay surfaces (ui.popup rows: the dropdown's option list)
+  FibrousPopup = { link = "Pmenu" },
+  FibrousPopupSel = { link = "PmenuSel" },
 }
 
 -- The preset `border = true` resolves to (box.lua consults this).

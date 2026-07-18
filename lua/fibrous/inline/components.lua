@@ -32,6 +32,18 @@ M.raw_buffer = { __host = "raw_buffer" }
 -- scroll natively; "fixed" lays the content out at exactly the viewport
 -- height); without either it auto-sizes to its content.
 M.container = { __host = "container" }
+-- A zero-footprint overlay boundary: like container, children flush into the
+-- popup's own buffer shown in a float — but the leaf occupies NO cells in the
+-- parent layout. Its rect is an anchor point (directly below the preceding
+-- sibling, same left edge) the float is placed at; the float escapes the
+-- mount's box (it clips against the editor, not the root viewport), sits in a
+-- reserved zindex band above any nesting depth, and is never focusable: a
+-- popup is a display surface, driven through state by the widget that keeps
+-- the focus. Style props travel to the popup's INNER tree, so borders and
+-- backgrounds paint inside the float (nothing can paint inline in a zero
+-- box). `flip_offset` (default 1) is how many rows the float clears above the
+-- anchor when there is no room below (the anchoring widget's own height).
+M.popup = { __host = "popup" }
 
 -- Copy `props` and overlay the node-level keys (text, role, theme, …).
 -- Styling passes through untouched as props.style.
@@ -172,6 +184,203 @@ function M.checkbox(_, props)
       align_self = props.align_self or "start",
     }),
   }
+end
+
+-- A select field: a singleline text_input plus a ui.popup listing the
+-- filtered options. Focus opens the popup (any mode) showing every option
+-- with the selection on the current value; typing filters (fuzzy by default,
+-- the `filter` prop overrides) and resets the selection to the best match;
+-- <C-n>/<C-p> move it (wrapping), <CR>/<C-y> commit it into the field, <C-e>
+-- closes the popup keeping the typed text uncommitted. Unfocus commits the
+-- selection; free-standing typed text survives only with `free_text = true`
+-- (default is strict select: no match on blur reverts the field to the last
+-- committed value). on_select fires on every committed CHANGE (reverts and
+-- re-commits of the same value stay silent); on_change mirrors the raw typed
+-- text. The popup windows itself to `max_height` rows (default 8) around the
+-- selection, so it never needs internal scroll.
+---@param ctx table
+---@param props { options: string[], value?: string, width?: integer, max_height?: integer, free_text?: boolean, filter?: fun(options: string[], text: string): string[], on_select?: fun(value: string), on_change?: fun(text: string), flip_offset?: integer, style?: table }
+function M.dropdown(ctx, props)
+  local dd = require("fibrous.inline.dropdown")
+  local width = require("fibrous.inline.width")
+
+  local open = ctx.use_state(false)
+  local sel = ctx.use_state(1)
+  local text = ctx.use_state(props.value or "")
+  -- Non-rendering state, plus the latest props for the buffer-map closures
+  -- (maps are wired once at input creation; handles and this ref are stable
+  -- across renders, so nothing below closes over stale values).
+  local r = ctx.use_ref({ committed = props.value or "", pristine = true }).current
+  r.props = props
+
+  -- `pristine` = no edit since focus: the popup shows ALL options then (the
+  -- request's "focused shows available options"), with the selection resting
+  -- on the current value; the first real edit switches to filtering.
+  local function current_filter()
+    local p = r.props
+    local t = r.pristine and "" or text.get()
+    return (p.filter or dd.filter)(p.options or {}, t)
+  end
+
+  local function sync_buf(value)
+    if not (r.bufnr and vim.api.nvim_buf_is_valid(r.bufnr)) then
+      return
+    end
+    local cur = table.concat(vim.api.nvim_buf_get_lines(r.bufnr, 0, -1, false), " ")
+    if cur ~= value then
+      r.suppress = true -- the write below must not reopen the popup
+      vim.api.nvim_buf_set_lines(r.bufnr, 0, -1, false, { value })
+      if vim.api.nvim_get_current_buf() == r.bufnr then
+        pcall(vim.api.nvim_win_set_cursor, 0, { 1, #value })
+      end
+    end
+  end
+
+  local function commit(value)
+    r.pristine = true -- before any .set: state sets re-render synchronously
+    open.set(false)
+    sync_buf(value)
+    text.set(value)
+    if value ~= r.committed then
+      r.committed = value
+      if r.props.on_select then
+        r.props.on_select(value)
+      end
+    end
+  end
+
+  local function choose()
+    local fil = current_filter()
+    local i = math.min(math.max(sel.get(), 1), #fil)
+    if open.get() and fil[i] then
+      commit(fil[i])
+    else
+      open.set(false)
+    end
+  end
+
+  local function move(d)
+    local fil = current_filter()
+    if #fil == 0 then
+      return
+    end
+    if not open.get() then
+      open.set(true)
+      sel.set(d > 0 and 1 or #fil)
+      return
+    end
+    local i = math.min(math.max(sel.get(), 1), #fil) + d
+    if i < 1 then
+      i = #fil
+    elseif i > #fil then
+      i = 1
+    end
+    sel.set(i)
+  end
+
+  local field_w = props.width or 20
+  local max_h = props.max_height or 8
+  -- Popup width: max(field, widest option) over ALL options, so it doesn't
+  -- jump around as the filter narrows.
+  local W = field_w
+  for _, o in ipairs(props.options or {}) do
+    W = math.max(W, width.str(o))
+  end
+
+  local fil = current_filter()
+  local i = math.min(math.max(sel.get(), 1), #fil)
+
+  local rows = {}
+  if #fil == 0 then
+    rows[1] = {
+      comp = M.label,
+      props = { text = "(no match)", width = W, style = { hl = "FibrousPopup", text_hl = "FibrousDim" } },
+    }
+  else
+    local lo = dd.window(#fil, i, max_h)
+    for k = lo, math.min(lo + max_h - 1, #fil) do
+      rows[#rows + 1] = {
+        comp = M.label,
+        props = { text = fil[k], width = W, style = { hl = k == i and "FibrousPopupSel" or "FibrousPopup" } },
+      }
+    end
+  end
+
+  local children = {
+    {
+      comp = M.text_input,
+      props = {
+        value = props.value or "",
+        singleline = true,
+        width = field_w,
+        height = 1,
+        style = props.style,
+        on_create = function(bufnr)
+          r.bufnr = bufnr
+          for _, m in ipairs({ "i", "n" }) do
+            vim.keymap.set(m, "<C-n>", function()
+              move(1)
+            end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown next option" })
+            vim.keymap.set(m, "<C-p>", function()
+              move(-1)
+            end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown previous option" })
+            vim.keymap.set(m, "<C-y>", choose, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown accept option" })
+            vim.keymap.set(m, "<C-e>", function()
+              open.set(false)
+            end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown close popup" })
+          end
+        end,
+        on_change = function(v)
+          -- Refs first: state .set re-renders SYNCHRONOUSLY, so the render
+          -- must already see the pristine flag flipped (a later no-op .set
+          -- would not re-render again).
+          local suppressed = r.suppress
+          r.suppress = false
+          if not suppressed then
+            r.pristine = false
+            open.set(true)
+            sel.set(1)
+          end
+          text.set(v)
+          if r.props.on_change then
+            r.props.on_change(v)
+          end
+        end,
+        on_submit = choose,
+        on_focus = function()
+          r.pristine = true
+          open.set(true)
+          sel.set(dd.index_of(r.props.options or {}, r.committed) or 1)
+        end,
+        on_blur = function(v)
+          local p = r.props
+          local chosen
+          if open.get() then
+            local bfil = current_filter()
+            local bi = math.min(math.max(sel.get(), 1), #bfil)
+            chosen = bfil[bi]
+          end
+          local value = dd.blur_value(v, chosen, p.free_text, p.options)
+          if value ~= nil then
+            commit(value)
+          else
+            r.pristine = true
+            open.set(false)
+            sync_buf(r.committed)
+            text.set(r.committed)
+          end
+        end,
+      },
+    },
+  }
+  if open.get() then
+    children[#children + 1] = {
+      comp = M.popup,
+      props = { flip_offset = props.flip_offset, min_width = W },
+      children = rows,
+    }
+  end
+  return { comp = M.col, props = {}, children = children }
 end
 
 -- The `image` host leaf: internal — apps go through M.image below, which owns

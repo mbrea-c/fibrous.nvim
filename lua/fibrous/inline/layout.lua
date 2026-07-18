@@ -262,6 +262,18 @@ function measure(node, avail_w)
 	end
 	local content_avail = math.max(eff_avail - box.h_outer(r), 1)
 
+	if node.subwin == "popup" then
+		-- Zero-footprint overlay anchor (ui.popup, see host + subwin): the leaf
+		-- reserves no cells whatever its style says — its rect is just the
+		-- point the float is placed at. The inner tree is laid out by the host
+		-- at its own natural width, never against this constraint.
+		node.lines, node.line_runs = {}, nil
+		node.content_size = { w = 0, h = 0 }
+		node.size = { w = 0, h = 0 }
+		node._mw = avail_w
+		return
+	end
+
 	if node.kind == "text" and node.fill then
 		-- Width-generated content: the fill fn runs in the position pass once the
 		-- content box is final. Measure as one row that seeks full width (w = 0 so

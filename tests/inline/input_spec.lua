@@ -236,3 +236,102 @@ describe("inline.input", function()
     handle.unmount()
   end)
 end)
+
+-- singleline = true pins the input to one line: insert-mode <CR> submits
+-- (there is no newline to compose), and content that arrives multi-line
+-- anyway (a paste, normal-mode o/O) is flattened back to one line, newlines
+-- becoming spaces, before on_change reports it. on_focus/on_blur fire as the
+-- float gains/loses the cursor — the dropdown's open-on-focus and
+-- commit-on-unfocus hang off them.
+describe("inline.input singleline + focus callbacks", function()
+  local function input_app(props)
+    return function()
+      return {
+        comp = ui.col,
+        props = {},
+        children = { { comp = ui.text_input, props = props } },
+      }
+    end
+  end
+
+  it("singleline: insert-mode <CR> submits instead of newlining", function()
+    local submitted = {}
+    local handle = mount.floating(
+      input_app({
+        value = "abc",
+        height = 1,
+        singleline = true,
+        on_submit = function(v)
+          submitted[#submitted + 1] = v
+        end,
+      }),
+      {},
+      { width = 10, height = 1 }
+    )
+    local sub = subwin_of(handle)
+    local buf = vim.api.nvim_win_get_buf(sub)
+
+    vim.api.nvim_set_current_win(sub)
+    press("A!<CR>")
+    assert.same({ "abc!" }, submitted)
+    assert.same({ "abc!" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+
+    handle.unmount()
+  end)
+
+  it("singleline: multi-line content flattens to one line, newlines to spaces", function()
+    local got
+    local handle = mount.floating(
+      input_app({
+        value = "abc",
+        height = 1,
+        singleline = true,
+        on_change = function(v)
+          got = v
+        end,
+      }),
+      {},
+      { width = 12, height = 1 }
+    )
+    local sub = subwin_of(handle)
+    local buf = vim.api.nvim_win_get_buf(sub)
+
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "one", "two" }) -- a paste
+    vim.wait(200, function()
+      return got == "one two"
+    end)
+    assert.same({ "one two" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    assert.equal("one two", got)
+
+    handle.unmount()
+  end)
+
+  it("on_focus and on_blur fire as the float gains and loses the cursor", function()
+    local events = {}
+    local handle = mount.floating(
+      input_app({
+        value = "seed",
+        height = 1,
+        on_focus = function(v)
+          events[#events + 1] = { "focus", v }
+        end,
+        on_blur = function(v)
+          events[#events + 1] = { "blur", v }
+        end,
+      }),
+      {},
+      { width = 10, height = 1 }
+    )
+    local sub = subwin_of(handle)
+
+    vim.api.nvim_set_current_win(sub)
+    assert.same({ { "focus", "seed" } }, events)
+
+    press("A!") -- edit while focused, so blur reports the LATEST value
+    press("<Esc>")
+    vim.api.nvim_set_current_win(handle.winid)
+    assert.same({ { "focus", "seed" }, { "blur", "seed!" } }, events)
+
+    handle.unmount()
+  end)
+end)

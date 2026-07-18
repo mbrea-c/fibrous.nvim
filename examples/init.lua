@@ -27,12 +27,24 @@ package.path = table.concat({
 }, ";")
 
 -- name → module. Order is the listing/completion order.
-local ORDER =
-	{ "hello", "counter", "form", "markdown", "image", "sidebar", "panel", "policies", "inline_scroll", "inline_fullscreen" }
+local ORDER = {
+	"hello",
+	"counter",
+	"form",
+	"dropdown",
+	"markdown",
+	"image",
+	"sidebar",
+	"panel",
+	"policies",
+	"inline_scroll",
+	"inline_fullscreen",
+}
 local DESCRIPTIONS = {
 	hello = "static floating panel",
 	counter = "use_state + use_effect; buttons + external keymaps",
 	form = "uncontrolled text_input with live mirror",
+	dropdown = "ui.dropdown: filtering select field over a ui.popup overlay",
 	markdown = "ui.markdown: rich markdown with interactive links, lists, tables, code",
 	image = "ui.image: inline images via kitty placeholders, sizing caps, alt fallback",
 	sidebar = "split mount (mount_split), cursor-driven selection list",

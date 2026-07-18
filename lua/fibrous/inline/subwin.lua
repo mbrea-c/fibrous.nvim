@@ -106,6 +106,35 @@ local function chop(line, w, ts, wrap)
 	return rows
 end
 
+-- Pure overlay placement (ui.popup): fit `content` at `anchor` (editor cell
+-- coordinates, 0-based row/col) within `editor`, preferring below-the-anchor.
+-- Flipping above skips `flip_offset` rows (the anchoring widget's own height,
+-- so the popup lands above the widget, not over it); when neither side fits
+-- whole, the larger side wins and the popup shrinks to it (no internal
+-- scroll). Horizontally the popup keeps the anchor column, sliding left only
+-- as far as the editor edge requires.
+---@param anchor { row: integer, col: integer }
+---@param content { w: integer, h: integer }
+---@param editor { w: integer, h: integer }
+---@param flip_offset? integer  rows to clear above the anchor when flipping (default 1)
+---@return { row: integer, col: integer, w: integer, h: integer }
+function M.popup_place(anchor, content, editor, flip_offset)
+	flip_offset = flip_offset or 1
+	local below = editor.h - anchor.row
+	local above = anchor.row - flip_offset
+	local row, h
+	if content.h <= below or below >= above then
+		h = math.max(math.min(content.h, below), 1)
+		row = anchor.row
+	else
+		h = math.min(content.h, above)
+		row = anchor.row - flip_offset - h
+	end
+	local w = math.max(math.min(content.w, editor.w), 1)
+	local col = math.max(math.min(anchor.col, editor.w - w), 0)
+	return { row = row, col = col, w = w, h = h }
+end
+
 ---@class SubwinAttachOpts
 ---@field target? FlushTarget  the flush target this manager serves; default the host's root. A container entry spawns a nested manager over ITS target, anchored to the container's float — the same wiring, one level down.
 ---@field mouse? InlineMouseOpts|false  threaded into nested containers' interaction layers
@@ -160,9 +189,12 @@ function M.attach(host, root_winid, opts)
 	--                      fidelity); the mirror underneath is never seen and
 	--                      needs no highlight work.
 	local function policy(entry)
-		if entry.node.subwin == "container" then
+		if entry.node.subwin == "container" or entry.node.subwin == "popup" then
 			-- the float IS the content — a mirror can't stand in for it (it
-			-- couldn't carry the container's own nested floats)
+			-- couldn't carry the container's own nested floats). A popup has no
+			-- mirror at all (nothing under it is its own), and "always" also
+			-- holds the guicursor shim while one is up: the root cursor can
+			-- glide UNDER the overlay.
 			return "always"
 		end
 		local r = (entry.node.props or {}).render
@@ -530,6 +562,58 @@ function M.attach(host, root_winid, opts)
 		end
 	end
 
+	-- Place a popup float AT its anchor point. Popups deliberately escape the
+	-- mount's box: only the ANCHOR gates visibility (scrolled out of the root
+	-- viewport hides it); the body clips against the EDITOR, via popup_place.
+	-- A display-only surface — no mirror, no view management, no focus.
+	local function reposition_popup(entry)
+		local node = entry.node
+		local r = node.rect
+		local rv
+		vim.api.nvim_win_call(root_winid, function()
+			rv = vim.fn.winsaveview()
+		end)
+		local ay = r.y - (rv.topline - 1)
+		local ax = r.x - (rv.leftcol or 0)
+		local view_h = vim.api.nvim_win_get_height(root_winid)
+		-- ay == view_h still shows: the anchor row sits one past the widget
+		-- above it, so a widget on the LAST visible row drops its popup below
+		-- the mount's box — exactly the escape popups exist for.
+		if ay < 0 or ay > view_h then
+			if entry.applied_geo ~= "hide" then
+				vim.api.nvim_win_set_config(entry.winid, { hide = true })
+				entry.applied_geo = "hide"
+			end
+			return
+		end
+		-- Editor-absolute anchor: this level's origin (pane-relative when the
+		-- mount is pane-backed, editor otherwise) plus the viewport offset,
+		-- plus the pane's own position so the clamp runs in editor space.
+		local origin = anchor_winid and get_origin() or vim.api.nvim_win_get_position(root_winid)
+		local pane = anchor_winid and vim.api.nvim_win_get_position(anchor_winid) or { 0, 0 }
+		local abs = { row = pane[1] + origin[1] + ay, col = pane[2] + origin[2] + ax }
+		local inner = node.inner
+		local content = {
+			w = math.max(inner and inner.size and inner.size.w or 1, 1),
+			h = math.max(vim.api.nvim_buf_line_count(entry.bufnr), 1),
+		}
+		local editor = { w = vim.o.columns, h = vim.o.lines - vim.o.cmdheight }
+		local g = M.popup_place(abs, content, editor, (node.props or {}).flip_offset)
+		local geo = table.concat({ g.row, g.col, g.w, g.h }, ":")
+		if entry.applied_geo ~= geo then
+			vim.api.nvim_win_set_config(entry.winid, {
+				relative = anchor_winid and "win" or "editor",
+				win = anchor_winid,
+				row = g.row - pane[1],
+				col = g.col - pane[2],
+				width = g.w,
+				height = g.h,
+				hide = false,
+			})
+			entry.applied_geo = geo
+		end
+	end
+
 	-- Place `entry`'s float over the visible slice of its content box, given
 	-- the root's current scroll position. `forced` means a flush just spliced
 	-- rows through the content box: the mirror there is canvas-blank again and
@@ -542,6 +626,10 @@ function M.attach(host, root_winid, opts)
 		-- hidden (fully occluded in ITS parent): everything under it hides too.
 		if vim.api.nvim_win_get_config(root_winid).hide then
 			vim.api.nvim_win_set_config(entry.winid, { hide = true })
+			return
+		end
+		if entry.node.subwin == "popup" then
+			reposition_popup(entry)
 			return
 		end
 		local c = entry.node.content
@@ -1187,6 +1275,16 @@ function M.attach(host, root_winid, opts)
 						return
 					end
 					local props = entry.node.props or {}
+					-- singleline: content that arrived multi-line anyway (a paste,
+					-- normal-mode o/O — insert <CR> is a submit, see below) flattens
+					-- back to one line, newlines becoming spaces. The rewrite
+					-- re-fires on_lines, which reports the flattened value through
+					-- this same path.
+					if props.singleline and vim.api.nvim_buf_line_count(entry.bufnr) > 1 then
+						local joined = buf_value(entry.bufnr):gsub("\n", " ")
+						vim.api.nvim_buf_set_lines(entry.bufnr, 0, -1, false, { joined })
+						return
+					end
 					if props.on_change then
 						props.on_change(buf_value(entry.bufnr))
 					end
@@ -1197,7 +1295,7 @@ function M.attach(host, root_winid, opts)
 		-- plain newline, so a prompt composes multi-line and submitting is an
 		-- explicit act (normal-mode <CR>, or an app key like <C-s>). Insert <CR>
 		-- is simply left unmapped — native newline — so nothing to feed back.
-		entry.map("n", "<CR>", function()
+		local function submit()
 			local props = entry.node.props or {}
 			if props.on_submit then
 				props.on_submit(buf_value(entry.bufnr))
@@ -1208,7 +1306,14 @@ function M.attach(host, root_winid, opts)
 					vim.api.nvim_buf_set_lines(entry.bufnr, 0, -1, false, { "" })
 				end
 			end
-		end)
+		end
+		entry.map("n", "<CR>", submit)
+		-- singleline: there is no newline to compose — insert <CR> submits too.
+		-- Fixed at creation like the rest of the buffer wiring (the prop is a
+		-- component identity, not something that flips between renders).
+		if (entry.node.props or {}).singleline then
+			entry.map("i", "<CR>", submit)
+		end
 	end
 
 	-- Focus styling ("Style rework" S2): the float gaining/losing the cursor
@@ -1229,6 +1334,20 @@ function M.attach(host, root_winid, opts)
 	-- plugins switch windows under `:noautocmd`), which would strand the
 	-- _focus style ON. The manager-level WinEnter below reconciles on the
 	-- next genuine window entry anywhere.
+	-- Focus/blur notification (props.on_focus / props.on_blur, any subwindow
+	-- leaf): fired with the buffer's current value wherever focus wiring
+	-- observes the transition — the dropdown's open-on-focus and
+	-- commit-on-unfocus hang off these.
+	local function notify_focus(entry, name)
+		if entry.dead or not vim.api.nvim_buf_is_valid(entry.bufnr) then
+			return
+		end
+		local fn = (entry.node.props or {})[name]
+		if fn then
+			fn(buf_value(entry.bufnr))
+		end
+	end
+
 	local focused_entry
 	vim.api.nvim_create_autocmd("WinEnter", {
 		group = group,
@@ -1237,6 +1356,7 @@ function M.attach(host, root_winid, opts)
 			if e and vim.api.nvim_get_current_win() ~= e.winid then
 				focused_entry = nil
 				set_focus(e, false)
+				notify_focus(e, "on_blur")
 			end
 		end,
 	})
@@ -1254,6 +1374,7 @@ function M.attach(host, root_winid, opts)
 					-- A hidden float CAN be entered (<C-w>w cycling, direct API) and
 					-- would be edited invisibly; any focus path must reveal it.
 					reposition(entry)
+					notify_focus(entry, "on_focus")
 				end
 			end,
 		})
@@ -1264,6 +1385,7 @@ function M.attach(host, root_winid, opts)
 				if vim.api.nvim_get_current_win() == entry.winid then
 					focused_entry = nil
 					set_focus(entry, false)
+					notify_focus(entry, "on_blur")
 					-- reposition skips focused floats (typing must not be yanked
 					-- around), so edits made while focused settle into the mirror now.
 					-- Deferred: WinLeave fires while the float is still current.
@@ -1280,9 +1402,10 @@ function M.attach(host, root_winid, opts)
 	local function create(node)
 		local props = node.props or {}
 		local bufnr, owned
-		if node.subwin == "container" then
-			-- the container's buffer is the host's (a flush target, already
-			-- painted by the time sync runs); destroy retires it via drop_target
+		if node.subwin == "container" or node.subwin == "popup" then
+			-- the container's (or popup's) buffer is the host's (a flush
+			-- target, already painted by the time sync runs); destroy retires
+			-- it via drop_target
 			bufnr, owned = host.targets[node.fiber].bufnr, false
 		elseif node.subwin == "raw_buffer" and props.bufnr then
 			bufnr, owned = props.bufnr, false
@@ -1305,7 +1428,13 @@ function M.attach(host, root_winid, opts)
 			width = math.max(node.content.w, 1),
 			height = math.max(node.content.h, 1),
 			style = "minimal",
-			zindex = zindex, -- one above this level's root (the mount's, or a container's)
+			-- one above this level's root (the mount's, or a container's);
+			-- popups take a reserved band far above it, so an overlay tops any
+			-- nesting depth (levels only ever stack +1 each)
+			zindex = node.subwin == "popup" and zindex + 100 or zindex,
+			-- a popup is display-only: never focusable, the anchoring widget
+			-- keeps the cursor and drives it through state
+			focusable = node.subwin ~= "popup",
 			hide = true, -- reposition below decides visibility
 		})
 		-- The float no longer carries its parent in the window config (editor
@@ -1368,6 +1497,11 @@ function M.attach(host, root_winid, opts)
 		end
 
 		local entry = { bufnr = bufnr, winid = winid, node = node, owned = owned, maps = {} }
+		if node.subwin == "popup" then
+			-- Display-only: no motions, no click-to-insert, no focus wiring, no
+			-- mirror — reposition_popup is the entry's whole lifecycle.
+			return entry
+		end
 		map_motions(entry)
 		-- The native half of click-to-insert: a click on a VISIBLE float never
 		-- reaches the root's <LeftRelease> map — core focuses the float on the
@@ -1459,7 +1593,7 @@ function M.attach(host, root_winid, opts)
 		if vim.api.nvim_win_is_valid(entry.winid) then
 			pcall(vim.api.nvim_win_close, entry.winid, true)
 		end
-		if entry.node.subwin == "container" then
+		if entry.node.subwin == "container" or entry.node.subwin == "popup" then
 			-- the buffer is the host's flush target: retire both together
 			host.drop_target(entry.node.fiber)
 			return
