@@ -2,6 +2,8 @@
 -- or ghostty (and under tmux with `allow-passthrough on`) to see pixels; on
 -- any other terminal every image degrades to its alt text -- which is also
 -- worth seeing, it is the path notebook outputs take on unsupported setups.
+-- With the cursor on an image, `yy` copies the PNG to the system clipboard
+-- (kitty clipboard protocol, works over ssh+tmux; wl-copy/xclip elsewhere).
 
 local nr = require("fibrous")
 local ui = nr.ui

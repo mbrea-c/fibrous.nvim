@@ -93,3 +93,94 @@ describe("image.detect", function()
     end)
   end)
 end)
+
+describe("image.detect probing", function()
+  it("marks kitty resolutions probeable (confirmation) and text-with-signals not", function()
+    assert.is_true(probe({ TERM = "xterm-kitty" }).probeable)
+    assert.falsy(probe({ TERM = "x", TERM_PROGRAM = "WezTerm" }).probeable)
+    assert.falsy(probe({ TERM = "xterm-kitty" }, { termguicolors = false }).probeable)
+  end)
+
+  it("marks an unidentified terminal probeable (promotion candidate)", function()
+    assert.is_true(probe({ TERM = "xterm-256color" }).probeable)
+  end)
+
+  it("inside tmux, probing needs passthrough: unidentified outer is probeable only with it on", function()
+    local function tmux(term, passthrough)
+      return probe({ TMUX = "y" }, {
+        tmux_info = function()
+          return { term = term, passthrough = passthrough }
+        end,
+      })
+    end
+    assert.is_true(tmux("xterm-kitty", "on").probeable)
+    assert.is_true(tmux("xterm-256color", "on").probeable)
+    assert.falsy(tmux("xterm-256color", "off").probeable)
+    assert.falsy(tmux("xterm-kitty", "off").probeable)
+  end)
+
+  describe("identity", function()
+    it("extracts and normalizes the terminal name from an XTVERSION reply", function()
+      assert.equal("kitty", detect.identity("kitty(0.47.4)"))
+      assert.equal("ghostty", detect.identity("ghostty 1.1.3"))
+      assert.equal("tmux", detect.identity("tmux 3.5a"))
+      assert.equal("wezterm", detect.identity("WezTerm 20240203-110809-5046fc22"))
+      assert.equal("xterm", detect.identity("XTerm(396)"))
+    end)
+
+    it("is nil for garbage", function()
+      assert.is_nil(detect.identity(""))
+      assert.is_nil(detect.identity("   "))
+    end)
+  end)
+
+  describe("confirm (env resolution x probe result)", function()
+    local kitty_env = { provider = "kitty", tmux = false, probeable = true }
+    local text_env = { provider = "text", tmux = false, probeable = true, reason = "terminal not identified" }
+
+    it("kitty identity + graphics reply confirms a kitty resolution (no change)", function()
+      assert.is_nil(detect.confirm(kitty_env, { graphics = true, identity = "kitty" }))
+    end)
+
+    it("promotes text to kitty when the terminal identifies as kitty/ghostty", function()
+      local r = detect.confirm(text_env, { graphics = true, identity = "ghostty" })
+      assert.equal("kitty", r.provider)
+      local r2 = detect.confirm(text_env, { graphics = true, identity = "kitty" })
+      assert.equal("kitty", r2.provider)
+    end)
+
+    it("demotes kitty to text when the terminal identifies as something else", function()
+      local r = detect.confirm(kitty_env, { graphics = nil, identity = "wezterm" })
+      assert.equal("text", r.provider)
+      assert.truthy(r.reason)
+    end)
+
+    it("demotes kitty to text when the bracket returns but graphics never answered", function()
+      local r = detect.confirm(kitty_env, { graphics = false, identity = nil })
+      assert.equal("text", r.provider)
+      assert.truthy(r.reason)
+    end)
+
+    it("graphics without a placeholder-capable identity does not promote (WezTerm-shaped)", function()
+      assert.is_nil(detect.confirm(text_env, { graphics = true, identity = nil }))
+      assert.is_nil(detect.confirm(text_env, { graphics = true, identity = "konsole" }))
+    end)
+
+    it("a tmux identity means the queries never left tmux: no change either way", function()
+      assert.is_nil(detect.confirm(kitty_env, { graphics = false, identity = "tmux" }))
+      assert.is_nil(detect.confirm(text_env, { graphics = false, identity = "tmux" }))
+    end)
+
+    it("a timeout (nil probe) changes nothing", function()
+      assert.is_nil(detect.confirm(kitty_env, nil))
+      assert.is_nil(detect.confirm(text_env, nil))
+    end)
+
+    it("keeps the tmux flag across promotion and demotion", function()
+      local r = detect.confirm({ provider = "text", tmux = true, probeable = true }, { graphics = true, identity = "kitty" })
+      assert.is_true(r.tmux)
+      local r2 = detect.confirm({ provider = "kitty", tmux = true, probeable = true }, { graphics = false, identity = nil })
+      assert.is_true(r2.tmux)
+    end)
+  end)
+end)

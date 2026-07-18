@@ -26,6 +26,7 @@ end
 ---@field tmux boolean
 ---@field reason? string  why the provider degraded to text
 ---@field warn? string    user-actionable problem, surfaced once by the caller
+---@field probeable? boolean  worth confirming/promoting via a capability probe (fibrous.image.probe): the env answer could be wrong AND queries can reach the terminal
 
 ---@param env table<string, string>
 ---@param opts { termguicolors: boolean, tmux_info?: fun(): { term?: string, passthrough?: string }|nil }
@@ -40,10 +41,18 @@ function M.provider(env, opts)
     if not info or not info.term then
       return { provider = "text", tmux = true, reason = "could not query the outer terminal through tmux" }
     end
+    -- without passthrough, neither images nor probe queries reach the outer
+    -- terminal, so nothing below is probeable
+    local passthrough = info.passthrough == "on" or info.passthrough == "all"
     if not placeholder_term({ TERM = info.term }) then
-      return { provider = "text", tmux = true, reason = "outer terminal '" .. info.term .. "' has no placeholder support" }
+      return {
+        provider = "text",
+        tmux = true,
+        reason = "outer terminal '" .. info.term .. "' has no placeholder support",
+        probeable = passthrough,
+      }
     end
-    if info.passthrough ~= "on" and info.passthrough ~= "all" then
+    if not passthrough then
       return {
         provider = "text",
         tmux = true,
@@ -51,15 +60,70 @@ function M.provider(env, opts)
         warn = "fibrous: inline images need `set -g allow-passthrough on` in tmux",
       }
     end
-    return { provider = "kitty", tmux = true }
+    return { provider = "kitty", tmux = true, probeable = true }
   end
   if env.TERM_PROGRAM == "WezTerm" then
     return { provider = "text", tmux = false, reason = "WezTerm has no Unicode placeholder support" }
   end
   if placeholder_term(env) then
-    return { provider = "kitty", tmux = false }
+    return { provider = "kitty", tmux = false, probeable = true }
   end
-  return { provider = "text", tmux = false, reason = "terminal not identified as kitty/ghostty" }
+  return { provider = "text", tmux = false, reason = "terminal not identified as kitty/ghostty", probeable = true }
+end
+
+-- The terminal's normalized name from an XTVERSION reply ("kitty(0.47.4)",
+-- "WezTerm 20240203-...", "tmux 3.5a"): lowercased leading word, or nil.
+---@param version string
+---@return string|nil
+function M.identity(version)
+  local name = version:match("^%s*([%a][%w_%-]*)")
+  return name and name:lower() or nil
+end
+
+-- Terminals whose identity implies Unicode placeholder support. Identity, not
+-- the graphics reply, is the decider: WezTerm and Konsole answer graphics
+-- queries yet do not render placeholders, so speaking the protocol proves
+-- nothing about the placement style we use.
+local PLACEHOLDER_IDENTITIES = { kitty = true, ghostty = true }
+
+-- Fold a capability-probe result into an env-based resolution: the corrected
+-- ImageDetection, or nil for "no change". `probe` nil = timeout (responses
+-- never routed back): the env answer stands. An `identity` of "tmux" means
+-- tmux answered the queries itself (they never reached the outer terminal),
+-- which proves nothing either way.
+---@param current ImageDetection
+---@param probe { graphics: boolean|nil, identity: string|nil }|nil
+---@return ImageDetection|nil
+function M.confirm(current, probe)
+  if not probe or probe.identity == "tmux" then
+    return nil
+  end
+  if probe.identity then
+    if PLACEHOLDER_IDENTITIES[probe.identity] then
+      if current.provider ~= "kitty" then
+        return { provider = "kitty", tmux = current.tmux }
+      end
+      return nil
+    end
+    if current.provider == "kitty" then
+      return {
+        provider = "text",
+        tmux = current.tmux,
+        reason = "terminal identified itself as '" .. probe.identity .. "' (no placeholder support)",
+      }
+    end
+    return nil
+  end
+  -- no identity reply: only the hard negative acts (bracket came back, the
+  -- graphics query was ignored -- whatever the env said, images cannot work)
+  if probe.graphics == false and current.provider == "kitty" then
+    return {
+      provider = "text",
+      tmux = current.tmux,
+      reason = "terminal did not answer a graphics capability query",
+    }
+  end
+  return nil
 end
 
 -- The real tmux prober: one `tmux display` answers both questions (formats

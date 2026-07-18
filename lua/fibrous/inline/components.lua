@@ -195,6 +195,15 @@ local image_leaf = { __host = "image" }
 ---@param props { b64?: string, data?: string, cols?: integer, rows?: integer, max_cols?: integer, max_rows?: integer, alt?: string }
 function M.image(ctx, props)
   local image = require("fibrous.image")
+  -- Wake on provider changes (capability-probe corrections, image.refresh()):
+  -- the state set forces a re-render, the epoch in the memo key forces the
+  -- spec to re-resolve under the new provider.
+  local epoch = ctx.use_state(image.epoch())
+  ctx.use_effect(function()
+    return image.on_change(function()
+      epoch.set(image.epoch())
+    end)
+  end, {})
   local memo = ctx.use_ref()
   local m = memo.current
   local same = m
@@ -203,6 +212,7 @@ function M.image(ctx, props)
     and m.rows == props.rows
     and m.max_cols == props.max_cols
     and m.max_rows == props.max_rows
+    and m.epoch == image.epoch()
   if not same then
     local spec, err = image.spec(props)
     m = {
@@ -211,6 +221,7 @@ function M.image(ctx, props)
       rows = props.rows,
       max_cols = props.max_cols,
       max_rows = props.max_rows,
+      epoch = image.epoch(),
       spec = spec,
       err = err,
     }

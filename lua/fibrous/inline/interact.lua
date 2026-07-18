@@ -871,6 +871,30 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       activate(true, true)
     end, { buffer = bufnr, nowait = true, desc = "fibrous: activate (mouse)" })
   end
+  -- `yy` over inline-image cells copies the IMAGE to the system clipboard
+  -- (fibrous.image.copy: OSC 5522 / local tool) -- yanking placeholder text
+  -- into a register is never what anyone wants. Anywhere else the key
+  -- replays unmapped (count preserved), so yanking canvas/mirror text stays
+  -- native; bare `y` only gains the usual map-ambiguity wait, and operator
+  -- motions (yiw, y$) fail the `yy` match and replay untouched.
+  maps[#maps + 1] = "yy"
+  vim.keymap.set("n", "yy", function()
+    if target.tree then
+      local row, x = cursor_cell()
+      if row then
+        local node = hit(target.tree, x, row, function(props)
+          return props.image
+        end)
+        if node then
+          require("fibrous.image").copy(node.props.image.id)
+          return
+        end
+      end
+    end
+    local cnt = vim.v.count
+    vim.api.nvim_feedkeys((cnt > 0 and cnt or "") .. "yy", "in", false)
+  end, { buffer = bufnr, nowait = true, desc = "fibrous: copy image / yank line" })
+
   -- App-declared component keys: each is routed to the on_key handler of the
   -- component under the cursor (nothing fires if none there carries it).
   for _, key in ipairs(keys or {}) do

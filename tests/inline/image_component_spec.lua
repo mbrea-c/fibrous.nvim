@@ -119,3 +119,87 @@ describe("ui.image", function()
     root:unmount()
   end)
 end)
+
+describe("ui.image provider changes + yy copy", function()
+  local written, notes
+  before_each(function()
+    image.reset()
+    image.config.provider = "kitty"
+    image.config.cell_px = { w = 10, h = 20 }
+    written, notes = {}, {}
+    image.config.writer = function(data)
+      written[#written + 1] = data
+    end
+    image.config.notify = function(msg, level)
+      notes[#notes + 1] = { msg = msg, level = level }
+    end
+  end)
+
+  after_each(function()
+    image.reset()
+  end)
+
+  it("a provider promotion re-renders a mounted alt text into placeholders", function()
+    image.config.provider = "text"
+    local host, root = mount({ b64 = png_b64(30, 40), alt = "[fig]" })
+    assert.truthy(vim.api.nvim_buf_get_lines(host.bufnr, 0, 1, false)[1]:find("[fig]", 1, true))
+    assert.equal(0, #written)
+
+    image.config.provider = "kitty"
+    image.refresh()
+    vim.wait(200, function()
+      return #written > 0
+    end)
+    assert.equal(1, #written)
+    assert.truthy(written[1]:find("a=T,U=1", 1, true))
+    local line = vim.api.nvim_buf_get_lines(host.bufnr, 0, 1, false)[1]
+    assert.truthy(line:find(kitty.cell(0, 0), 1, true))
+    root:unmount()
+  end)
+
+  it("a provider demotion re-renders placeholders into the alt text and releases", function()
+    local host, root = mount({ b64 = png_b64(30, 40), alt = "[fig]" })
+    assert.equal(1, #written) -- transmit
+
+    image.config.provider = "text"
+    image.refresh()
+    vim.wait(200, function()
+      return #written > 1
+    end)
+    assert.truthy(written[2]:find("a=d,d=I", 1, true)) -- released on the way out
+    local line = vim.api.nvim_buf_get_lines(host.bufnr, 0, 1, false)[1]
+    assert.truthy(line:find("[fig]", 1, true))
+    root:unmount()
+  end)
+
+  it("yy over image cells copies to the clipboard; over text it yanks natively", function()
+    image.config.clipboard = "osc5522"
+    local inline_mount = require("fibrous.inline.mount")
+    local handle = inline_mount.floating(function()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.label, props = { text = "caption here" } },
+          { comp = ui.image, props = { b64 = png_b64(30, 40) } },
+        },
+      }
+    end, {}, { width = 14, height = 5 })
+    local before = #written
+
+    vim.api.nvim_set_current_win(handle.winid)
+    vim.api.nvim_win_set_cursor(handle.winid, { 2, 0 }) -- image row
+    vim.api.nvim_feedkeys("yy", "xt", false)
+    assert.equal(before + 1, #written)
+    assert.truthy(written[#written]:find("5522", 1, true))
+    assert.truthy(notes[1].msg:find("copied", 1, true))
+
+    vim.fn.setreg('"', "")
+    vim.api.nvim_win_set_cursor(handle.winid, { 1, 0 }) -- caption row
+    vim.api.nvim_feedkeys("yy", "xt", false)
+    assert.equal(before + 1, #written) -- no new escapes
+    assert.truthy(vim.fn.getreg('"'):find("caption here", 1, true))
+
+    handle.unmount()
+  end)
+end)

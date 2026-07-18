@@ -97,6 +97,16 @@ function M.transmit(b64, opts)
   return out
 end
 
+-- Graphics capability query (a=q): kitty-protocol terminals verify the tiny
+-- payload (one 1x1 RGB pixel, f=24) and REPLY without storing anything;
+-- everything else stays silent. No q= key -- the reply is the point.
+-- fibrous.image.probe brackets this with DA1 and reads the answer back.
+---@param id integer
+---@return string
+function M.query(id)
+  return ESC .. "_Ga=q,i=" .. id .. ",s=1,v=1,t=d,f=24;AAAA" .. ST
+end
+
 -- Delete the image and free its data (uppercase I).
 ---@param id integer
 ---@return string

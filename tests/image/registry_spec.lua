@@ -153,3 +153,84 @@ describe("fibrous.image", function()
     end)
   end)
 end)
+
+describe("fibrous.image clipboard + provider change", function()
+  local written, notes
+  before_each(function()
+    image.reset()
+    image.config.provider = "kitty"
+    image.config.cell_px = { w = 10, h = 20 }
+    written, notes = {}, {}
+    image.config.writer = function(data)
+      written[#written + 1] = data
+    end
+    image.config.notify = function(msg, level)
+      notes[#notes + 1] = { msg = msg, level = level }
+    end
+  end)
+
+  after_each(function()
+    image.reset()
+  end)
+
+  it("b64(id) resolves live content and forgets it after the last release", function()
+    local s = image.spec({ b64 = png_b64(40, 40) })
+    assert.is_nil(image.b64(s.id))
+    image.retain(s)
+    assert.equal(s.b64, image.b64(s.id))
+    image.release(s)
+    assert.is_nil(image.b64(s.id))
+  end)
+
+  it("copy(id) with a forced osc5522 backend writes the transaction and notifies", function()
+    image.config.clipboard = "osc5522"
+    local s = image.spec({ b64 = png_b64(40, 40) })
+    image.retain(s)
+    image.copy(s.id)
+    assert.equal(2, #written) -- transmit, then the clipboard write
+    assert.truthy(written[2]:find("5522", 1, true))
+    assert.truthy(written[2]:find("type=write", 1, true))
+    assert.equal(1, #notes)
+    assert.truthy(notes[1].msg:find("copied", 1, true))
+  end)
+
+  it("copy of an unknown id warns instead of erroring", function()
+    image.copy(12345)
+    assert.equal(1, #notes)
+    assert.equal(vim.log.levels.WARN, notes[1].level)
+  end)
+
+  it("a provider change bumps the epoch and fires on_change listeners", function()
+    image.spec({ b64 = png_b64(40, 40) }) -- resolve once under kitty
+    local e0 = image.epoch()
+    local fired = 0
+    local unsub = image.on_change(function()
+      fired = fired + 1
+    end)
+    image.config.provider = "text"
+    image.refresh()
+    vim.wait(50, function()
+      return fired > 0
+    end)
+    assert.equal(1, fired)
+    assert.truthy(image.epoch() > e0)
+    unsub()
+    image.config.provider = "kitty"
+    image.refresh()
+    vim.wait(50, function()
+      return fired > 1
+    end)
+    assert.equal(1, fired) -- unsubscribed
+  end)
+
+  it("re-resolving to the same provider fires nothing", function()
+    image.spec({ b64 = png_b64(40, 40) })
+    local fired = 0
+    image.on_change(function()
+      fired = fired + 1
+    end)
+    image.refresh()
+    vim.wait(20)
+    assert.equal(0, fired)
+  end)
+end)
