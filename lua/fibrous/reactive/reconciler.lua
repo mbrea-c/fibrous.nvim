@@ -70,6 +70,10 @@ function M.unmount_fiber(fiber, env)
 		env.host.destroy_instance(fiber.instance)
 		fiber.instance = nil
 	end
+	-- Detach: a stale StateHandle poking this fiber later must be recognizable
+	-- as unmounted (the batched flush drops fibers that no longer reach their
+	-- root — see runtime.lua's collapse).
+	fiber.parent = nil
 end
 
 -- Instantiate a fiber for a child VNode spec: wire up its hook context and, if

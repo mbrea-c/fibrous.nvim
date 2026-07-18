@@ -203,6 +203,7 @@ end
 function M.dropdown(ctx, props)
   local dd = require("fibrous.inline.dropdown")
   local width = require("fibrous.inline.width")
+  local runtime = require("fibrous.reactive.runtime")
 
   local open = ctx.use_state(false)
   local sel = ctx.use_state(1)
@@ -237,7 +238,7 @@ function M.dropdown(ctx, props)
   end
 
   local function commit(value)
-    r.pristine = true -- before any .set: state sets re-render synchronously
+    r.pristine = true -- before any .set: outside a batch, sets render immediately
     open.set(false)
     sync_buf(value)
     text.set(value)
@@ -317,23 +318,28 @@ function M.dropdown(ctx, props)
         style = props.style,
         on_create = function(bufnr)
           r.bufnr = bufnr
+          -- These maps are our own dispatch entry points (subwin only wraps
+          -- the props callbacks it fires itself), so batch them here: one
+          -- render + flush per keystroke.
           for _, m in ipairs({ "i", "n" }) do
             vim.keymap.set(m, "<C-n>", function()
-              move(1)
+              runtime.batch(move, 1)
             end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown next option" })
             vim.keymap.set(m, "<C-p>", function()
-              move(-1)
+              runtime.batch(move, -1)
             end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown previous option" })
-            vim.keymap.set(m, "<C-y>", choose, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown accept option" })
+            vim.keymap.set(m, "<C-y>", function()
+              runtime.batch(choose)
+            end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown accept option" })
             vim.keymap.set(m, "<C-e>", function()
-              open.set(false)
+              runtime.batch(open.set, false)
             end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown close popup" })
           end
         end,
         on_change = function(v)
-          -- Refs first: state .set re-renders SYNCHRONOUSLY, so the render
-          -- must already see the pristine flag flipped (a later no-op .set
-          -- would not re-render again).
+          -- Refs first regardless of batching: outside a runtime.batch scope
+          -- a .set renders immediately, and that render must already see the
+          -- pristine flag flipped (a later no-op .set would not re-render).
           local suppressed = r.suppress
           r.suppress = false
           if not suppressed then

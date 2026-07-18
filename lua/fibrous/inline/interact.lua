@@ -46,6 +46,7 @@ local M = {}
 
 local width = require("fibrous.inline.width")
 local style = require("fibrous.inline.style")
+local runtime = require("fibrous.reactive.runtime")
 local str_width, cell_to_byte = width.str, width.cell_to_byte
 
 local ns_hover = vim.api.nvim_create_namespace("fibrous_inline_hover")
@@ -269,7 +270,9 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       if x and c then
         local_x = math.min(math.max(x - c.x, 0), math.max(c.w - 1, 0))
       end
-      node.props.on_key[key](local_x)
+      -- One dispatch, one flush: the handler's state sets batch (runtime.batch),
+      -- and the world is flushed by the time this call returns.
+      runtime.batch(node.props.on_key[key], local_x)
     end
   end
 
@@ -670,7 +673,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     -- text leaf is not a role node, so node_under_cursor would miss it anyway.
     local run, _, rx0 = run_under_cursor()
     if run and run.on_click then
-      run.on_click(x and rx0 and math.max(x - rx0, 0) or nil)
+      runtime.batch(run.on_click, x and rx0 and math.max(x - rx0, 0) or nil)
       return
     end
     local node = node_under_cursor()
@@ -687,9 +690,12 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       if x and c then
         local_x = math.min(math.max(x - c.x, 0), math.max(c.w - 1, 0))
       end
-      props.on_press(local_x)
+      -- Handlers run under runtime.batch: N state sets in one press flush once,
+      -- and the flush lands before activate() returns (the cursor-reanchor code
+      -- below still sees the committed tree).
+      runtime.batch(props.on_press, local_x)
     elseif props.role == "checkbox" and props.on_toggle then
-      props.on_toggle(not props.checked)
+      runtime.batch(props.on_toggle, not props.checked)
     end
   end
 

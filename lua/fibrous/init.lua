@@ -29,4 +29,12 @@ M.ui = require("fibrous.inline.components")
 -- restyle every instance.
 M.theme = require("fibrous.inline.theme")
 
+-- Run `fn(...)` as one batched dispatch: state sets inside it update their
+-- values immediately (reads stay fresh) but render once, at batch exit,
+-- before this call returns. Fibrous already batches its own dispatches
+-- (component handlers, input callbacks); wrap YOUR entry points — external
+-- keymaps, timers, ACP/job callbacks — when a handler touches several states.
+---@type fun(fn: function, ...): ...
+M.batch = require("fibrous.reactive.runtime").batch
+
 return M

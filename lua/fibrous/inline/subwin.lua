@@ -47,6 +47,7 @@ local cursorshim = require("fibrous.inline.cursorshim")
 local interact = require("fibrous.inline.interact")
 local targets = require("fibrous.targets")
 local Fiber = require("fibrous.reactive.fiber")
+local runtime = require("fibrous.reactive.runtime")
 
 local M = {}
 
@@ -1286,7 +1287,9 @@ function M.attach(host, root_winid, opts)
 						return
 					end
 					if props.on_change then
-						props.on_change(buf_value(entry.bufnr))
+						-- Batched dispatch: several sets in one on_change flush once,
+						-- before this scheduled callback returns.
+						runtime.batch(props.on_change, buf_value(entry.bufnr))
 					end
 				end)
 			end,
@@ -1298,7 +1301,7 @@ function M.attach(host, root_winid, opts)
 		local function submit()
 			local props = entry.node.props or {}
 			if props.on_submit then
-				props.on_submit(buf_value(entry.bufnr))
+				runtime.batch(props.on_submit, buf_value(entry.bufnr))
 				-- clear_on_submit: the buffer is the source of truth after the seed,
 				-- so a chat-style "submit empties the input" must be done HERE — the
 				-- app has no handle on the buffer to clear it from on_submit.
@@ -1344,7 +1347,7 @@ function M.attach(host, root_winid, opts)
 		end
 		local fn = (entry.node.props or {})[name]
 		if fn then
-			fn(buf_value(entry.bufnr))
+			runtime.batch(fn, buf_value(entry.bufnr))
 		end
 	end
 
