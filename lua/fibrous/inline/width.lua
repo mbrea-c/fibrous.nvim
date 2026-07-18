@@ -36,17 +36,20 @@ function M.str(s)
   return api_strwidth(s)
 end
 
--- Is `ch` a composing (combining) character? charclass == 2 is the reliable
--- signal: a LONE combining char measures width 1 via nvim_strwidth, so width
--- alone cannot identify it. Memoized like the widths (tiny working set).
-local charclass = vim.fn.charclass
+-- Is `ch` a composing (combining) character? The behavioral test is
+-- composition itself: appended to a base char it adds no width. A LONE
+-- combining char measures width 1 via nvim_strwidth, so width alone cannot
+-- identify it, and charclass cannot either — it reports the word-char class
+-- (2) for é, α AND U+10EEEE image placeholders alike, which made the old
+-- charclass==2 check fold precomposed chars (and whole placeholder runs)
+-- into their neighbor's cluster. Memoized like the widths (tiny working set).
 local combining = {}
 ---@param ch string  one UTF-8 character
 ---@return boolean
 function M.is_combining(ch)
   local v = combining[ch]
   if v == nil then
-    v = #ch > 1 and charclass(ch) == 2
+    v = #ch > 1 and api_strwidth("a" .. ch) == 1
     combining[ch] = v
   end
   return v

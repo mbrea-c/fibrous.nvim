@@ -46,6 +46,33 @@ describe("width.clusters", function()
     end
     assert.same({ "\204\129", "a" }, out)
   end)
+
+  it("precomposed and width-1 multibyte chars are NOT combining", function()
+    -- charclass alone cannot decide this: é, α and U+10EEEE all report the
+    -- word-char class (2), same as true combining marks. The behavioral test
+    -- is composition: a combining char adds no width to a base char.
+    assert.is_false(width.is_combining("\195\169")) -- é precomposed U+00E9
+    assert.is_false(width.is_combining("\206\177")) -- α U+03B1
+    assert.is_true(width.is_combining("\204\129")) -- U+0301 combining acute
+  end)
+
+  it("precomposed chars stay their own cluster", function()
+    local out = {}
+    for cl in width.clusters("x\195\169y") do
+      out[#out + 1] = cl
+    end
+    assert.same({ "x", "\195\169", "y" }, out)
+  end)
+
+  it("image placeholder clusters do not merge with each other or a prefix", function()
+    local kitty = require("fibrous.image.kitty")
+    local a, b = kitty.cell(0, 0), kitty.cell(0, 1)
+    local out = {}
+    for cl in width.clusters("x" .. a .. b) do
+      out[#out + 1] = cl
+    end
+    assert.same({ "x", a, b }, out)
+  end)
 end)
 
 describe("width.cell_to_byte", function()
@@ -67,6 +94,19 @@ describe("width.cell_to_byte", function()
     assert.equal(3, width.cell_to_byte(line, 2))
     assert.equal(4, width.cell_to_byte(line, 3))
   end)
+
+  it("addresses cells inside an image placeholder run", function()
+    -- the run must NOT swallow its neighbors into one giant cluster: every
+    -- placeholder is one cell, and interior cells resolve to real offsets
+    -- (the subwin mark repair translates extmark cols through this — a
+    -- mis-walk collapses image highlights, and with them the image)
+    local kitty = require("fibrous.image.kitty")
+    local line = "ab" .. kitty.cell(0, 0) .. kitty.cell(0, 1) .. "z"
+    assert.equal(2, width.cell_to_byte(line, 2)) -- run start
+    assert.equal(10, width.cell_to_byte(line, 3)) -- after one placeholder
+    assert.equal(18, width.cell_to_byte(line, 4)) -- run end
+    assert.equal(19, width.cell_to_byte(line, 5))
+  end)
 end)
 
 describe("canvas cluster painting", function()
@@ -80,6 +120,12 @@ describe("canvas cluster painting", function()
     local c = Canvas.new(3, 1)
     c:text(0, 0, eacute .. "x", "T")
     assert.same({ { row = 0, start_col = 0, end_col = 4, hl = "T" } }, c:highlights())
+  end)
+
+  it("precomposed chars get their own cell instead of folding backwards", function()
+    local c = Canvas.new(5, 1)
+    c:text(0, 0, "x\195\169y")
+    assert.same({ "x\195\169y  " }, c:lines())
   end)
 end)
 
