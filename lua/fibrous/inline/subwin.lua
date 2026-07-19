@@ -174,6 +174,38 @@ function M.attach(host, root_winid, opts)
 	local get_origin = opts.get_origin or function()
 		return { 0, 0 }
 	end
+
+	-- The root float's TEXT-AREA origin in editor cells.
+	--
+	-- nvim_win_get_position reports a float's OUTER corner — the border, when it
+	-- has one — but the content coordinates added to this origin are relative to
+	-- the text area. Without the inset every subwindow under a bordered floating
+	-- mount lands one row up and one column left, overlapping whatever the tree
+	-- rendered above it.
+	--
+	-- Per axis, not a flat cell: nvim allows asymmetric borders (left/right
+	-- edges only, say), where a blanket +1 would break the axis that has none.
+	-- The border array is {tl, t, tr, r, br, b, bl, l}, each entry either a
+	-- string or a {char, hlgroup} pair.
+	local function root_text_origin()
+		local pos = vim.api.nvim_win_get_position(root_winid)
+		local border = vim.api.nvim_win_get_config(root_winid).border
+		if type(border) == "string" then
+			local n = (border ~= "" and border ~= "none") and 1 or 0
+			return { pos[1] + n, pos[2] + n }
+		end
+		if type(border) ~= "table" then
+			return pos
+		end
+		local function thickness(i)
+			local edge = border[i]
+			if type(edge) == "table" then
+				edge = edge[1]
+			end
+			return (type(edge) == "string" and edge ~= "") and 1 or 0
+		end
+		return { pos[1] + thickness(2), pos[2] + thickness(8) }
+	end
 	local group = vim.api.nvim_create_augroup("FibrousInlineSubwin_" .. root_winid, { clear = true })
 
 	-- One float per live subwindow leaf, keyed by the fiber's host instance
@@ -471,7 +503,12 @@ function M.attach(host, root_winid, opts)
 						if sr <= row and er >= row then
 							for capture, node, metadata in query:iter_captures(root, entry.bufnr, row, row + 1) do
 								local name = query.captures[capture]
-								if name ~= "spell" and name ~= "nospell" and name ~= "conceal" and name:sub(1, 1) ~= "_" then
+								if
+									name ~= "spell"
+									and name ~= "nospell"
+									and name ~= "conceal"
+									and name:sub(1, 1) ~= "_"
+								then
 									local nsr, nsc, ner, nec = node:range()
 									local s_byte = nsr < row and 0 or nsc
 									local e_byte = ner > row and #sline or nec
@@ -590,7 +627,7 @@ function M.attach(host, root_winid, opts)
 		-- Editor-absolute anchor: this level's origin (pane-relative when the
 		-- mount is pane-backed, editor otherwise) plus the viewport offset,
 		-- plus the pane's own position so the clamp runs in editor space.
-		local origin = anchor_winid and get_origin() or vim.api.nvim_win_get_position(root_winid)
+		local origin = anchor_winid and get_origin() or root_text_origin()
 		local pane = anchor_winid and vim.api.nvim_win_get_position(anchor_winid) or { 0, 0 }
 		local abs = { row = pane[1] + origin[1] + ay, col = pane[2] + origin[2] + ax }
 		local inner = node.inner
@@ -758,7 +795,7 @@ function M.attach(host, root_winid, opts)
 		-- The origin joins the geometry memo either way, so a sync after the
 		-- root moved relative to its anchor reconfigures the float; mount
 		-- relayouts on WinResized/VimResized cover size changes between flushes.
-		local origin = anchor_winid and get_origin() or vim.api.nvim_win_get_position(root_winid)
+		local origin = anchor_winid and get_origin() or root_text_origin()
 		local geo = table.concat(
 			{ origin[1], origin[2], vis_top, vis_left, vis_right - vis_left + 1, vis_bot - vis_top + 1 },
 			":"
@@ -934,7 +971,11 @@ function M.attach(host, root_winid, opts)
 		local count = vim.api.nvim_buf_line_count(entry.bufnr)
 		local cell = (entry.leftcol or 0) + math.max(x - c.x, 0)
 
-		if vim.api.nvim_win_is_valid(entry.winid) and not vim.api.nvim_win_get_config(entry.winid).hide and not vim.wo[entry.winid].wrap then
+		if
+			vim.api.nvim_win_is_valid(entry.winid)
+			and not vim.api.nvim_win_get_config(entry.winid).hide
+			and not vim.wo[entry.winid].wrap
+		then
 			local info = vim.fn.getwininfo(entry.winid)[1]
 			if info then
 				local lnum = info.topline + (row - c.y) - (entry.clip or 0)
@@ -1546,8 +1587,15 @@ function M.attach(host, root_winid, opts)
 					return entry.applied_origin or { 0, 0 }
 				end,
 			})
-			entry.child_interact =
-				interact.attach(host, winid, opts.mouse, entry.child_manager, entry.child_target, opts.keys, props.anchor)
+			entry.child_interact = interact.attach(
+				host,
+				winid,
+				opts.mouse,
+				entry.child_manager,
+				entry.child_target,
+				opts.keys,
+				props.anchor
+			)
 			-- Creation-time escape hatch, like text_input's — the container also
 			-- hands over its float, the app's handle for window work
 			-- (buffer-local keymaps, follow-scroll, focusing).
