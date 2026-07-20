@@ -59,13 +59,16 @@ local function Panel(ctx)
     -- over a root float: the case the mount type had to get right
     {
       comp = ui.label,
-      -- <CR> submits in NORMAL mode only, by design: in insert it stays a
-      -- plain newline so a prompt can compose multi-line. Hence <Esc> first.
-      props = { text = "note: i types, <Esc><CR> commits", style = { text_hl = "Comment" } },
+      -- singleline maps insert <CR> to submit as well as normal <CR>, so
+      -- there is no <Esc> dance here (a multi-line input keeps insert <CR> as
+      -- a newline, so composing beats submitting).
+      props = { text = "note: i types, <CR> commits", style = { text_hl = "Comment" } },
     },
     {
       comp = ui.text_input,
       props = {
+        -- one line of text, and pasted newlines flatten into spaces
+        singleline = true,
         -- height 3, not 1: a bordered single-line input needs the two border
         -- rows on top of its one text row
         height = 3,
