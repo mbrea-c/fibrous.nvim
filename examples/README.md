@@ -37,6 +37,7 @@ closes the current one first.
 | `markdown`          | window (scroll) | `ui.markdown`: rich markdown — interactive links, lists, GFM tables/tasks, code |
 | `image`             | floating        | `ui.image`: inline images (kitty placeholders), sizing caps, alt fallback       |
 | `sidebar`           | split           | `mount_split`; a cursor-driven list (hover follows `j`/`k`, `<CR>` selects)     |
+| `buffer_split`      | split (buffer)  | `render = "buffer"`: the pane draws itself, no covering float, one window       |
 | `panel`             | split           | ACP-shaped flex layout, a user-defined hook, a checkbox plan, prompt input      |
 | `inline_scroll`     | split (scroll)  | website-style page: wrapped sections, clipped input floats, focus traversal     |
 | `inline_fullscreen` | window (scroll) | the same page mounted fullscreen over the current window                        |

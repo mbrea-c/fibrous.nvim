@@ -19,6 +19,12 @@ local src = debug.getinfo(1, "S").source:sub(2)
 local examples_dir = vim.fn.fnamemodify(src, ":p:h")
 local root = vim.fn.fnamemodify(examples_dir, ":h")
 
+-- Neovim's runtimepath loader beats package.path, so a fibrous installed in
+-- the running nvim (e.g. a nix vim-pack-dir) would silently shadow this
+-- checkout and the examples would demo the INSTALLED version. `--clean` avoids
+-- that, but the prepend makes it true however this file is loaded. Same trap,
+-- same fix as tests/run.lua.
+vim.opt.runtimepath:prepend(root)
 package.path = table.concat({
 	root .. "/lua/?.lua",
 	root .. "/lua/?/init.lua",
@@ -35,6 +41,7 @@ local ORDER = {
 	"markdown",
 	"image",
 	"sidebar",
+	"buffer_split",
 	"panel",
 	"policies",
 	"inline_scroll",
@@ -48,6 +55,7 @@ local DESCRIPTIONS = {
 	markdown = "ui.markdown: rich markdown with interactive links, lists, tables, code",
 	image = "ui.image: inline images via kitty placeholders, sizing caps, alt fallback",
 	sidebar = "split mount (mount_split), cursor-driven selection list",
+	buffer_split = "buffer mount: a split pane that renders into itself, no covering float",
 	panel = "ACP-shaped flex layout + custom hook + checkbox plan",
 	policies = 'subwindow render policies: "always" vs "focus", side by side',
 	inline_scroll = "website-style scroll mode: wrapped sections, clipped input floats, explicit subwindow focus",
@@ -87,7 +95,7 @@ end, {
 vim.api.nvim_create_user_command("Examples", function()
 	local lines = { "fibrous examples — run with :Example <name>" }
 	for _, n in ipairs(ORDER) do
-		lines[#lines + 1] = ("  %-9s %s"):format(n, DESCRIPTIONS[n])
+		lines[#lines + 1] = ("  %-17s %s"):format(n, DESCRIPTIONS[n])
 	end
 	vim.notify(table.concat(lines, "\n"))
 end, { desc = "List fibrous examples" })

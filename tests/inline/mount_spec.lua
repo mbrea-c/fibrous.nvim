@@ -472,6 +472,137 @@ describe("inline.mount", function()
     vim.cmd("tabclose")
   end)
 
+  it("buffer: renders into the window itself, with no covering float", function()
+    vim.cmd("tabnew")
+    vim.cmd("vsplit")
+    local target = vim.api.nvim_get_current_win()
+
+    local handle = mount.buffer(Hello, {}, { winid = target })
+
+    -- the defining property: the handle's window IS the target, it is an
+    -- ordinary window, and it shows the host buffer directly
+    assert.equal(target, handle.winid)
+    assert.equal(target, handle.host_winid)
+    assert.equal("", vim.api.nvim_win_get_config(target).relative)
+    assert.equal(handle.bufnr, vim.api.nvim_win_get_buf(target))
+    -- style="minimal" is unavailable here and reproduced by hand; wrap is the
+    -- one that would break rect math outright
+    assert.is_false(vim.wo[target].wrap)
+    assert.is_false(vim.wo[target].number)
+    assert.equal("no", vim.wo[target].signcolumn)
+    assert.equal("hello", lines_of(handle.bufnr)[1]:sub(1, 5))
+
+    handle.unmount()
+    vim.cmd("tabclose")
+  end)
+
+  it("buffer: teardown puts the embedder's buffer back and keeps the window", function()
+    -- The failure this pins: root:unmount() deletes the host buffer, and
+    -- deleting a buffer that a REAL window is displaying takes the window
+    -- down with it ("Invalid window id"). A float mount never noticed,
+    -- because teardown closes its float first anyway.
+    vim.cmd("tabnew")
+    vim.cmd("vsplit")
+    local target = vim.api.nvim_get_current_win()
+    local target_buf = vim.api.nvim_win_get_buf(target)
+
+    local handle = mount.buffer(Hello, {}, { winid = target })
+    assert.equal(target_buf, handle.prev_bufnr)
+    local host_buf = handle.bufnr
+
+    handle.unmount()
+
+    assert.is_true(vim.api.nvim_win_is_valid(target))
+    assert.equal(target_buf, vim.api.nvim_win_get_buf(target))
+    assert.is_false(vim.api.nvim_buf_is_valid(host_buf))
+    -- window options handed back too, not left on the app's minimal set
+    assert.is_true(vim.wo[target].wrap)
+
+    vim.cmd("tabclose")
+  end)
+
+  it("buffer: closing the window unmounts the app", function()
+    vim.cmd("tabnew")
+    vim.cmd("vsplit")
+    local target = vim.api.nvim_get_current_win()
+
+    local unmounted = false
+    local handle = mount.buffer(Hello, {}, {
+      winid = target,
+      on_unmount = function()
+        unmounted = true
+      end,
+    })
+    vim.api.nvim_win_close(target, true)
+    vim.wait(500, function()
+      return unmounted
+    end, 10)
+
+    assert.is_true(unmounted)
+    assert.is_false(vim.api.nvim_buf_is_valid(handle.bufnr))
+    vim.cmd("tabclose")
+  end)
+
+  it("buffer: a resize relayouts the canvas to the new window size", function()
+    -- The objection this mount type was measured against: rendering straight
+    -- into a host window was said to let a resize clobber widgets before the
+    -- relayout. There is no float to resync here, so the canvas simply
+    -- re-lays-out at the window's new size.
+    vim.cmd("tabnew")
+    vim.cmd("topleft vsplit")
+    local target = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_width(target, 20)
+
+    local handle = mount.buffer(Hello, {}, { winid = target })
+    assert.equal(20, #lines_of(handle.bufnr)[1])
+
+    vim.api.nvim_win_set_width(target, 34)
+    handle.relayout()
+    assert.equal(34, #lines_of(handle.bufnr)[1])
+
+    handle.unmount()
+    vim.cmd("tabclose")
+  end)
+
+  it("buffer: survives its previous buffer being wiped while mounted", function()
+    -- release_root puts prev_bufnr back; if the embedder wiped it meanwhile,
+    -- the window must still end up on SOMETHING rather than following the
+    -- host buffer into deletion.
+    vim.cmd("tabnew")
+    vim.cmd("vsplit")
+    local target = vim.api.nvim_get_current_win()
+    local scratch = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_win_set_buf(target, scratch)
+
+    local handle = mount.buffer(Hello, {}, { winid = target })
+    vim.api.nvim_buf_delete(scratch, { force = true })
+    handle.unmount()
+
+    assert.is_true(vim.api.nvim_win_is_valid(target))
+    assert.is_true(vim.api.nvim_buf_is_valid(vim.api.nvim_win_get_buf(target)))
+    vim.cmd("tabclose")
+  end)
+
+  it("split render=buffer: the pane draws itself, and teardown closes it", function()
+    vim.cmd("tabnew")
+    local before = #vim.api.nvim_tabpage_list_wins(0)
+
+    local handle = mount.split(Hello, {}, { render = "buffer", split = { size = 24 } })
+
+    -- one window added, not two: a float mount would contribute the pane AND
+    -- its covering float
+    assert.equal(before + 1, #vim.api.nvim_tabpage_list_wins(0))
+    assert.equal("", vim.api.nvim_win_get_config(handle.winid).relative)
+    assert.equal(handle.bufnr, vim.api.nvim_win_get_buf(handle.winid))
+    assert.equal(24, #lines_of(handle.bufnr)[1])
+
+    -- M.split OPENED this pane, so unlike a bare buffer mount it closes it
+    handle.unmount()
+    assert.is_false(vim.api.nvim_win_is_valid(handle.winid))
+    assert.equal(before, #vim.api.nvim_tabpage_list_wins(0))
+    vim.cmd("tabclose")
+  end)
+
   it("set_props re-renders through the mounted root", function()
     local function App(_, props)
       return { comp = text, props = { text = props.msg } }

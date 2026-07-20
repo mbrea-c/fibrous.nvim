@@ -1,13 +1,23 @@
--- Mount targets for the inline host (tracker "NEW UI HOST" task 3). Both put
--- the host buffer in a ROOT FLOAT (tracker decision: always a root float —
--- rendering straight into a host window would let a resize clobber widgets
--- before we get to relayout, and subwindows need resize sync anyway):
+-- Mount targets for the inline host (tracker "NEW UI HOST" task 3):
 --
 --   floating(component)  an editor-relative float IS the app window.
 --   split(component)     a native split pane provides geometry only (it holds
 --                        a throwaway scratch buffer); a relative="win" float
 --                        covers it edge to edge. Resizes resync the float and
 --                        relayout; closing the pane tears the app down.
+--   window(component)    the same covering float, over a window the embedder
+--                        already owns.
+--   buffer(component)    the host buffer goes straight INTO an existing
+--                        window, with no covering float at all.
+--
+-- The first three put the host buffer in a ROOT FLOAT. That was once stated as
+-- an invariant ("rendering straight into a host window would let a resize
+-- clobber widgets before we get to relayout, and subwindows need resize sync
+-- anyway"), and M.buffer is the measured retraction of it: under a real UI a
+-- resize relayouts correctly with no float to resync, at a third of the
+-- redraw bytes and one fewer window. See design-buffer-mount.md for the
+-- numbers and for what a buffer mount costs instead (it must reproduce
+-- style="minimal" by hand, and put the embedder's buffer back on teardown).
 --
 -- `opts.mode` picks the root constraint mode (tracker decision, the two core
 -- use-cases): "fixed" (default) lays out at the window height — app-style UIs;
@@ -137,8 +147,12 @@ end
 --   on_unmount() the embedder's notification, fired once after cleanup —
 --                teardown can start on nvim's side (:q on the pane or the
 --                root float), and whoever mounted the app must hear about it
+--   release_root() let go of the root WINDOW, before the host buffer dies.
+--                Default: close it, which is right for every float root. A
+--                buffer mount passes its own (put the previous buffer back)
+--                because the window is the embedder's, not ours.
 ---@return InlineAppHandle handle, fun() teardown
-local function wire(component, props, host, winid, group, attachments, sync, on_teardown, on_unmount)
+local function wire(component, props, host, winid, group, attachments, sync, on_teardown, on_unmount, release_root)
 	local root = runtime.create_root(component, props, { host = host })
 	root:render()
 
@@ -168,7 +182,14 @@ local function wire(component, props, host, winid, group, attachments, sync, on_
 		for _, attachment in ipairs(attachments) do
 			attachment.teardown()
 		end
-		if vim.api.nvim_win_is_valid(winid) then
+		-- ORDER IS LOAD-BEARING for a buffer mount: root:unmount() deletes the
+		-- host buffer, and deleting a buffer while a REAL window still displays
+		-- it takes that window down too. So the root is released first, and a
+		-- buffer mount uses that moment to put the embedder's buffer back. A
+		-- float root is closed here anyway, so it never noticed the ordering.
+		if release_root then
+			release_root()
+		elseif vim.api.nvim_win_is_valid(winid) then
 			pcall(vim.api.nvim_win_close, winid, true)
 		end
 		root:unmount()
@@ -389,6 +410,7 @@ end
 ---@field keys? string[]  normal-mode keys routed to a component's on_key handler (fired for the component under the cursor)
 ---@field zindex? integer   root float zindex (default 10 — see M.window)
 ---@field on_unmount? fun()  fired once after teardown, whoever initiated it (handle.unmount or :q on the app's windows)
+---@field render? "float"|"buffer"  how the pane is drawn: "float" (default) covers it with a root float; "buffer" renders into the pane itself (M.buffer)
 
 -- Open a native split pane and return its winid. The pane holds a throwaway
 -- scratch buffer; the root float over it does the real drawing.
@@ -430,8 +452,9 @@ function M.split(component, props, opts)
 	local host_winid = open_host_pane(opts.split or {})
 	vim.api.nvim_set_current_win(origin_winid)
 
+	local target = opts.render == "buffer" and M.buffer or M.window
 	local handle =
-		M.window(component, props, {
+		target(component, props, {
 			winid = host_winid,
 			mode = opts.mode,
 			scroll_x = opts.scroll_x,
@@ -582,6 +605,176 @@ function M.window(component, props, opts)
 	})
 
 	handle.host_winid = host_winid
+	return handle
+end
+
+---@class InlineBufferMountOpts
+---@field winid? integer which window to render into; default the current one
+---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field scroll_x? boolean  free the root's horizontal axis; default false
+---@field scroll_y? boolean  free the root's vertical axis; default follows mode
+---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
+---@field keys? string[]  normal-mode keys routed to a component's on_key handler
+---@field zindex? integer  subwindow float zindex; default 10, as for M.window (page furniture, below nvim's float default). There is no root float here, so this is the base the subwindow levels stack from.
+---@field on_unmount? fun()  fired once after teardown, whoever initiated it
+---@field own_window? boolean  teardown closes the rendered-into window. M.split sets it; default false
+
+-- The window options a root float gets free from style="minimal". A buffer
+-- mount renders into an ORDINARY window, where that is not a thing you can ask
+-- for, so it is reproduced here option by option. `wrap` is the load-bearing
+-- one: canvas lines are exactly the layout width, and a stray wrap would
+-- double rows and break every rect.
+---@param winid integer
+---@return table saved  the previous values, to restore on unmount
+local function apply_minimal(winid)
+	local wo = vim.wo[winid]
+	local saved = {}
+	for opt, value in pairs({
+		wrap = false,
+		number = false,
+		relativenumber = false,
+		cursorline = false,
+		cursorcolumn = false,
+		spell = false,
+		list = false,
+		foldenable = false,
+		signcolumn = "no",
+		foldcolumn = "0",
+		colorcolumn = "",
+		statuscolumn = "",
+	}) do
+		saved[opt] = wo[opt]
+		wo[opt] = value
+	end
+	return saved
+end
+
+-- Mount `component` INTO an existing window: the host buffer is shown in the
+-- window itself, with no covering float. Measured against M.window (see
+-- design-buffer-mount.md): identical steady-state draw cost, ~2.7x cheaper
+-- resize, one fewer window in the layout.
+--
+-- Note what this does NOT do: the host still creates and owns its buffer, so
+-- this takes over a WINDOW rather than rendering into a buffer you hand it.
+-- The embedder's buffer is put back on unmount.
+---@param component Component
+---@param props? table
+---@param opts? InlineBufferMountOpts
+---@return InlineSplitHandle
+function M.buffer(component, props, opts)
+	opts = opts or {}
+	local scroll = opts.mode == "scroll"
+	local zindex = opts.zindex or 10
+	-- Resolved NOW, for the same reason M.window does: read again long after
+	-- mount, when the current window may be somebody else's.
+	local winid = opts.winid
+	if winid == 0 or winid == nil then
+		winid = vim.api.nvim_get_current_win()
+	end
+	local prev_bufnr = vim.api.nvim_win_get_buf(winid)
+
+	local function win_size()
+		return {
+			width = vim.api.nvim_win_get_width(winid),
+			height = vim.api.nvim_win_get_height(winid),
+		}
+	end
+
+	local manager, interaction -- need the host buffer in place, so attached below
+	local host = inline_host.new({
+		get_size = function()
+			local cur = win_size()
+			return { width = cur.width, height = not scroll and cur.height or nil }
+		end,
+		on_flush = function(damage)
+			if manager then
+				-- see the identical note in M.floating: explicit if, not `and/or`
+				if damage == nil then
+					damage = false
+				end
+				manager.sync(damage)
+				interaction.reanchor(damage)
+				interaction.update()
+			end
+		end,
+	})
+
+	-- THE difference from M.window: no float, the window shows the host buffer.
+	vim.api.nvim_win_set_buf(winid, host.bufnr)
+	local saved_wo = apply_minimal(winid)
+
+	local group = vim.api.nvim_create_augroup("FibrousInlineBuffer_" .. winid, { clear = true })
+	local axes = pinned_axes(opts)
+	local pin_restore
+	if axes.x or axes.y then
+		pin_restore = pin_view(winid, group, axes)
+	end
+	-- host_winid: <C-w> from a subwindow acts on this window, which here IS the
+	-- app's one real window in the layout.
+	-- anchor_winid: deliberately NOT set, so subwindow floats anchor
+	-- relative="editor". A pane mount can anchor to its backing pane because
+	-- that pane is inert; this window is the opposite (it holds the cursor and
+	-- the canvas), which is precisely the case subwin.attach warns against.
+	-- The spike measured win-anchoring here as byte-identical, but that is an
+	-- absence in one scene, and editor anchoring is what the floating mount
+	-- already does with a cursor-bearing root.
+	manager = subwin.attach(host, winid, {
+		mouse = opts.mouse,
+		zindex = zindex + 1,
+		keys = opts.keys,
+		host_winid = winid,
+	})
+	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys, opts.anchor)
+
+	local function sync()
+		if not vim.api.nvim_win_is_valid(winid) then
+			return
+		end
+		-- No window config to re-apply: the window IS the geometry. Resizing it
+		-- is the whole event, and get_size reads the new size on the next flush.
+		host.relayout()
+		if pin_restore then
+			pin_restore()
+		end
+	end
+
+	local function release_root()
+		if opts.own_window then
+			if vim.api.nvim_win_is_valid(winid) then
+				pcall(vim.api.nvim_win_close, winid, true)
+			end
+			return
+		end
+		if not vim.api.nvim_win_is_valid(winid) then
+			return
+		end
+		for opt, value in pairs(saved_wo) do
+			pcall(function()
+				vim.wo[winid][opt] = value
+			end)
+		end
+		-- Put the embedder's buffer back. If it is gone (wiped while we were
+		-- mounted), leave the window on a fresh empty buffer rather than
+		-- letting the host buffer's deletion close it.
+		local restore = vim.api.nvim_buf_is_valid(prev_bufnr) and prev_bufnr or vim.api.nvim_create_buf(true, false)
+		pcall(vim.api.nvim_win_set_buf, winid, restore)
+	end
+
+	local handle = wire(
+		component,
+		props,
+		host,
+		winid,
+		group,
+		{ manager, interaction },
+		sync,
+		function() end,
+		opts.on_unmount,
+		release_root
+	)
+
+	handle.host_winid = winid
+	handle.prev_bufnr = prev_bufnr
 	return handle
 end
 

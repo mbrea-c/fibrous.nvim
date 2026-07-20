@@ -19,6 +19,13 @@ M.mount_split = mount.split
 ---@type fun(component: Component, props?: table, opts?: InlineWindowMountOpts): InlineSplitHandle
 M.mount_window = mount.window
 
+-- Mount a component INTO an existing window: no covering float, the window
+-- shows the host buffer itself. Cheaper on resize than mount_window and one
+-- fewer window in the layout; in exchange it takes the window over, and hands
+-- the embedder's buffer back on unmount.
+---@type fun(component: Component, props?: table, opts?: InlineBufferMountOpts): InlineSplitHandle
+M.mount_buffer = mount.buffer
+
 -- The component set: host primitives (col/row/text/text_input/raw_buffer) and
 -- the built-in widgets (label, paragraph, button, checkbox).
 M.ui = require("fibrous.inline.components")
