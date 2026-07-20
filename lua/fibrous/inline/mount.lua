@@ -649,6 +649,89 @@ local function apply_minimal(winid)
 	return saved
 end
 
+-- What a buffer mount shows when its host buffer is displayed in more than one
+-- window. One buffer, one canvas: there is no way to draw the app in both.
+-- Subwindow floats anchor to a single window, the two viewports would fight
+-- over the same lines, and nothing can be rendered per-window because the
+-- CONTENT is shared. So the app says so, centered, instead of drawing a
+-- half-working UI in both. Closing the extra window restores the real UI.
+local MULTIWIN_MESSAGE = "(cannot render fibrous buffer in two windows at once)"
+
+-- Wrap `component` so the mount can swap the whole tree for that message.
+-- Done as a component rather than by writing to the buffer directly, so the
+-- message goes through normal layout (centering, resize) and so the real
+-- tree's subwindow floats are torn down by the ordinary reconcile.
+-- Greedy word wrap, so the message survives a pane narrower than its 51
+-- columns (a sidebar routinely is). Words longer than the width are left
+-- alone: truncating them would be worse than one overlong row.
+---@param text string
+---@param width integer
+---@return string[]
+local function wrap_words(text, width)
+	local lines, cur = {}, ""
+	for word in text:gmatch("%S+") do
+		if cur == "" then
+			cur = word
+		elseif #cur + 1 + #word <= width then
+			cur = cur .. " " .. word
+		else
+			lines[#lines + 1] = cur
+			cur = word
+		end
+	end
+	if cur ~= "" then
+		lines[#lines + 1] = cur
+	end
+	return lines
+end
+
+---@param component Component
+---@param get_width fun(): integer  the render-time width to center within
+---@return Component gate, fun(): { block: fun(b: boolean), rewrap: fun() }
+local function multiwin_gate(component, get_width)
+	local components = require("fibrous.inline.components")
+	local controls
+	local function Gate(ctx, props)
+		local blocked = ctx.use_state(false)
+		-- Bumped on resize while blocked: the message is wrapped at render
+		-- time, and a relayout alone re-runs layout WITHOUT re-rendering
+		-- components, so without this the wrap would stay at the old width.
+		local nonce = ctx.use_state(0)
+		controls = {
+			block = blocked.set,
+			rewrap = function()
+				if blocked.get() then
+					nonce.set(nonce.get() + 1)
+				end
+			end,
+		}
+		if not blocked.get() then
+			return { comp = component, props = props }
+		end
+		-- One centered label per wrapped line, rather than a paragraph: the
+		-- layout engine has no text-align (the `align` prop is border TITLES),
+		-- and align_self can only centre a node NARROWER than its container,
+		-- which a wrapped paragraph never is — it fills the width and its text
+		-- sits left. Each line here is its own node, so each one centres.
+		local width = math.max(get_width() - 2, 1)
+		local children = {}
+		for _, line in ipairs(wrap_words(MULTIWIN_MESSAGE, width)) do
+			children[#children + 1] = {
+				comp = components.label,
+				props = { text = line, align_self = "center", style = { text_hl = "WarningMsg" } },
+			}
+		end
+		return {
+			comp = components.col,
+			props = { grow = 1, justify = "center", style = { padding = { x = 1 } } },
+			children = children,
+		}
+	end
+	return Gate, function()
+		return controls
+	end
+end
+
 -- Mount `component` INTO an existing window: the host buffer is shown in the
 -- window itself, with no covering float. Measured against M.window (see
 -- design-buffer-mount.md): identical steady-state draw cost, ~2.7x cheaper
@@ -726,6 +809,10 @@ function M.buffer(component, props, opts)
 	})
 	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys, opts.anchor)
 
+	-- Forward-declared: sync() closes over it, but it only exists once the
+	-- gate is built below (which needs `winid`, resolved above).
+	local get_controls
+
 	local function sync()
 		if not vim.api.nvim_win_is_valid(winid) then
 			return
@@ -735,6 +822,12 @@ function M.buffer(component, props, opts)
 		host.relayout()
 		if pin_restore then
 			pin_restore()
+		end
+		-- The multi-window message is wrapped at RENDER time, and a relayout
+		-- does not re-render components, so it needs telling about the width.
+		local controls = get_controls()
+		if controls then
+			controls.rewrap()
 		end
 	end
 
@@ -760,8 +853,12 @@ function M.buffer(component, props, opts)
 		pcall(vim.api.nvim_win_set_buf, winid, restore)
 	end
 
+	local gate
+	gate, get_controls = multiwin_gate(component, function()
+		return vim.api.nvim_win_is_valid(winid) and vim.api.nvim_win_get_width(winid) or 40
+	end)
 	local handle = wire(
-		component,
+		gate,
 		props,
 		host,
 		winid,
@@ -772,6 +869,29 @@ function M.buffer(component, props, opts)
 		opts.on_unmount,
 		release_root
 	)
+
+	-- Watch for the host buffer being shown in a second window. Scheduled:
+	-- these fire mid-command (a :split has not finished wiring its window when
+	-- WinNew arrives), and the state change re-renders.
+	local function recheck()
+		local controls = get_controls()
+		if not controls or not vim.api.nvim_buf_is_valid(host.bufnr) then
+			return
+		end
+		local showing = 0
+		for _, w in ipairs(vim.api.nvim_list_wins()) do
+			if vim.api.nvim_win_get_buf(w) == host.bufnr then
+				showing = showing + 1
+			end
+		end
+		controls.block(showing > 1)
+	end
+	vim.api.nvim_create_autocmd({ "WinNew", "WinClosed", "BufWinEnter", "BufWinLeave" }, {
+		group = group,
+		callback = function()
+			vim.schedule(recheck)
+		end,
+	})
 
 	handle.host_winid = winid
 	handle.prev_bufnr = prev_bufnr

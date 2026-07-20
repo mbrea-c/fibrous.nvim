@@ -23,10 +23,11 @@ local util = require("examples.util")
 local function Panel(ctx)
   local notes = ctx.use_state({ "resize me with <C-w>> and <C-w><" })
   local draft = ctx.use_state("")
+  local typing = draft.get()
 
   local children = {
     { comp = ui.label, props = { text = "Buffer mount", style = { text_hl = "Title" } } },
-    { comp = ui.label, props = { text = "rendered INTO the pane, no covering float", style = { text_hl = "Comment" } } },
+    { comp = ui.label, props = { text = "renders INTO the pane, no float", style = { text_hl = "Comment" } } },
     { comp = ui.label, props = { text = "" } },
   }
 
@@ -57,21 +58,36 @@ local function Panel(ctx)
     -- a real editable float, anchored over an ordinary window rather than
     -- over a root float: the case the mount type had to get right
     {
+      comp = ui.label,
+      -- <CR> submits in NORMAL mode only, by design: in insert it stays a
+      -- plain newline so a prompt can compose multi-line. Hence <Esc> first.
+      props = { text = "note: i types, <Esc><CR> commits", style = { text_hl = "Comment" } },
+    },
+    {
       comp = ui.text_input,
       props = {
-        value = draft.get(),
-        height = 1,
-        placeholder = "add a note, <CR> to commit",
-        on_submit = function(value)
-          if value ~= "" then
-            local next_notes = vim.deepcopy(notes.get())
-            next_notes[#next_notes + 1] = value
-            notes.set(next_notes)
-            draft.set("")
-          end
+        -- height 3, not 1: a bordered single-line input needs the two border
+        -- rows on top of its one text row
+        height = 3,
+        style = { border = "rounded" },
+        clear_on_submit = true,
+        on_change = function(v)
+          draft.set(v)
         end,
-        style = { border = { "rounded" } },
+        on_submit = function(value)
+          if value == "" then
+            return
+          end
+          local next_notes = vim.deepcopy(notes.get())
+          next_notes[#next_notes + 1] = value
+          notes.set(next_notes)
+          draft.set("")
+        end,
       },
+    },
+    {
+      comp = ui.label,
+      props = { text = ("draft: %d chars"):format(#typing), style = { text_hl = "FibrousDim" } },
     },
     { comp = ui.label, props = { text = "" } },
     { comp = ui.label, props = { text = "<CR> on a note deletes it", style = { text_hl = "Comment" } } },

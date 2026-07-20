@@ -583,6 +583,87 @@ describe("inline.mount", function()
     vim.cmd("tabclose")
   end)
 
+  it("buffer: two windows on the host buffer render a refusal, not a broken layout", function()
+    -- One buffer, two windows, one canvas. There is no way to show the app in
+    -- both: subwindow floats anchor to a single window, and the two viewports
+    -- would fight over the same lines. Nothing can be rendered per-window
+    -- either, because the CONTENT is shared. So the app refuses out loud
+    -- rather than drawing a half-working UI in both.
+    vim.cmd("tabnew")
+    local target = vim.api.nvim_get_current_win()
+    local handle = mount.buffer(Hello, {}, { winid = target })
+    assert.equal("hello", lines_of(handle.bufnr)[1]:sub(1, 5))
+
+    vim.cmd("split") -- a second window onto the SAME host buffer
+    vim.wait(200, function()
+      return (lines_of(handle.bufnr)[1] or ""):find("two windows") ~= nil
+    end, 10)
+
+    local text = table.concat(lines_of(handle.bufnr), "\n")
+    assert.truthy(text:find("cannot render fibrous buffer in two windows at once", 1, true))
+    assert.is_nil(text:find("hello", 1, true))
+
+    -- and back: closing the extra window restores the real UI
+    vim.cmd("close")
+    vim.wait(200, function()
+      return (table.concat(lines_of(handle.bufnr), "\n")):find("hello", 1, true) ~= nil
+    end, 10)
+    local restored = table.concat(lines_of(handle.bufnr), "\n")
+    assert.truthy(restored:find("hello", 1, true))
+    assert.is_nil(restored:find("cannot render", 1, true))
+
+    handle.unmount()
+    vim.cmd("tabclose")
+  end)
+
+  it("buffer: the refusal is centered, and stays readable in a narrow pane", function()
+    -- 34 columns: NARROWER than the 51-column message, which is the case a
+    -- sidebar actually hits. A label would be truncated mid-sentence and
+    -- left-aligned (align_self cannot centre something wider than its
+    -- container), so the message wraps.
+    for _, width in ipairs({ 34, 70 }) do
+      vim.cmd("tabnew")
+      local target = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_width(target, width)
+      local handle = mount.buffer(Hello, {}, { winid = target })
+      vim.cmd("split")
+      vim.wait(300, function()
+        return table.concat(lines_of(handle.bufnr), "\n"):find("cannot render", 1, true) ~= nil
+      end, 10)
+
+      local lines = lines_of(handle.bufnr)
+      local first, last
+      for i, l in ipairs(lines) do
+        if l:match("%S") then
+          first = first or i
+          last = i
+        end
+      end
+      assert.truthy(first)
+
+      -- nothing is lost to truncation: every word survives somewhere
+      local joined = table.concat(lines, " "):gsub("%s+", " ")
+      for word in ("cannot render fibrous buffer in two windows at once"):gmatch("%S+") do
+        assert.truthy(joined:find(word, 1, true), ("width %d lost %q"):format(width, word))
+      end
+
+      -- each rendered line is centered horizontally
+      for i = first, last do
+        local body = lines[i]
+        if body:match("%S") then
+          local lead = #body:match("^ *")
+          local trail = #body:match(" *$")
+          assert.is_true(math.abs(lead - trail) <= 1, ("width %d row %d not centered"):format(width, i))
+        end
+      end
+      -- and the block is centered vertically
+      assert.is_true(math.abs((first - 1) - (#lines - last)) <= 1)
+
+      handle.unmount()
+      vim.cmd("tabclose")
+    end
+  end)
+
   it("split render=buffer: the pane draws itself, and teardown closes it", function()
     vim.cmd("tabnew")
     local before = #vim.api.nvim_tabpage_list_wins(0)
