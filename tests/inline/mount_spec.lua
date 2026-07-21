@@ -496,6 +496,66 @@ describe("inline.mount", function()
     vim.cmd("tabclose")
   end)
 
+  -- A buffer mount's host window paints on Normal, but its sub-buffer floats
+  -- (containers, inputs, popups) default to NormalFloat — so the mount remaps
+  -- them onto Normal to read as one background. A floating mount leaves them on
+  -- NormalFloat, reading as overlays.
+  local function anchored_floats(anchor)
+    local out = {}
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.w[win].fibrous_anchor == anchor then
+        out[#out + 1] = win
+      end
+    end
+    return out
+  end
+
+  local function ContainerApp()
+    return {
+      comp = col,
+      props = {},
+      children = {
+        { comp = text, props = { text = "head" } },
+        {
+          comp = { __host = "container" },
+          props = {},
+          children = { { comp = text, props = { text = "inner" } } },
+        },
+      },
+    }
+  end
+
+  it("buffer: sub-buffer floats map NormalFloat onto the host's Normal", function()
+    vim.cmd("tabnew")
+    vim.cmd("vsplit")
+    local target = vim.api.nvim_get_current_win()
+
+    local handle = mount.buffer(ContainerApp, {}, { winid = target })
+
+    local floats = anchored_floats(target)
+    assert.is_true(#floats > 0)
+    for _, win in ipairs(floats) do
+      -- appended to (not replacing) whatever style="minimal" set, so the
+      -- EndOfBuffer hiding survives alongside the Normal remap
+      assert.truthy(vim.wo[win].winhighlight:find("NormalFloat:Normal", 1, true))
+    end
+
+    handle.unmount()
+    vim.cmd("tabclose")
+  end)
+
+  it("floating: sub-buffer floats keep NormalFloat (overlay look, no remap)", function()
+    local handle = mount.floating(ContainerApp, {}, { width = 12, height = 6 })
+
+    local floats = anchored_floats(handle.winid)
+    assert.is_true(#floats > 0)
+    for _, win in ipairs(floats) do
+      assert.is_nil(vim.wo[win].winhighlight:find("NormalFloat:", 1, true))
+    end
+
+    handle.unmount()
+  end)
+
   it("buffer: teardown puts the embedder's buffer back and keeps the window", function()
     -- The failure this pins: root:unmount() deletes the host buffer, and
     -- deleting a buffer that a REAL window is displaying takes the window

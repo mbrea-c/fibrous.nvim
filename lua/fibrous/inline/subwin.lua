@@ -145,6 +145,7 @@ end
 ---@field app_winid? integer  the top-level root float, where focus returns when a replayed window command goes nowhere. Defaults to root_winid; threaded into nested levels.
 ---@field anchor_winid? integer  an INERT layout window to anchor subwindow floats to (relative="win"): the backing pane of a window/split mount. Nil (floating mounts) anchors relative="editor". Unlike host_winid this never defaults to root_winid: anchoring to a window with cursor activity is exactly the whole-float-redraw pathology (see reposition). Threaded into nested levels.
 ---@field get_origin? fun(): integer[]  pane-anchored levels only: this manager's root offset relative to anchor_winid, {row, col}. The top level is the root float pinned at pane (0,0); a nested level is its container's last APPLIED offset, maintained by the parent manager. A function, never a win_get_position read: a float's reported position between a set_config and the next redraw is a stale composite (anchor + old position: the doubled-offset teleport).
+---@field float_normal? string  highlight group the sub-buffer floats remap their `NormalFloat` onto (appended to the float's winhighlight as `NormalFloat:<group>`, preserving what style="minimal" set). A buffer mount passes "Normal" so its floating sub-buffers match the host window's `Normal` background instead of standing out as `NormalFloat`; floating mounts leave it nil so genuine overlays keep `NormalFloat`. Threaded into nested levels.
 
 -- Attach a manager to one of `host`'s flush targets, whose buffer is shown in
 -- `root_winid` (the mount's root float, or — one level down — a container's
@@ -171,6 +172,11 @@ function M.attach(host, root_winid, opts)
 	-- split mounts), nil for floating mounts (editor anchoring). Deliberately
 	-- NOT defaulted to root_winid: see the anchoring note in reposition.
 	local anchor_winid = opts.anchor_winid
+	-- Background remap for every sub-buffer float this level (and nested levels)
+	-- opens: a buffer mount hands "Normal" so its floats sit on the host window's
+	-- Normal background rather than the float default NormalFloat; nil (floating
+	-- mounts) leaves them on NormalFloat, reading as overlays. See create().
+	local float_normal = opts.float_normal
 	local get_origin = opts.get_origin or function()
 		return { 0, 0 }
 	end
@@ -1485,6 +1491,19 @@ function M.attach(host, root_winid, opts)
 		-- anchoring), so record the association explicitly — the discriminator
 		-- tests (and any tooling) use to find a surface's subwindow floats.
 		vim.w[winid].fibrous_anchor = root_winid
+		-- Under a buffer mount the host window paints on Normal, but a float
+		-- defaults its background to NormalFloat — so without this every
+		-- container/input/popup island would stand out against the host. Add a
+		-- NormalFloat->group (Normal) remap so the surface reads as one
+		-- background; floating mounts pass nil and keep the NormalFloat overlay
+		-- look. APPEND, never replace: style="minimal" already set a winhighlight
+		-- (EndOfBuffer hidden) that must survive, and NormalFloat is a distinct
+		-- key so the two never conflict.
+		if float_normal then
+			local cur = vim.wo[winid].winhighlight
+			local remap = "NormalFloat:" .. float_normal
+			vim.wo[winid].winhighlight = cur ~= "" and (cur .. "," .. remap) or remap
+		end
 		-- text_input never wraps (rect math); raw_buffer is the native-wrapping
 		-- escape hatch and wraps unless told not to.
 		vim.wo[winid].wrap = node.subwin == "raw_buffer" and props.wrap ~= false
@@ -1581,6 +1600,7 @@ function M.attach(host, root_winid, opts)
 				host_winid = host_winid,
 				app_winid = app_winid,
 				anchor_winid = anchor_winid,
+				float_normal = float_normal,
 				-- the container's own anchor-relative offset, as last applied by
 				-- THIS manager's reposition: never a win_get_position read
 				get_origin = function()

@@ -806,6 +806,11 @@ function M.buffer(component, props, opts)
 		zindex = zindex + 1,
 		keys = opts.keys,
 		host_winid = winid,
+		-- The window shows the host buffer on Normal; map the sub-buffer floats'
+		-- NormalFloat onto Normal too so the whole app reads as one background
+		-- (a floating mount omits this and keeps NormalFloat, reading as an
+		-- overlay). See SubwinAttachOpts.float_normal.
+		float_normal = "Normal",
 	})
 	interaction = interact.attach(host, winid, opts.mouse, manager, nil, opts.keys, opts.anchor)
 
