@@ -23,17 +23,11 @@
 local M = {}
 
 -- Highlight groups, all namespaced Fibrous*, all links into groups every
--- colorscheme defines. Override with a plain `:hi` / nvim_set_hl of the same
--- name — `apply()` never clobbers an existing definition.
+-- colorscheme defines. These are FILLS: they own their background (a hovered
+-- row, a button chip, a popup row) and are meant to stand out against the
+-- surface. Override with a plain `:hi` / nvim_set_hl of the same name —
+-- `apply()` never clobbers an existing definition.
 M.groups = {
-  -- LineNr: a subtle gray in dark AND light schemes (FloatBorder usually
-  -- just takes the float's normal fg). Directory for focus: the focused
-  -- state needs an actual accent COLOR — bold-only groups (CursorLineNr in
-  -- the stock scheme) are invisible on box-drawing glyphs, whose fonts
-  -- rarely have bold variants.
-  FibrousBorder = { link = "LineNr" },
-  FibrousBorderFocus = { link = "Directory" },
-  FibrousTitle = { link = "FloatTitle" },
   FibrousHover = { link = "CursorLine" },
   FibrousDim = { link = "Comment" },
   FibrousButton = { link = "Pmenu" },
@@ -42,6 +36,30 @@ M.groups = {
   -- overlay surfaces (ui.popup rows: the dropdown's option list)
   FibrousPopup = { link = "Pmenu" },
   FibrousPopupSel = { link = "PmenuSel" },
+}
+
+-- Foreground-only groups, derived from a source group with its BACKGROUND
+-- dropped. fibrous borders and titles are PAINTED — box-drawing text in the
+-- host's own buffer, never nvim's native float border — so they sit directly
+-- on whatever surface is behind them and must contribute a colour, not a fill.
+-- The natural sources carry a bg of their own (LineNr the gutter's, FloatTitle
+-- the float's), and a plain link would stamp that bg into every border cell:
+-- on a buffer mount, whose Normal is the window's, that paints a darker
+-- NormalFloat-looking rectangle around each box. A link cannot strip a key, so
+-- these resolve the source and drop bg/ctermbg — same technique (and same
+-- tradeoff) as FibrousMathVariable below: a derivation is a snapshot, not a
+-- live link, so it is recomputed on ColorScheme and on every host.new(), which
+-- covers scheme switches and any mount that follows a hand-rolled `:hi LineNr`.
+-- `default = true` so an explicit user definition still wins outright.
+--
+-- LineNr: a subtle gray in dark AND light schemes. Directory for focus: the
+-- focused state needs an actual accent COLOR — bold-only groups (CursorLineNr
+-- in the stock scheme) are invisible on box-drawing glyphs, whose fonts rarely
+-- have bold variants.
+M.fg_groups = {
+  FibrousBorder = "LineNr",
+  FibrousBorderFocus = "Directory",
+  FibrousTitle = "FloatTitle",
 }
 
 -- The preset `border = true` resolves to (box.lua consults this).
@@ -94,12 +112,25 @@ local function apply_math_variable()
   vim.api.nvim_set_hl(0, "FibrousMathVariable", base)
 end
 
+-- `source` resolved, background dropped: see M.fg_groups.
+local function apply_fg_only(name, source)
+  local base = vim.api.nvim_get_hl(0, { name = source, link = false })
+  base.link = nil
+  base.bg = nil
+  base.ctermbg = nil
+  base.default = true
+  vim.api.nvim_set_hl(0, name, base)
+end
+
 -- Define the groups (without overriding existing definitions) and keep them
 -- alive across colorscheme switches. Idempotent; host.new() calls this.
 function M.apply()
   for name, spec in pairs(M.groups) do
     local def = vim.tbl_extend("force", { default = true }, spec)
     vim.api.nvim_set_hl(0, name, def)
+  end
+  for name, source in pairs(M.fg_groups) do
+    apply_fg_only(name, source)
   end
   apply_math_variable()
   local group = vim.api.nvim_create_augroup("FibrousTheme", { clear = true })

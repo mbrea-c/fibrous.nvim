@@ -1,8 +1,8 @@
 -- The default theme (tracker "Style rework" S5): ONE module owning every
--- default — the Fibrous* highlight groups (defined as `default = true` links
--- so colorschemes and users override freely), the style-shaped defaults that
--- a node's `theme` prop keys into, and the border preset `border = true`
--- means.
+-- default — the Fibrous* highlight groups (all `default = true`, so
+-- colorschemes and users override freely: fills as links, painted borders as
+-- fg-only derivations), the style-shaped defaults that a node's `theme` prop
+-- keys into, and the border preset `border = true` means.
 
 local theme = require("fibrous.inline.theme")
 
@@ -10,20 +10,54 @@ local function link_of(name)
   return vim.api.nvim_get_hl(0, { name = name, link = true }).link
 end
 
+local function resolve(name)
+  return vim.api.nvim_get_hl(0, { name = name, link = false })
+end
+
 describe("inline.theme", function()
-  it("apply defines the Fibrous* groups as links", function()
+  it("apply defines the fill groups as links", function()
     theme.apply()
-    -- LineNr: a subtle gray in dark AND light schemes. Directory: an actual
-    -- accent COLOR everywhere — bold-only groups (CursorLineNr in the stock
-    -- scheme) are invisible on box-drawing glyphs
-    assert.equal("LineNr", link_of("FibrousBorder"))
-    assert.equal("Directory", link_of("FibrousBorderFocus"))
-    assert.equal("FloatTitle", link_of("FibrousTitle"))
     assert.equal("CursorLine", link_of("FibrousHover"))
     assert.equal("Comment", link_of("FibrousDim"))
     assert.equal("Pmenu", link_of("FibrousButton"))
     assert.equal("PmenuSel", link_of("FibrousButtonHover"))
     assert.equal("Special", link_of("FibrousCheckboxMark"))
+  end)
+
+  -- Borders and titles are PAINTED over the host surface, so they must take
+  -- their source's COLOUR without its background — LineNr's gutter bg or
+  -- FloatTitle's float bg would otherwise stamp a darker rectangle around
+  -- every box on a buffer mount, whose Normal is the window's.
+  it("apply derives the painted-border groups fg-only", function()
+    vim.api.nvim_set_hl(0, "LineNr", { fg = "#888888", bg = "#111111" })
+    vim.api.nvim_set_hl(0, "Directory", { fg = "#00ff00", bg = "#111111", bold = true })
+    vim.api.nvim_set_hl(0, "FloatTitle", { fg = "#ffffff", bg = "#111111" })
+    for name in pairs(theme.fg_groups) do
+      vim.api.nvim_set_hl(0, name, {})
+    end
+    theme.apply()
+
+    local border = resolve("FibrousBorder")
+    assert.equal(tonumber("888888", 16), border.fg)
+    assert.is_nil(border.bg)
+    assert.is_nil(link_of("FibrousBorder"))
+
+    local focus = resolve("FibrousBorderFocus")
+    assert.equal(tonumber("00ff00", 16), focus.fg)
+    assert.is_nil(focus.bg)
+    assert.is_true(focus.bold)
+
+    local title = resolve("FibrousTitle")
+    assert.equal(tonumber("ffffff", 16), title.fg)
+    assert.is_nil(title.bg)
+  end)
+
+  it("an existing painted-border definition wins over apply", function()
+    vim.api.nvim_set_hl(0, "FibrousBorder", { fg = "#ff00ff" })
+    theme.apply()
+    assert.equal(tonumber("ff00ff", 16), resolve("FibrousBorder").fg)
+    vim.api.nvim_set_hl(0, "FibrousBorder", {})
+    theme.apply()
   end)
 
   it("names the default border preset", function()
