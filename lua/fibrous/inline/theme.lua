@@ -48,9 +48,12 @@ M.groups = {
 -- NormalFloat-looking rectangle around each box. A link cannot strip a key, so
 -- these resolve the source and drop bg/ctermbg — same technique (and same
 -- tradeoff) as FibrousMathVariable below: a derivation is a snapshot, not a
--- live link, so it is recomputed on ColorScheme and on every host.new(), which
--- covers scheme switches and any mount that follows a hand-rolled `:hi LineNr`.
--- `default = true` so an explicit user definition still wins outright.
+-- live link. `default = true` means an explicit user definition wins outright,
+-- and ALSO that a derivation, once set, stays until the group is cleared — so
+-- the snapshot refreshes on ColorScheme (schemes `hi clear` first, and the
+-- autocmd re-derives from the new source), but a hand-rolled `:hi LineNr`
+-- mid-session will not reach an already-derived FibrousBorder. That is the
+-- price of stripping a key a link would carry.
 --
 -- LineNr: a subtle gray in dark AND light schemes. Directory for focus: the
 -- focused state needs an actual accent COLOR — bold-only groups (CursorLineNr
