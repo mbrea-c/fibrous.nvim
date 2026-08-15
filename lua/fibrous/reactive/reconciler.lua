@@ -213,11 +213,21 @@ function M.reconcile_children(parent, specs, env)
 	end
 
 	-- Any old fiber not claimed this render is gone: unmount it and flag the
-	-- removal so the incremental painter blanks its orphaned cells.
+	-- removal so the incremental painter blanks its orphaned cells. The flag
+	-- goes on the nearest HOST ancestor, not necessarily `parent`: a function
+	-- component builds no node of its own (build_node descends straight
+	-- through it), so a flag parked on one is never consumed and a component
+	-- replacing its root left the old node's cells stale wherever the new
+	-- layout didn't happen to repaint them (a row sibling's shrunken tail).
 	for _, f in ipairs(old) do
 		if not used[f] then
 			M.unmount_fiber(f, env)
-			parent._child_dropped = true
+			local owner = parent
+			while owner and type(owner.type) == "function" do
+				owner = owner.parent
+			end
+			owner = owner or parent -- no host above (a mount root): keep the old spot
+			owner._child_dropped = true
 		end
 	end
 	parent.child_fibers = next_children

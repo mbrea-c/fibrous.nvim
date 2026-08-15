@@ -447,6 +447,49 @@ describe("inline.subwin damage tracking", function()
 		vim.api.nvim_buf_delete(buf, { force = true })
 	end)
 
+	-- A component that REPLACES its root node sets the reconciler's
+	-- dropped-child flag on the component fiber — which builds no node of its
+	-- own, so the flag must bubble to the nearest HOST ancestor or the painter
+	-- never scans for the replaced node's orphaned cells. Under a row that
+	-- leaks: the surviving sibling repaints only its own cells, and the old
+	-- root's tail sticks around when the new root's first line is shorter
+	-- (weave's markdown toggle kept "second" of "> first second" on row 1).
+	it("blanks the orphaned cells of a root replaced under a component wrapper", function()
+		local setter
+		local function Body(ctx)
+			local s = ctx.use_state(false)
+			setter = s
+			if s.get() then
+				return {
+					comp = col,
+					props = {},
+					children = {
+						{ comp = text, props = { text = "first" } },
+						{ comp = text, props = { text = "second" } },
+					},
+				}
+			end
+			return { comp = text, props = { text = "first second" } }
+		end
+		local function App()
+			return {
+				comp = row,
+				props = {},
+				children = {
+					{ comp = text, props = { text = "> " } },
+					{ comp = Body, props = {} },
+				},
+			}
+		end
+		local handle = mount.floating(App, {}, { width = 16, height = 3 })
+		assert.same({ "> first second  ", "                ", "                " }, lines_of(handle.bufnr))
+
+		setter.set(true)
+		assert.same({ "> first         ", "  second        ", "                " }, lines_of(handle.bufnr))
+
+		handle.unmount()
+	end)
+
 	it("a damaging flush while the widget is focused repairs the mirror on leave", function()
 		local setter
 		local function App(ctx)
