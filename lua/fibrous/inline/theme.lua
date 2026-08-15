@@ -112,6 +112,12 @@ local function apply_math_variable()
   base.default = true
   base.italic = true
   base.cterm = vim.tbl_extend("force", base.cterm or {}, { italic = true })
+  -- fg-only, like the border derivations: the snapshot must not stamp
+  -- @markup.math's background into every variable cell — a math run sits on
+  -- whatever surface is behind it (hlmix composes a fill's bg back in where
+  -- one exists; everywhere else the surface's own background should show).
+  base.bg = nil
+  base.ctermbg = nil
   vim.api.nvim_set_hl(0, "FibrousMathVariable", base)
 end
 

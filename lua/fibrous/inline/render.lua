@@ -8,6 +8,10 @@ local Canvas = require("fibrous.inline.canvas")
 
 local width = require("fibrous.inline.width")
 local char_width, str_width, clusters = width.char, width.str, width.clusters
+-- Fg runs composed over the background fill they paint on: the canvas keeps
+-- one hl per cell, so a fg-only group would otherwise punch a window-bg hole
+-- in an ancestor's fill (see inline/hlmix.lua).
+local mix = require("fibrous.inline.hlmix").mix
 
 local M = {}
 
@@ -42,7 +46,8 @@ end
 ---@param rect { x: integer, y: integer, w: integer, h: integer }
 ---@param b Border
 ---@param hl_override string|nil  style `border_hl` — recolors without touching the spec
-local function draw_border(c, rect, b, hl_override)
+---@param fill string|nil  the innermost background fill under the border cells
+local function draw_border(c, rect, b, hl_override, fill)
 	local s = b.sides
 	if s.top + s.right + s.bottom + s.left == 0 then
 		return
@@ -58,6 +63,7 @@ local function draw_border(c, rect, b, hl_override)
 	elseif hl == false then
 		hl = nil
 	end
+	hl = mix(fill, hl)
 	local x0, y0 = rect.x, rect.y
 	local x1, y1 = rect.x + rect.w - 1, rect.y + rect.h - 1
 
@@ -115,14 +121,16 @@ local function draw_border(c, rect, b, hl_override)
 			elseif t.align == "right" then
 				x = x + span_w - tw
 			end
-			c:text(x, t.pos == "top" and y0 or y1, text, t.hl or hl)
+			c:text(x, t.pos == "top" and y0 or y1, text, t.hl and mix(fill, t.hl) or hl)
 		end
 	end
 end
 
 ---@param c Canvas
 ---@param node table  a node annotated by layout.compute
-local function visit(c, node)
+---@param fill string|nil  the innermost ancestor background fill (fg runs
+---  compose over it — one hl per cell, see hlmix)
+local function visit(c, node, fill)
 	local rect = node.rect
 	-- What this node has painted on the canvas — the incremental painter
 	-- (M.update) compares against it to decide whether a subtree can be
@@ -143,8 +151,9 @@ local function visit(c, node)
 
 	if bg then
 		c:hl_rect(rect, bg)
+		fill = bg
 	end
-	draw_border(c, rect, node.box.border, rs and rs.border_hl)
+	draw_border(c, rect, node.box.border, rs and rs.border_hl, fill)
 
 	if node.kind == "text" then
 		local content = node.content
@@ -163,12 +172,12 @@ local function visit(c, node)
 						break
 					end
 					local chunk = crop(run.text, remaining)
-					c:text(x, y, chunk, run.hl or text_hl)
+					c:text(x, y, chunk, mix(fill, run.hl or text_hl))
 					local cw = str_width(chunk)
 					x, remaining = x + cw, remaining - cw
 				end
 			else
-				c:text(content.x, y, crop(line, content.w), text_hl)
+				c:text(content.x, y, crop(line, content.w), mix(fill, text_hl))
 			end
 		end
 	elseif node.kind == "image" then
@@ -195,7 +204,7 @@ local function visit(c, node)
 		end
 	elseif CONTAINERS[node.kind] then
 		for _, child in ipairs(node.children or {}) do
-			visit(c, child)
+			visit(c, child, fill)
 		end
 	end
 end
@@ -416,10 +425,12 @@ function M.update(c, tree)
 			end
 		end
 	end
-	-- ...phase 3: paint each changed subtree, exactly as a full paint would.
+	-- ...phase 3: paint each changed subtree, exactly as a full paint would —
+	-- under the innermost enclosing fill (r.bgs[1], the walk prepends), so fg
+	-- runs compose exactly as the full paint composes them.
 	for _, r in ipairs(roots) do
 		if r.node then -- a blank-only root (removed child's box) has no node to paint
-			visit(c, r.node)
+			visit(c, r.node, r.bgs[1] and r.bgs[1].hl or nil)
 		end
 	end
 
