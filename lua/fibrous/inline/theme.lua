@@ -82,6 +82,15 @@ M.styles = {
     _hover = { hl = "FibrousButtonHover" },
   },
   checkbox = { _hover = { hl = "FibrousHover" } },
+  -- the select field (ui.dropdown's input): side-only brackets, so the field
+  -- reads as `[value ]` and stays one line tall. Dim at rest like the
+  -- unchecked checkbox mark; the brackets take the border focus accent while
+  -- the field has the cursor — THE visible cue that the dropdown is focused
+  -- (its float carries no fill of its own to brighten).
+  dropdown = {
+    border = { left = "[", right = "]", hl = "FibrousDim" },
+    _focus = { border_hl = "FibrousBorderFocus" },
+  },
   -- host primitives default their theme key to their own tag, so these
   -- apply to every text_input/raw_buffer: the border brightens while its
   -- float has the cursor (subwin.lua drives the focus state) — with the

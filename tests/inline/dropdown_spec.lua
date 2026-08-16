@@ -28,14 +28,26 @@ local function floats_of(handle)
   return input, popup
 end
 
+-- Rows carry one pad cell each side (option text aligns under the field
+-- text, past the `[` border): strip exactly that lead plus the right fill.
 local function popup_lines(handle)
   local _, popup = floats_of(handle)
   if not popup then
     return nil
   end
   return vim.tbl_map(function(l)
-    return (l:gsub("%s+$", ""))
+    return (l:gsub("^ ", ""):gsub("%s+$", ""))
   end, vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(popup), 0, -1, false))
+end
+
+-- 1-based row of the first extmark carrying `group` in `buf`, nil if none.
+local function hl_row(buf, group)
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
+    if m[4].hl_group == group then
+      return m[2] + 1
+    end
+  end
+  return nil
 end
 
 -- 1-based row of the selection highlight in the popup buffer.
@@ -44,13 +56,7 @@ local function sel_row(handle)
   if not popup then
     return nil
   end
-  local buf = vim.api.nvim_win_get_buf(popup)
-  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
-    if m[4].hl_group == "FibrousPopupSel" then
-      return m[2] + 1
-    end
-  end
-  return nil
+  return hl_row(vim.api.nvim_win_get_buf(popup), "FibrousPopupSel")
 end
 
 local function press(key)
@@ -251,6 +257,51 @@ describe("ui.dropdown", function()
     end))
     assert.same({}, selected) -- a revert is not a selection
 
+    handle.unmount()
+  end)
+
+  it("renders side brackets that take the focus accent while focused", function()
+    local handle = mount.floating(
+      dd_app({ options = OPTIONS, value = "banana", width = 12 }),
+      {},
+      { width = 14, height = 2, row = 2, col = 2 }
+    )
+    -- The brackets are the field's left/right border cells, painted in the
+    -- host buffer around the input float (border-box: inside width = 12).
+    local hbuf = vim.api.nvim_win_get_buf(handle.winid)
+    local line = vim.api.nvim_buf_get_lines(hbuf, 0, 1, false)[1]
+    assert.equal("[", line:sub(1, 1))
+    assert.equal("]", line:sub(12, 12))
+    assert.is_nil(hl_row(hbuf, "FibrousBorderFocus"))
+
+    local input = floats_of(handle)
+    vim.api.nvim_set_current_win(input)
+    assert.is_true(wait_for(function()
+      return hl_row(hbuf, "FibrousBorderFocus") ~= nil
+    end))
+
+    vim.api.nvim_set_current_win(handle.winid)
+    assert.is_true(wait_for(function()
+      return hl_row(hbuf, "FibrousBorderFocus") == nil
+    end))
+
+    handle.unmount()
+  end)
+
+  it("opts the input buffer out of completion engines", function()
+    local handle = mount.floating(
+      dd_app({ options = OPTIONS, value = "", width = 12 }),
+      {},
+      { width = 14, height = 2, row = 2, col = 2 }
+    )
+    -- The dropdown owns its completion UI: blink honours vim.b.completion,
+    -- native autocompletion the buffer-local 'autocomplete' option.
+    local input = floats_of(handle)
+    local ibuf = vim.api.nvim_win_get_buf(input)
+    assert.equal(false, vim.b[ibuf].completion)
+    if vim.fn.exists("&autocomplete") == 1 then
+      assert.equal(false, vim.bo[ibuf].autocomplete)
+    end
     handle.unmount()
   end)
 

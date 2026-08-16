@@ -198,8 +198,15 @@ end
 -- re-commits of the same value stay silent); on_change mirrors the raw typed
 -- text. The popup windows itself to `max_height` rows (default 8) around the
 -- selection, so it never needs internal scroll.
+--
+-- The field renders as `[value ]`: side-only bracket borders from the
+-- `dropdown` theme key (inside `width` — border-box, like every node), which
+-- carry the focus accent while the field has the cursor. `theme = false`
+-- drops them. The input buffer opts out of completion engines (native
+-- autocomplete, blink's vim.b.completion): the dropdown owns its own popup,
+-- and any other completion UI there would cover the option list.
 ---@param ctx table
----@param props { options: string[], value?: string, width?: integer, max_height?: integer, free_text?: boolean, filter?: fun(options: string[], text: string): string[], on_select?: fun(value: string), on_change?: fun(text: string), flip_offset?: integer, style?: table }
+---@param props { options: string[], value?: string, width?: integer, max_height?: integer, free_text?: boolean, filter?: fun(options: string[], text: string): string[], on_select?: fun(value: string), on_change?: fun(text: string), flip_offset?: integer, style?: table, theme?: string|false }
 function M.dropdown(ctx, props)
   local dd = require("fibrous.inline.dropdown")
   local width = require("fibrous.inline.width")
@@ -281,28 +288,40 @@ function M.dropdown(ctx, props)
 
   local field_w = props.width or 20
   local max_h = props.max_height or 8
-  -- Popup width: max(field, widest option) over ALL options, so it doesn't
-  -- jump around as the filter narrows.
+  -- Popup width: spans the field's full border box and fits the widest
+  -- option after the rows' 1-cell alignment padding — over ALL options, so
+  -- it doesn't jump around as the filter narrows.
   local W = field_w
   for _, o in ipairs(props.options or {}) do
-    W = math.max(W, width.str(o))
+    W = math.max(W, width.str(o) + 2)
   end
 
   local fil = current_filter()
   local i = math.min(math.max(sel.get(), 1), #fil)
 
+  -- Rows pad one cell each side so the option text lines up under the field
+  -- text (which sits one cell in, past the `[` border) and the popup spans
+  -- the whole bracketed widget.
   local rows = {}
   if #fil == 0 then
     rows[1] = {
       comp = M.label,
-      props = { text = "(no match)", width = W, style = { hl = "FibrousPopup", text_hl = "FibrousDim" } },
+      props = {
+        text = "(no match)",
+        width = W,
+        style = { hl = "FibrousPopup", text_hl = "FibrousDim", padding = { x = 1 } },
+      },
     }
   else
     local lo = dd.window(#fil, i, max_h)
     for k = lo, math.min(lo + max_h - 1, #fil) do
       rows[#rows + 1] = {
         comp = M.label,
-        props = { text = fil[k], width = W, style = { hl = k == i and "FibrousPopupSel" or "FibrousPopup" } },
+        props = {
+          text = fil[k],
+          width = W,
+          style = { hl = k == i and "FibrousPopupSel" or "FibrousPopup", padding = { x = 1 } },
+        },
       }
     end
   end
@@ -315,9 +334,19 @@ function M.dropdown(ctx, props)
         singleline = true,
         width = field_w,
         height = 1,
+        theme = theme_key(props, "dropdown"),
         style = props.style,
         on_create = function(bufnr)
           r.bufnr = bufnr
+          -- The dropdown owns its completion UI: any engine popping up here
+          -- would cover the option list. Both autocompleters in the wild
+          -- have buffer-local off switches — 'autocomplete' is the native
+          -- one (guarded: older nvim lacks the option), vim.b.completion is
+          -- blink.cmp's.
+          vim.b[bufnr].completion = false
+          if vim.fn.exists("&autocomplete") == 1 then
+            vim.bo[bufnr].autocomplete = false
+          end
           -- These maps are our own dispatch entry points (subwin only wraps
           -- the props callbacks it fires itself), so batch them here: one
           -- render + flush per keystroke.
