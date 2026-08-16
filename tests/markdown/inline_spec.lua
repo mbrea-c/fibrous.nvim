@@ -53,6 +53,40 @@ describe("fibrous.markdown.inline", function()
     assert.equal("gone", n[1].children[1].text)
   end)
 
+  it("leaves intraword underscores literal (snake_case identifiers)", function()
+    -- One paragraph, two identifiers: without flanking checks the first _
+    -- opened emphasis and the next one closed it, eating both underscores.
+    assert.same(
+      { { type = "text", text = "compare pending_edits against first_pending_at" } },
+      inline.parse("compare pending_edits against first_pending_at")
+    )
+    assert.same({ { type = "text", text = "_foo_bar" } }, inline.parse("_foo_bar"))
+    assert.same({ { type = "text", text = "foo__bar__baz" } }, inline.parse("foo__bar__baz"))
+  end)
+
+  it("still emphasizes word-flanked underscores and intraword asterisks", function()
+    local n = inline.parse("a _b_ c")
+    assert.equal("emph", n[2].type)
+    assert.equal("b", n[2].children[1].text)
+    local strong = inline.parse("__init__")
+    assert.equal("strong", strong[1].type)
+    assert.equal("init", strong[1].children[1].text)
+    -- * (unlike _) may bind inside a word
+    local intra = inline.parse("a*b*c")
+    assert.equal("emph", intra[2].type)
+    assert.equal("b", intra[2].children[1].text)
+  end)
+
+  it("leaves space-flanked delimiters literal", function()
+    assert.same({ { type = "text", text = "2 * 3 * 4" } }, inline.parse("2 * 3 * 4"))
+    assert.same({ { type = "text", text = "a ~~ b ~~ c" } }, inline.parse("a ~~ b ~~ c"))
+    -- an invalid closer candidate is skipped, not fatal: the later valid
+    -- one closes (CommonMark: _a _b_ emphasizes "a _b")
+    local n = inline.parse("_a _b_")
+    assert.equal("emph", n[1].type)
+    assert.equal("a _b", n[1].children[1].text)
+  end)
+
   it("honors backslash escapes", function()
     assert.same({ { type = "text", text = "a * b" } }, inline.parse([[a \* b]]))
   end)

@@ -4,9 +4,11 @@
 -- Scope (documented subset, expanded over time): backslash escapes, code
 -- spans, images, links (inline destinations with an optional title),
 -- autolinks, strong/emphasis (* and _), GFM strikethrough (~~), and
--- soft/hard line breaks. Emphasis uses a pragmatic same-delimiter match rather
--- than the full CommonMark delimiter-run algorithm, so a few pathological
--- nestings differ from the reference; the common cases are exact.
+-- soft/hard line breaks. Emphasis uses a pragmatic same-delimiter match with
+-- simplified flanking checks (see can_open/can_close) rather than the full
+-- CommonMark delimiter-run algorithm, so a few pathological nestings differ
+-- from the reference; the common cases — including literal snake_case
+-- identifiers and space-separated asterisks — are exact.
 
 local ast = require("fibrous.doc.ast")
 
@@ -99,10 +101,43 @@ local function link_like(text, lb, is_image)
   return ast.link(url, title, parse(label)), close + 1
 end
 
--- An emphasis/strong/strikethrough run with delimiter `d` at `i`. Finds the next
--- matching `d`, parses the inside, wraps it in `make`. Returns node, next index.
+-- Simplified flanking (the CommonMark common cases without the full
+-- delimiter-run algorithm): a run can OPEN only when followed by
+-- non-whitespace and CLOSE only when preceded by non-whitespace — so
+-- "2 * 3 * 4" stays literal. Underscore runs additionally never bind INSIDE
+-- a word (CommonMark's intraword-underscore rule): they open only after a
+-- non-word character and close only before one, so pending_edits and
+-- _foo_bar are literal while *b* keeps working intraword. Word = ASCII %w;
+-- a multibyte char before/after an underscore counts as non-word, which is
+-- looser than the spec's unicode classes but on the safe (literal) side for
+-- identifiers.
+local function can_open(text, i, d)
+  local after = text:sub(i + #d, i + #d)
+  if after == "" or after:match("%s") then
+    return false
+  end
+  return d:sub(1, 1) ~= "_" or not text:sub(i - 1, i - 1):match("%w")
+end
+
+local function can_close(text, s, d)
+  local before = text:sub(s - 1, s - 1)
+  if before == "" or before:match("%s") then
+    return false
+  end
+  return d:sub(1, 1) ~= "_" or not text:sub(s + #d, s + #d):match("%w")
+end
+
+-- An emphasis/strong/strikethrough run with delimiter `d` at `i`. Finds the
+-- next matching `d` that may close (skipping candidates flanking forbids),
+-- parses the inside, wraps it in `make`. Returns node, next index.
 local function delimited(text, i, d, make)
+  if not can_open(text, i, d) then
+    return nil
+  end
   local close = find_unescaped(text, i + #d, d)
+  while close and not can_close(text, close, d) do
+    close = find_unescaped(text, close + 1, d)
+  end
   if not close then
     return nil
   end
