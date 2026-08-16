@@ -28,15 +28,15 @@ local function floats_of(handle)
   return input, popup
 end
 
--- Rows carry one pad cell each side (option text aligns under the field
--- text, past the `[` border): strip exactly that lead plus the right fill.
+-- Rows carry two pad cells left (option text aligns under the field text,
+-- past the `[▾` mark) and one right: strip exactly that lead plus the fill.
 local function popup_lines(handle)
   local _, popup = floats_of(handle)
   if not popup then
     return nil
   end
   return vim.tbl_map(function(l)
-    return (l:gsub("^ ", ""):gsub("%s+$", ""))
+    return (l:gsub("^  ", ""):gsub("%s+$", ""))
   end, vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(popup), 0, -1, false))
 end
 
@@ -260,18 +260,20 @@ describe("ui.dropdown", function()
     handle.unmount()
   end)
 
-  it("renders side brackets that take the focus accent while focused", function()
+  it("renders as [▾value ] and takes the focus accent while focused", function()
     local handle = mount.floating(
       dd_app({ options = OPTIONS, value = "banana", width = 12 }),
       {},
       { width = 14, height = 2, row = 2, col = 2 }
     )
-    -- The brackets are the field's left/right border cells, painted in the
-    -- host buffer around the input float (border-box: inside width = 12).
+    -- `[▾` is a content mark, `]` the field's right border cell, painted in
+    -- the host buffer around the input float — all inside width = 12
+    -- (border-box).
     local hbuf = vim.api.nvim_win_get_buf(handle.winid)
-    local line = vim.api.nvim_buf_get_lines(hbuf, 0, 1, false)[1]
-    assert.equal("[", line:sub(1, 1))
-    assert.equal("]", line:sub(12, 12))
+    local line = (vim.api.nvim_buf_get_lines(hbuf, 0, 1, false)[1]:gsub("%s+$", ""))
+    assert.is_true(vim.startswith(line, "[▾"))
+    assert.equal("]", line:sub(-1))
+    assert.equal(12, vim.fn.strdisplaywidth(line))
     assert.is_nil(hl_row(hbuf, "FibrousBorderFocus"))
 
     local input = floats_of(handle)

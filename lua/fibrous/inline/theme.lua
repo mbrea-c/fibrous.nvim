@@ -82,13 +82,14 @@ M.styles = {
     _hover = { hl = "FibrousButtonHover" },
   },
   checkbox = { _hover = { hl = "FibrousHover" } },
-  -- the select field (ui.dropdown's input): side-only brackets, so the field
-  -- reads as `[value ]` and stays one line tall. Dim at rest like the
-  -- unchecked checkbox mark; the brackets take the border focus accent while
-  -- the field has the cursor — THE visible cue that the dropdown is focused
-  -- (its float carries no fill of its own to brighten).
+  -- the select field: reads as `[▾value ]`, one line tall. The right bracket
+  -- is a border; the left bracket + chevron are CONTENT (marks.dropdown.arrow
+  -- below — the chevron is what tells a dropdown apart from a button chip, so
+  -- it can't be a 1-cell border char). Both sit dim at rest and take the
+  -- border focus accent while the field has the cursor — THE visible cue
+  -- that the dropdown is focused (its float carries no fill to brighten).
   dropdown = {
-    border = { left = "[", right = "]", hl = "FibrousDim" },
+    border = { right = "]", hl = "FibrousDim" },
     _focus = { border_hl = "FibrousBorderFocus" },
   },
   -- host primitives default their theme key to their own tag, so these
@@ -106,6 +107,11 @@ M.marks = {
   checkbox = {
     checked = { "[x]", hl = "FibrousCheckboxMark" },
     unchecked = { "[ ]", hl = "FibrousDim" },
+  },
+  -- the dropdown field's left edge (see styles.dropdown): the component
+  -- swaps the hl for the focus accent while the field has the cursor.
+  dropdown = {
+    arrow = { "[▾", hl = "FibrousDim" },
   },
 }
 

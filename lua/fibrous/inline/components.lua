@@ -199,14 +199,17 @@ end
 -- text. The popup windows itself to `max_height` rows (default 8) around the
 -- selection, so it never needs internal scroll.
 --
--- The field renders as `[value ]`: side-only bracket borders from the
--- `dropdown` theme key (inside `width` — border-box, like every node), which
--- carry the focus accent while the field has the cursor. `theme = false`
--- drops them. The input buffer opts out of completion engines (native
--- autocomplete, blink's vim.b.completion): the dropdown owns its own popup,
--- and any other completion UI there would cover the option list.
+-- The field renders as `[▾value ]`, all inside `width` (border-box, like
+-- every node): the right bracket is a border from the `dropdown` theme key,
+-- the left bracket + chevron a content mark (theme.marks.dropdown; the
+-- `marks` prop overrides) — the chevron is what tells a dropdown apart from
+-- a button chip. Both carry the focus accent while the field has the
+-- cursor; `theme = false` drops them for a bare field. The input buffer
+-- opts out of completion engines (native autocomplete, blink's
+-- vim.b.completion): the dropdown owns its own popup, and any other
+-- completion UI there would cover the option list.
 ---@param ctx table
----@param props { options: string[], value?: string, width?: integer, max_height?: integer, free_text?: boolean, filter?: fun(options: string[], text: string): string[], on_select?: fun(value: string), on_change?: fun(text: string), flip_offset?: integer, style?: table, theme?: string|false }
+---@param props { options: string[], value?: string, width?: integer, max_height?: integer, free_text?: boolean, filter?: fun(options: string[], text: string): string[], on_select?: fun(value: string), on_change?: fun(text: string), flip_offset?: integer, marks?: { arrow?: string|Span }, style?: table, theme?: string|false }
 function M.dropdown(ctx, props)
   local dd = require("fibrous.inline.dropdown")
   local width = require("fibrous.inline.width")
@@ -215,6 +218,10 @@ function M.dropdown(ctx, props)
   local open = ctx.use_state(false)
   local sel = ctx.use_state(1)
   local text = ctx.use_state(props.value or "")
+  -- Rendering state for the arrow mark's focus accent: the border's _focus
+  -- flip happens host-side (subwin set_focus), but the mark is content this
+  -- component renders, so it needs the transition as state.
+  local focused = ctx.use_state(false)
   -- Non-rendering state, plus the latest props for the buffer-map closures
   -- (maps are wired once at input creation; handles and this ref are stable
   -- across renders, so nothing below closes over stale values).
@@ -289,27 +296,45 @@ function M.dropdown(ctx, props)
   local field_w = props.width or 20
   local max_h = props.max_height or 8
   -- Popup width: spans the field's full border box and fits the widest
-  -- option after the rows' 1-cell alignment padding — over ALL options, so
-  -- it doesn't jump around as the filter narrows.
+  -- option after the rows' alignment padding (2 left, under the `[▾` mark;
+  -- 1 right, under the `]`) — over ALL options, so it doesn't jump around
+  -- as the filter narrows.
+  local EMPTY = "(no match)"
   local W = field_w
   for _, o in ipairs(props.options or {}) do
-    W = math.max(W, width.str(o) + 2)
+    W = math.max(W, width.str(o) + 3)
+  end
+  -- The empty-state placeholder is a row like any other: it must fit too.
+  W = math.max(W, width.str(EMPTY) + 3)
+
+  -- The field's left edge: a `[▾` content mark, dim at rest, swapped to the
+  -- focus accent while the field has the cursor (its border does the same
+  -- host-side). The input takes the rest of the border box, so props.width
+  -- stays the whole widget's footprint.
+  local arrow_node, arrow_w
+  if props.theme ~= false then
+    local span = (props.marks or {}).arrow or theme.marks.dropdown.arrow
+    local atext = type(span) == "table" and span[1] or span
+    local ahl = focused.get() and "FibrousBorderFocus" or (type(span) == "table" and span.hl or nil)
+    arrow_w = width.str(atext)
+    arrow_node = { comp = M.label, props = { text = { { atext, hl = ahl } } } }
   end
 
   local fil = current_filter()
   local i = math.min(math.max(sel.get(), 1), #fil)
 
-  -- Rows pad one cell each side so the option text lines up under the field
-  -- text (which sits one cell in, past the `[` border) and the popup spans
-  -- the whole bracketed widget.
+  -- Rows pad 2 left / 1 right so the option text lines up under the field
+  -- text (which sits past the `[▾` mark) and the popup spans the whole
+  -- bracketed widget.
+  local pad = { left = 2, right = 1 }
   local rows = {}
   if #fil == 0 then
     rows[1] = {
       comp = M.label,
       props = {
-        text = "(no match)",
+        text = EMPTY,
         width = W,
-        style = { hl = "FibrousPopup", text_hl = "FibrousDim", padding = { x = 1 } },
+        style = { hl = "FibrousPopup", text_hl = "FibrousDim", padding = pad },
       },
     }
   else
@@ -320,93 +345,98 @@ function M.dropdown(ctx, props)
         props = {
           text = fil[k],
           width = W,
-          style = { hl = k == i and "FibrousPopupSel" or "FibrousPopup", padding = { x = 1 } },
+          style = { hl = k == i and "FibrousPopupSel" or "FibrousPopup", padding = pad },
         },
       }
     end
   end
 
-  local children = {
-    {
-      comp = M.text_input,
-      props = {
-        value = props.value or "",
-        singleline = true,
-        width = field_w,
-        height = 1,
-        theme = theme_key(props, "dropdown"),
-        style = props.style,
-        on_create = function(bufnr)
-          r.bufnr = bufnr
-          -- The dropdown owns its completion UI: any engine popping up here
-          -- would cover the option list. Both autocompleters in the wild
-          -- have buffer-local off switches — 'autocomplete' is the native
-          -- one (guarded: older nvim lacks the option), vim.b.completion is
-          -- blink.cmp's.
-          vim.b[bufnr].completion = false
-          if vim.fn.exists("&autocomplete") == 1 then
-            vim.bo[bufnr].autocomplete = false
-          end
-          -- These maps are our own dispatch entry points (subwin only wraps
-          -- the props callbacks it fires itself), so batch them here: one
-          -- render + flush per keystroke.
-          for _, m in ipairs({ "i", "n" }) do
-            vim.keymap.set(m, "<C-n>", function()
-              runtime.batch(move, 1)
-            end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown next option" })
-            vim.keymap.set(m, "<C-p>", function()
-              runtime.batch(move, -1)
-            end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown previous option" })
-            vim.keymap.set(m, "<C-y>", function()
-              runtime.batch(choose)
-            end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown accept option" })
-            vim.keymap.set(m, "<C-e>", function()
-              runtime.batch(open.set, false)
-            end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown close popup" })
-          end
-        end,
-        on_change = function(v)
-          -- Refs first regardless of batching: outside a runtime.batch scope
-          -- a .set renders immediately, and that render must already see the
-          -- pristine flag flipped (a later no-op .set would not re-render).
-          local suppressed = r.suppress
-          r.suppress = false
-          if not suppressed then
-            r.pristine = false
-            open.set(true)
-            sel.set(1)
-          end
-          text.set(v)
-          if r.props.on_change then
-            r.props.on_change(v)
-          end
-        end,
-        on_submit = choose,
-        on_focus = function()
-          r.pristine = true
+  local field = {
+    comp = M.text_input,
+    props = {
+      value = props.value or "",
+      singleline = true,
+      width = math.max(field_w - (arrow_w or 0), 1),
+      height = 1,
+      theme = theme_key(props, "dropdown"),
+      style = props.style,
+      on_create = function(bufnr)
+        r.bufnr = bufnr
+        -- The dropdown owns its completion UI: any engine popping up here
+        -- would cover the option list. Both autocompleters in the wild
+        -- have buffer-local off switches — 'autocomplete' is the native
+        -- one (guarded: older nvim lacks the option), vim.b.completion is
+        -- blink.cmp's.
+        vim.b[bufnr].completion = false
+        if vim.fn.exists("&autocomplete") == 1 then
+          vim.bo[bufnr].autocomplete = false
+        end
+        -- These maps are our own dispatch entry points (subwin only wraps
+        -- the props callbacks it fires itself), so batch them here: one
+        -- render + flush per keystroke.
+        for _, m in ipairs({ "i", "n" }) do
+          vim.keymap.set(m, "<C-n>", function()
+            runtime.batch(move, 1)
+          end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown next option" })
+          vim.keymap.set(m, "<C-p>", function()
+            runtime.batch(move, -1)
+          end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown previous option" })
+          vim.keymap.set(m, "<C-y>", function()
+            runtime.batch(choose)
+          end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown accept option" })
+          vim.keymap.set(m, "<C-e>", function()
+            runtime.batch(open.set, false)
+          end, { buffer = bufnr, nowait = true, desc = "fibrous: dropdown close popup" })
+        end
+      end,
+      on_change = function(v)
+        -- Refs first regardless of batching: outside a runtime.batch scope
+        -- a .set renders immediately, and that render must already see the
+        -- pristine flag flipped (a later no-op .set would not re-render).
+        local suppressed = r.suppress
+        r.suppress = false
+        if not suppressed then
+          r.pristine = false
           open.set(true)
-          sel.set(dd.index_of(r.props.options or {}, r.committed) or 1)
-        end,
-        on_blur = function(v)
-          local p = r.props
-          local chosen
-          if open.get() then
-            local bfil = current_filter()
-            local bi = math.min(math.max(sel.get(), 1), #bfil)
-            chosen = bfil[bi]
-          end
-          local value = dd.blur_value(v, chosen, p.free_text, p.options)
-          if value ~= nil then
-            commit(value)
-          else
-            r.pristine = true
-            open.set(false)
-            sync_buf(r.committed)
-            text.set(r.committed)
-          end
-        end,
-      },
+          sel.set(1)
+        end
+        text.set(v)
+        if r.props.on_change then
+          r.props.on_change(v)
+        end
+      end,
+      on_submit = choose,
+      on_focus = function()
+        focused.set(true)
+        r.pristine = true
+        open.set(true)
+        sel.set(dd.index_of(r.props.options or {}, r.committed) or 1)
+      end,
+      on_blur = function(v)
+        focused.set(false)
+        local p = r.props
+        local chosen
+        if open.get() then
+          local bfil = current_filter()
+          local bi = math.min(math.max(sel.get(), 1), #bfil)
+          chosen = bfil[bi]
+        end
+        local value = dd.blur_value(v, chosen, p.free_text, p.options)
+        if value ~= nil then
+          commit(value)
+        else
+          r.pristine = true
+          open.set(false)
+          sync_buf(r.committed)
+          text.set(r.committed)
+        end
+      end,
     },
+  }
+  -- The arrow mark rides in a row beside the input; without it (theme =
+  -- false) the input IS the field.
+  local children = {
+    arrow_node and { comp = M.row, props = {}, children = { arrow_node, field } } or field,
   }
   if open.get() then
     children[#children + 1] = {
