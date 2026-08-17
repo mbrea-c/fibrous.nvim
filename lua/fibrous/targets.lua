@@ -171,6 +171,56 @@ function M.extract(target, winid)
   return M.collect(target.tree, M.window_resolver(winid, target.bufnr))
 end
 
+--- flash.nvim renders the jump label one cell AFTER end_pos (label.after ->
+--- offset {0,1}) as an overlay, and an overlay cannot leave the window: a
+--- span reaching the window's right edge pushes the label off-screen, and a
+--- span ending at the line's very end trips flash's char math (charidx past
+--- the end returns -1) and strands the label at column 0. Either way the
+--- target has no readable label and cannot be jumped to. Every emitter is
+--- exposed — full-width widgets in the root, content-sized input floats
+--- (whose line IS the window width), mirrors against the parent's edge — so
+--- the clamp lives here in the one funnel they all pass through: pull
+--- end_pos back until the label cell is a real, visible character cell. The
+--- match highlight understates the widget by a cell or two at the edge,
+--- which is invisible next to a target that cannot be jumped to at all.
+--- @param t table target ({ winid, pos, end_pos }, single-line by contract)
+--- @param wins table per-call cache of window metrics, keyed by winid
+local function clamp_label(t, wins)
+  local win = wins[t.winid]
+  if win == nil then
+    local info = vim.fn.getwininfo(t.winid)[1]
+    win = info
+        and {
+          wrap = vim.wo[t.winid].wrap,
+          bufnr = info.bufnr,
+          textw = info.width - info.textoff,
+          leftcol = vim.api.nvim_win_call(t.winid, function()
+            return vim.fn.winsaveview().leftcol
+          end),
+        }
+      or false
+    wins[t.winid] = win
+  end
+  if not win or win.wrap then
+    return -- wrapped lines always give the label a cell to land on
+  end
+  local row = t.end_pos[1]
+  local line = M.line_at(win.bufnr, row - 1)
+  local endcell = width.str(line:sub(1, t.end_pos[2]))
+  -- Rightmost end cell whose label cell (one further) is still a real
+  -- character inside the viewport: bounded by the window's last text column
+  -- and by the line's last character (the after-end-of-line position is
+  -- exactly the window edge in a content-sized float).
+  local max_end = math.min(win.leftcol + win.textw, width.str(line)) - 2
+  if endcell > max_end then
+    -- never pull the end before the start; a widget living entirely in the
+    -- last two columns stays as it is (only a before-style label could serve
+    -- it, and that is the consumer's flash config, not geometry)
+    local startcell = width.str(line:sub(1, t.pos[2]))
+    t.end_pos = { row, width.cell_to_byte(line, math.max(max_end, startcell)) }
+  end
+end
+
 --- Collect all currently-visible interactive targets across every mount.
 --- @param opts? { winid?: integer, kinds?: string[], predicate?: fun(t: table): boolean }
 --- @return table[]
@@ -185,6 +235,7 @@ function M.targets(opts)
   end
 
   local out = {}
+  local wins = {}
   for _, provider in pairs(providers) do
     local ok, list = pcall(provider)
     if ok and list then
@@ -194,6 +245,7 @@ function M.targets(opts)
           and (not kinds or kinds[t.kind])
           and (not opts.predicate or opts.predicate(t))
         then
+          clamp_label(t, wins)
           out[#out + 1] = t
         end
       end

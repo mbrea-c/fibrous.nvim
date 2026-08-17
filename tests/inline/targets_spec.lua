@@ -6,6 +6,21 @@
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
 local targets = require("fibrous.targets")
+local width = require("fibrous.inline.width")
+
+--- Where flash.nvim would render a target's jump label: its util.offset_pos
+--- (label.after -> {0,1}) verbatim, then bytes back to a display cell. This
+--- is the formula the clamp in targets.lua answers to, so the specs assert
+--- against it rather than re-deriving the geometry.
+--- @param t table a target
+--- @return integer cell 0-based display cell of the label overlay
+--- @return integer col byte col flash computes (0 = the strand-at-column-0 quirk)
+local function flash_label_cell(t)
+  local bufnr = vim.api.nvim_win_get_buf(t.winid)
+  local line = vim.api.nvim_buf_get_lines(bufnr, t.end_pos[1] - 1, t.end_pos[1], false)[1] or ""
+  local col = math.max(vim.fn.byteidx(line, vim.fn.charidx(line, t.end_pos[2]) + 1), 0)
+  return width.str(line:sub(1, col)), col
+end
 
 local function App()
   return {
@@ -178,6 +193,73 @@ describe("fibrous.targets", function()
     local handle = mount.floating(App, {}, { width = 4, height = 3 })
     local links = targets.targets({ winid = handle.winid, kinds = { "link" } })
     assert.equal(1, #links)
+    handle.unmount()
+  end)
+
+  it("keeps the flash label on-screen for a span reaching the window's right edge", function()
+    -- A full-width widget used to report end_pos at the line's very end:
+    -- flash places the label one cell after that, which is either past the
+    -- window's right edge (invisible) or, via its charidx-past-the-end
+    -- fallback, stranded at column 0. Both leave the target unjumpable.
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.button, props = { label = "stretched wide", width = 20, on_press = function() end } },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 20, height = 4 })
+    local list = targets.targets({ winid = handle.winid, kinds = { "button" } })
+    assert.equal(1, #list)
+    local cell, col = flash_label_cell(list[1])
+    local w = vim.api.nvim_win_get_config(list[1].winid).width
+    assert.is_true(cell < w, ("label cell %d is past the %d-wide window"):format(cell, w))
+    assert.is_true(col > list[1].pos[2], "label stranded at/before the span start (col " .. col .. ")")
+    handle.unmount()
+  end)
+
+  it("keeps the flash label inside a content-sized input float", function()
+    -- A shown text_input float is exactly as wide as the field, so its span
+    -- ends at the line end BY CONSTRUCTION — without the clamp no input
+    -- widget ever gets a visible label.
+    local function App()
+      return {
+        comp = ui.col,
+        props = {},
+        children = {
+          { comp = ui.text_input, props = { value = "hello", height = 1 } },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 20, height = 4 })
+    vim.wait(50, function()
+      return false
+    end)
+    local list = targets.targets({ kinds = { "text_input" } })
+    assert.equal(1, #list)
+    local cell, col = flash_label_cell(list[1])
+    local w = vim.api.nvim_win_get_config(list[1].winid).width
+    assert.is_true(cell < w, ("label cell %d is past the %d-wide float"):format(cell, w))
+    assert.is_true(col > 0, "label stranded at column 0")
+    handle.unmount()
+  end)
+
+  it("leaves a mid-line span's end_pos alone", function()
+    local function App()
+      return {
+        comp = ui.paragraph,
+        props = {
+          text = { "see ", { "the link", on_click = function() end, role = "link" }, " now and evermore" },
+        },
+      }
+    end
+    local handle = mount.floating(App, {}, { width = 30, height = 3 })
+    local links = targets.targets({ winid = handle.winid, kinds = { "link" } })
+    assert.equal(1, #links)
+    -- ends right after "see the link" (cell 12), nowhere near the edge
+    assert.equal(12, links[1].end_pos[2])
     handle.unmount()
   end)
 
