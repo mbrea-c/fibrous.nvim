@@ -63,6 +63,10 @@ M.fg_groups = {
   FibrousBorder = "LineNr",
   FibrousBorderFocus = "Directory",
   FibrousTitle = "FloatTitle",
+  -- ui.code / ui.diff line-number gutters: LineNr's colour without its bg —
+  -- the gutter sits on whatever surface the snippet renders into, and
+  -- stamping the sign-column bg there would draw a phantom sign column.
+  FibrousCodeGutter = "LineNr",
 }
 
 -- The preset `border = true` resolves to (box.lua consults this).

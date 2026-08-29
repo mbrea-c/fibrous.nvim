@@ -541,4 +541,25 @@ function M.markdown(ctx, props)
   return require("fibrous.markdown.component")(ctx, props)
 end
 
+-- A code snippet: treesitter-highlighted source, an optional file-reference
+-- header (a clickable link span; jumps there by default), and a line-number
+-- gutter whose numbers MATCH the referenced code (ref.start_line seeds it).
+-- Body in fibrous.doc.snippet; lazy for the same reason as markdown.
+---@param ctx table
+---@param props { code: string, lang?: string, ref?: { path: string, start_line?: integer }, start_line?: integer, line_numbers?: boolean, header?: boolean, on_open?: fun(ref: table), max_lines?: integer, style?: table }
+function M.code(ctx, props)
+  return require("fibrous.doc.snippet").component(ctx, props)
+end
+
+-- A unified diff: line-level add/delete rows whose Diff* fills sit UNDER the
+-- syntax spans (hlmix composes them), a dual old│new line-number gutter, and
+-- context folded around the hunks. From before/after content (vim.diff) or an
+-- already-formatted unified diff text; same reference header as ui.code.
+-- Body in fibrous.doc.diff; lazy for the same reason as markdown.
+---@param ctx table
+---@param props { before?: string, after?: string, unified?: string, lang?: string, ref?: { path: string, start_line?: integer }, start_line?: integer, context?: integer, line_numbers?: boolean, header?: boolean, on_open?: fun(ref: table), max_lines?: integer, style?: table }
+function M.diff(ctx, props)
+  return require("fibrous.doc.diff").component(ctx, props)
+end
+
 return M

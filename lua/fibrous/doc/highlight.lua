@@ -55,6 +55,38 @@ function M.code(text, lang)
   return result
 end
 
+-- Highlight `text` as `lang`, reshaped per source line: entry i is line i's
+-- own span list (empty for a blank line), so consumers that interleave lines
+-- from several sources (ui.diff) or truncate (ui.code's max_lines) can pick
+-- lines without re-splitting. Degrades to nil exactly like M.code — this is a
+-- pure reshape of its (cached) result, so it adds no second cache.
+---@param text string
+---@param lang string|nil
+---@return table[][]|nil
+function M.code_lines(text, lang)
+  local spans = M.code(text, lang)
+  if not spans then
+    return nil
+  end
+  local lines = { {} }
+  for _, span in ipairs(spans) do
+    local chunk = type(span) == "table" and span[1] or span
+    local hl = type(span) == "table" and span.hl or nil
+    local first = true
+    for piece in (chunk .. "\n"):gmatch("([^\n]*)\n") do
+      if not first then
+        lines[#lines + 1] = {}
+      end
+      first = false
+      if piece ~= "" then
+        local line = lines[#lines]
+        line[#line + 1] = hl and { piece, hl = hl } or piece
+      end
+    end
+  end
+  return lines
+end
+
 function compute(text, lang)
   local ts = vim.treesitter
   if not (ts and ts.get_string_parser and ts.query and ts.query.get) then
@@ -76,6 +108,10 @@ function compute(text, lang)
   local by_byte = {}
   local any = false
 
+  -- Metadata captures, not colours: @spell covers the inside of every comment
+  -- and would (last-wins) strip the comment's own group from its text.
+  local NONHL = { spell = true, nospell = true, conceal = true }
+
   parser:for_each_tree(function(tree, ltree)
     local q = ts.query.get(ltree:lang(), "highlights")
     if not q then
@@ -83,7 +119,7 @@ function compute(text, lang)
     end
     for id, node in q:iter_captures(tree:root(), text, 0, -1) do
       local name = q.captures[id]
-      if name and name:sub(1, 1) ~= "_" then
+      if name and name:sub(1, 1) ~= "_" and not NONHL[name] then
         local sr, sc, er, ec = node:range()
         local s = (starts[sr] or 0) + sc
         local e = (starts[er] or 0) + ec

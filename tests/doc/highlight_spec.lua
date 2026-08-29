@@ -25,6 +25,19 @@ describe("fibrous.doc.highlight", function()
     end
   end)
 
+  it("keeps @comment on comment text (@spell is metadata, not a colour)", function()
+    local spans = highlight.code("-- a note\nlocal x = 1", "lua")
+    assert.is_true(spans ~= nil)
+    for _, s in ipairs(spans) do
+      if type(s) == "table" then
+        assert.is_true(s.hl ~= "@spell" and s.hl ~= "@nospell" and s.hl ~= "@conceal")
+        if s[1]:find("note", 1, true) then
+          assert.equal("@comment", s.hl)
+        end
+      end
+    end
+  end)
+
   it("highlights lua (parser present in this environment)", function()
     local spans = highlight.code("local x = 1", "lua")
     assert.is_true(spans ~= nil, "lua code highlights when the parser is available")
@@ -41,6 +54,35 @@ describe("fibrous.doc.highlight", function()
       parts[#parts + 1] = type(s) == "table" and s[1] or s
     end
     assert.equal("local x = 1", table.concat(parts))
+  end)
+end)
+
+describe("fibrous.doc.highlight.code_lines", function()
+  local function text_of(spans)
+    local parts = {}
+    for _, s in ipairs(spans) do
+      parts[#parts + 1] = type(s) == "table" and s[1] or s
+    end
+    return table.concat(parts)
+  end
+
+  it("splits the flat spans per source line, preserving the text", function()
+    local lines = highlight.code_lines("local x = 1\nreturn x", "lua")
+    assert.is_true(lines ~= nil, "lua highlights in this environment")
+    assert.equal(2, #lines)
+    assert.equal("local x = 1", text_of(lines[1]))
+    assert.equal("return x", text_of(lines[2]))
+  end)
+
+  it("keeps blank lines as empty span lists, so line counts match", function()
+    local lines = highlight.code_lines("local a = 1\n\nlocal b = 2", "lua")
+    assert.equal(3, #lines)
+    assert.equal("", text_of(lines[2]))
+  end)
+
+  it("degrades to nil exactly like code()", function()
+    assert.is_nil(highlight.code_lines("x = 1", "not_a_real_language_xyz"))
+    assert.is_nil(highlight.code_lines("x = 1", nil))
   end)
 end)
 
