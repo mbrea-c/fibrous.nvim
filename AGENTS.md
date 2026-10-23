@@ -100,5 +100,5 @@ let the user decide. Never silently walk past a docs problem you saw.
 - `../fibrous-docs` pins fibrous in its `flake.lock`. A docs *build* (as opposed
   to its `nix run .#test` suite, which uses the sibling working tree) only sees
   your fibrous changes after you commit, push, and update its lock, or with an
-  ad-hoc `--override-input fibrous path:../nui-reactive` (see fibrous-docs'
+  ad-hoc `--override-input fibrous path:../fibrous.nvim` (see fibrous-docs'
   DEVELOPMENT.md).

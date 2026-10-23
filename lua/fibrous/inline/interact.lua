@@ -65,6 +65,7 @@
 local M = {}
 
 local width = require("fibrous.inline.width")
+local clip = require("fibrous.inline.clip")
 local style = require("fibrous.inline.style")
 local runtime = require("fibrous.reactive.runtime")
 local mousemove = require("fibrous.inline.mousemove")
@@ -91,7 +92,7 @@ local ns_mouse_span = vim.api.nvim_create_namespace("fibrous_inline_mouse_span_h
 ---@param pred fun(props: table): any
 ---@return table|nil
 local function hit(node, x, y, pred)
-  local r = node.rect
+  local r = node.rect and clip.visible(node)
   if not r or x < r.x or x >= r.x + r.w or y < r.y or y >= r.y + r.h then
     return nil
   end
@@ -115,7 +116,7 @@ end
 -- The deepest TEXT leaf (one carrying line_runs, so its spans are addressable)
 -- at cell (x, y), or nil. Interactive spans live inside these.
 local function text_node_at(node, x, y)
-  local r = node.rect
+  local r = node.rect and clip.visible(node)
   if not r or x < r.x or x >= r.x + r.w or y < r.y or y >= r.y + r.h then
     return nil
   end
@@ -138,7 +139,7 @@ end
 -- index. Falls through to the closest keyed ancestor, like `hit`.
 ---@return table|nil
 local function keyed_at(node, x, y)
-  local r = node.rect
+  local r = node.rect and clip.visible(node)
   if not r or x < r.x or x >= r.x + r.w or y < r.y or y >= r.y + r.h then
     return nil
   end
@@ -159,7 +160,7 @@ end
 -- when nothing under the cursor is keyed. A pure relayout (resize) runs no
 -- reconciliation, so the fiber backref is stable and relocates the same content.
 local function deepest_at(node, x, y)
-  local r = node.rect
+  local r = node.rect and clip.visible(node)
   if not r or x < r.x or x >= r.x + r.w or y < r.y or y >= r.y + r.h then
     return nil
   end
@@ -328,9 +329,15 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     -- When the content under it actually changes the buffer is re-spliced,
     -- which routes through the clear (resetting this) before the repaint.
     local shown_fiber, shown_rect = nil, nil
+    local paint_clip
 
     -- One overlay extmark span at cell range [x0, x1) of row y.
     local function mark(y, x0, x1, hl)
+      if paint_clip then
+        if y < paint_clip.y or y >= paint_clip.y + paint_clip.h then return end
+        x0, x1 = math.max(x0, paint_clip.x), math.min(x1, paint_clip.x + paint_clip.w)
+        if x1 <= x0 then return end
+      end
       local line = vim.api.nvim_buf_get_lines(bufnr, y, y + 1, false)[1] or ""
       vim.api.nvim_buf_set_extmark(bufnr, ns, y, cell_to_byte(line, x0), {
         end_col = cell_to_byte(line, x1),
@@ -361,8 +368,8 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
         node
         and shown_fiber ~= nil
         and node.fiber == shown_fiber
-        and rects_eq(node.rect, shown_rect)
-        and overlay_present(node.rect)
+        and rects_eq(clip.visible(node), shown_rect)
+        and overlay_present(clip.visible(node))
       then
         return
       end
@@ -371,6 +378,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
         shown_fiber, shown_rect = nil, nil
         return
       end
+      paint_clip = node.clip
       local part = hover_part(node)
       if style.tier(part) == "structural" then
         -- baked into the canvas by the relayout; nothing to overlay or track
@@ -378,7 +386,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
         return
       end
       shown_fiber = node.fiber
-      shown_rect = { x = node.rect.x, y = node.rect.y, w = node.rect.w, h = node.rect.h }
+      shown_rect = clip.visible(node)
       local r = node.rect
       local last = vim.api.nvim_buf_line_count(bufnr) - 1
       local y0, y1 = math.max(r.y, 0), math.min(r.y + r.h - 1, last)
@@ -468,7 +476,10 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       for _, run in ipairs(runs) do
         local w = str_width(run.text)
         if run.id == id then
-          out[#out + 1] = { y = y, x0 = cx, x1 = cx + w }
+          local visible = clip.visible(node, { x = cx, y = y, w = w, h = 1 })
+          if visible.w > 0 and visible.h > 0 then
+            out[#out + 1] = { y = y, x0 = visible.x, x1 = visible.x + visible.w }
+          end
         end
         cx = cx + w
       end
@@ -752,6 +763,8 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
   local function stops()
     local out = {}
     local function walk(node)
+      local visible = clip.visible(node)
+      if visible.w <= 0 or visible.h <= 0 then return end
       if (node.props and node.props.role) or node.subwin == "text_input" then
         out[#out + 1] = node
       end
@@ -763,6 +776,12 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       walk(target.tree)
     end
     return out
+  end
+
+  local function stop_box(node)
+    local content = clip.visible(node, node.content)
+    if content.w > 0 and content.h > 0 then return content end
+    return clip.visible(node) -- a clipped border can be the only visible part
   end
 
   -- Move the cursor to the next (+1) / previous (-1) stop, wrapping. From a
@@ -780,7 +799,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
 
     local current
     for i, node in ipairs(list) do
-      local r = node.rect
+      local r = clip.visible(node)
       if x >= r.x and x < r.x + r.w and row >= r.y and row < r.y + r.h then
         current = i -- keep the last match: deeper in document order
       end
@@ -791,7 +810,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       idx = (current + dir - 1) % #list + 1
     elseif dir == 1 then
       for i, node in ipairs(list) do
-        local c = node.content
+        local c = stop_box(node)
         if c.y > row or (c.y == row and c.x > x) then
           idx = i
           break
@@ -800,7 +819,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       idx = idx or 1
     else
       for i = #list, 1, -1 do
-        local c = list[i].content
+        local c = stop_box(list[i])
         if c.y < row or (c.y == row and c.x < x) then
           idx = i
           break
@@ -809,7 +828,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       idx = idx or #list
     end
 
-    local c = list[idx].content
+    local c = stop_box(list[idx])
     local y = math.max(c.y, 0)
     local line = vim.api.nvim_buf_get_lines(bufnr, y, y + 1, false)[1] or ""
     pcall(vim.api.nvim_win_set_cursor, root_winid, { y + 1, cell_to_byte(line, c.x) })

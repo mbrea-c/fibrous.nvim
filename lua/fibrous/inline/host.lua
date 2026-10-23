@@ -285,6 +285,7 @@ local function build_node(fiber, ctx)
 			node._keep = true
 		end
 		node._old_rect = prev.rect
+		node._old_clip = prev.clip
 		-- `_drop`: the reconciler dropped a child fiber under this node this frame
 		-- (a positional replace or a trailing removal). render.update scans for the
 		-- removed children's orphaned cells only when it is set — the transcript

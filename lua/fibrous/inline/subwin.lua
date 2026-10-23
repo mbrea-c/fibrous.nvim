@@ -43,6 +43,7 @@
 -- the latest committed props at fire time.
 
 local width = require("fibrous.inline.width")
+local clip = require("fibrous.inline.clip")
 local cursorshim = require("fibrous.inline.cursorshim")
 local interact = require("fibrous.inline.interact")
 local targets = require("fibrous.targets")
@@ -306,7 +307,8 @@ function M.attach(host, root_winid, opts)
 			return
 		end
 		local c = entry.node.content
-		if c.w <= 0 or c.h <= 0 then
+		local visible = clip.visible(entry.node, c)
+		if visible.w <= 0 or visible.h <= 0 then
 			return
 		end
 		local base = entry.base or 1
@@ -362,12 +364,13 @@ function M.attach(host, root_winid, opts)
 		vim.bo[target.bufnr].modifiable = true
 		for i = 0, c.h - 1 do
 			local y = c.y + i
-			if y >= 0 and y <= last then
+			if y >= math.max(0, visible.y) and y <= last and y < visible.y + visible.h then
 				local root_line = vim.api.nvim_buf_get_lines(target.bufnr, y, y + 1, false)[1] or ""
-				local b0 = width.cell_to_byte(root_line, c.x)
-				local b1 = width.cell_to_byte(root_line, c.x + c.w)
-				if b1 <= #root_line and root_line:sub(b0 + 1, b1) ~= rows[i + 1] then
-					vim.api.nvim_buf_set_text(target.bufnr, y, b0, y, b1, { rows[i + 1] })
+				local b0 = width.cell_to_byte(root_line, visible.x)
+				local b1 = width.cell_to_byte(root_line, visible.x + visible.w)
+				local row = clip.slice(rows[i + 1], visible.x - c.x, visible.x - c.x + visible.w)
+				if b1 <= #root_line and root_line:sub(b0 + 1, b1) ~= row then
+					vim.api.nvim_buf_set_text(target.bufnr, y, b0, y, b1, { row })
 					wrote_y0 = wrote_y0 or y
 					wrote_y1 = y
 				end
@@ -378,7 +381,7 @@ function M.attach(host, root_winid, opts)
 			repaint_row_marks(wrote_y0, wrote_y1)
 		end
 		-- what we painted over, so the box can be restored when it moves or dies
-		entry.mirrored = { x = c.x, y = c.y, w = c.w, h = c.h }
+		entry.mirrored = visible
 	end
 
 	-- Undo a mirror: write the host's retained canvas (the pre-mirror ground
@@ -543,7 +546,9 @@ function M.attach(host, root_winid, opts)
 		-- One hl span at box row `i` (1-based), box-relative cells [s, e).
 		local function mark(i, s, e, hl, prio)
 			local y = c.y + i - 1
-			if y < 0 or y > last or s >= e then
+			local visible = clip.visible(entry.node, { x = c.x + s, y = y, w = e - s, h = 1 })
+			s, e = visible.x - c.x, visible.x + visible.w - c.x
+			if visible.h <= 0 or y < 0 or y > last or s >= e then
 				return
 			end
 			local root_line = vim.api.nvim_buf_get_lines(target.bufnr, y, y + 1, false)[1] or ""
@@ -623,7 +628,7 @@ function M.attach(host, root_winid, opts)
 		-- ay == view_h still shows: the anchor row sits one past the widget
 		-- above it, so a widget on the LAST visible row drops its popup below
 		-- the mount's box — exactly the escape popups exist for.
-		if ay < 0 or ay > view_h then
+		if ay < 0 or ay > view_h or (node.clip and not clip.contains(node.clip, r.x, r.y - 1)) then
 			if entry.applied_geo ~= "hide" then
 				vim.api.nvim_win_set_config(entry.winid, { hide = true })
 				entry.applied_geo = "hide"
@@ -694,6 +699,9 @@ function M.attach(host, root_winid, opts)
 		local x0 = c.x - left_off
 		local x1 = x0 + c.w - 1
 		local vis_left, vis_right = math.max(x0, 0), math.min(x1, view_w - 1)
+		local visible = clip.visible(entry.node, c)
+		vis_top, vis_bot = math.max(vis_top, visible.y - top_off), math.min(vis_bot, visible.y + visible.h - 1 - top_off)
+		vis_left, vis_right = math.max(vis_left, visible.x - left_off), math.min(vis_right, visible.x + visible.w - 1 - left_off)
 
 		-- The widget may have scroll state of its own (an editor taller than its
 		-- window). Capture its view BEFORE the resize below: shrinking a window
@@ -732,13 +740,13 @@ function M.attach(host, root_winid, opts)
 				c.x,
 				c.y,
 				c.w,
-				c.h,
+				c.h, visible.x, visible.y, visible.w, visible.h,
 			}, ":")
 			if forced or entry.view_dirty or entry.extracted ~= key then
 				-- A moved/resized box leaves the old one's mirror stranded (no full
 				-- repaint sweeps it away anymore): restore the canvas there first.
 				local mb = entry.mirrored
-				if mb and (mb.x ~= c.x or mb.y ~= c.y or mb.w ~= c.w or mb.h ~= c.h) then
+				if mb and not clip.equal(mb, visible) then
 					restore_box(mb)
 				end
 				mirror(entry)
@@ -1844,7 +1852,7 @@ function M.attach(host, root_winid, opts)
 	-- `nested` gymnastics.
 	local function enter_at(row, x, insert)
 		for _, entry in pairs(floats) do
-			local r = entry.node.rect or entry.node.content
+			local r = clip.visible(entry.node, entry.node.rect or entry.node.content)
 			if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
 				return enter(entry, row, x, insert)
 			end
@@ -1872,7 +1880,7 @@ function M.attach(host, root_winid, opts)
 	-- (requests.md: dd/cb/ce over an unfocused text-edit buffer focuses + edits).
 	local function enter_editable_at(row, x)
 		for _, entry in pairs(floats) do
-			local r = entry.node.rect or entry.node.content
+			local r = clip.visible(entry.node, entry.node.rect or entry.node.content)
 			if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
 				if is_editable(entry) then
 					return enter(entry, row, x, false)
@@ -1894,7 +1902,7 @@ function M.attach(host, root_winid, opts)
 	-- the last line, which must not be activated from the dead space below it.
 	local function activate_at(row, x, via_click)
 		for _, entry in pairs(floats) do
-			local r = entry.node.rect or entry.node.content
+			local r = clip.visible(entry.node, entry.node.rect or entry.node.content)
 			if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
 				local _, _, content = translate(entry, row, x)
 				local ok = enter(entry, row, x, via_click)
@@ -1939,7 +1947,7 @@ function M.attach(host, root_winid, opts)
 		local lnum, cell
 		for _, entry in pairs(floats) do
 			if entry.child_interact and vim.api.nvim_win_is_valid(entry.winid) then
-				local r = entry.node.rect or entry.node.content
+				local r = clip.visible(entry.node, entry.node.rect or entry.node.content)
 				if row >= r.y and row < r.y + r.h and x >= r.x and x < r.x + r.w then
 					-- over the float's blank padding (past its content) counts as
 					-- "no target": don't hover the last line the cursor clamps to.
@@ -1978,11 +1986,14 @@ function M.attach(host, root_winid, opts)
 					if top and (prow + 1 < top or prow + 1 > bot) then
 						return nil -- the mirror row is scrolled off-screen in the parent
 					end
+					local mapped = clip.visible(entry.node, { x = c.x + box.x - m.cell0, y = prow,
+						w = math.min(box.w, m.cell0 + c.w - box.x), h = 1 })
+					if mapped.w <= 0 or mapped.h <= 0 then return nil end
 					local pline = targets.line_at(target.bufnr, prow)
-					local ecell = c.x + math.min(box.x + box.w, m.cell0 + c.w) - m.cell0
+					local ecell = mapped.x + mapped.w
 					return {
 						winid = root_winid,
-						pos = { prow + 1, width.cell_to_byte(pline, c.x + (box.x - m.cell0)) },
+						pos = { prow + 1, width.cell_to_byte(pline, mapped.x) },
 						end_pos = { prow + 1, width.cell_to_byte(pline, ecell) },
 					}
 				end

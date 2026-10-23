@@ -15,6 +15,7 @@
 -- height is app mode.
 
 local box = require("fibrous.inline.box")
+local clip = require("fibrous.inline.clip")
 local spans = require("fibrous.inline.spans")
 local width = require("fibrous.inline.width")
 
@@ -422,6 +423,7 @@ local function layout_children(node)
 	local main_avail = horizontal and c.w or c.h
 	local cross_avail = horizontal and c.h or c.w
 	local align = props.align or "stretch"
+	local child_clip = props.overflow == "hidden" and clip.intersect(c, node.clip) or node.clip
 
 	-- Leftover main-axis space after gaps and non-grow children.
 	local fixed = gap * math.max(#children - 1, 0)
@@ -561,9 +563,9 @@ local function layout_children(node)
 		end
 
 		if horizontal then
-			layout(child, pos, c.y + cross_off, main, cross_size)
+			layout(child, pos, c.y + cross_off, main, cross_size, child_clip)
 		else
-			layout(child, c.x + cross_off, pos, cross_size, main)
+			layout(child, c.x + cross_off, pos, cross_size, main, child_clip)
 		end
 		acc_spacing = acc_spacing + spacing
 		pos = pos + main + gap + math.floor(acc_spacing + 0.5) - math.floor(acc_spacing - spacing + 0.5)
@@ -572,7 +574,7 @@ end
 
 ---@param w integer  assigned margin-box width
 ---@param h integer  assigned margin-box height
-function layout(node, x, y, w, h)
+function layout(node, x, y, w, h, inherited_clip)
 	-- Memoized skip (see measure): a reused node assigned the same margin box
 	-- keeps its whole subtree's rects. When a sibling's size change shifts it,
 	-- the args differ and the subtree re-positions normally — the memo makes
@@ -583,10 +585,11 @@ function layout(node, x, y, w, h)
 	if x >= 0 and y >= 0 and w >= 0 and h >= 0 and x < 8192 and y < 8192 and w < 8192 and h < 8192 then
 		lkey = ((x * 8192 + y) * 8192 + w) * 8192 + h
 	end
-	if node._memo and lkey and node._lkey == lkey then
+	if node._memo and lkey and node._lkey == lkey and clip.equal(node.clip, inherited_clip) then
 		return
 	end
 	node._lkey = lkey
+	node.clip = inherited_clip
 	local r = node.box
 	node.rect = {
 		x = x + r.margin.left,

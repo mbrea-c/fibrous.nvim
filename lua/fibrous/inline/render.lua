@@ -5,6 +5,7 @@
 -- container children recursively (children paint over their parent).
 
 local Canvas = require("fibrous.inline.canvas")
+local clip = require("fibrous.inline.clip")
 
 local width = require("fibrous.inline.width")
 local char_width, str_width, clusters = width.char, width.str, width.clusters
@@ -139,7 +140,9 @@ local function visit(c, node, fill)
 	-- too: a full paint that skips M.update must not leave old node objects
 	-- chained alive frame over frame.
 	node._prect = rect
+	node._pclip = node.clip
 	node._prev = nil
+	if node.clip then c = clip.canvas(c, node.clip) end
 	if rect.w <= 0 or rect.h <= 0 then
 		return
 	end
@@ -266,6 +269,7 @@ end
 ---@param node table  the rebuilt container, laid out this frame
 ---@param prev table  its previous incarnation (`_prev`, stashed by the build)
 local function chrome_equal(node, prev)
+	if (node.props or {}).overflow ~= (prev.props or {}).overflow then return false end
 	if #(node.children or {}) < #(prev.children or {}) then
 		return false
 	end
@@ -333,16 +337,18 @@ function M.update(c, tree)
 
 	local function walk(node, bgs)
 		local rect = node.rect
+		local visible = clip.visible(node)
 		if node._memo then
-			if rects_equal(rect, node._prect) then
+			if rects_equal(rect, node._prect) and clip.equal(node.clip, node._pclip) then
 				return -- untouched subtree in its old spot
 			end
-			roots[#roots + 1] = { node = node, bgs = bgs, old = node._prect }
+			roots[#roots + 1] = { node = node, rect = visible, bgs = bgs, old = node._prect and clip.intersect(node._prect, node._pclip) }
 			return
 		end
 		-- fresh node: consume the build-time bookkeeping either way
 		local old = node._old_rect
-		node._old_rect = nil
+		local old_clip = node._old_clip or (node._prev and node._prev.clip)
+		node._old_rect, node._old_clip = nil, nil
 		local prev = node._prev
 		node._prev = nil
 		-- own visual intact: the fiber didn't render (_keep), or it did but
@@ -354,12 +360,13 @@ function M.update(c, tree)
 		if intact and not fits and old and CONTAINERS[node.kind] then
 			fits = rect.x == old.x and rect.y == old.y and rect.w == old.w and rect.h > old.h and no_chrome(node)
 		end
-		if intact and fits then
+		if intact and fits and clip.equal(node.clip, old_clip) then
 			node._keep = nil
 			node._prect = rect -- predecessor's paint of this box still stands
+			node._pclip = node.clip
 			local bg = bg_of(node)
 			if bg then
-				bgs = vim.list_extend({ { rect = rect, hl = bg } }, bgs)
+				bgs = vim.list_extend({ { rect = visible, hl = bg } }, bgs)
 			end
 			-- A child present last frame but gone now (the positional reconciler
 			-- dropped its fiber — e.g. the TODO submit replaces the trailing input
@@ -380,7 +387,7 @@ function M.update(c, tree)
 				end
 				for _, pchild in ipairs(prev.children) do
 					if pchild.fiber and not kept[pchild.fiber] and pchild.rect then
-						roots[#roots + 1] = { bgs = bgs, old = pchild.rect }
+						roots[#roots + 1] = { bgs = bgs, old = clip.visible(pchild) }
 					end
 				end
 			end
@@ -390,26 +397,27 @@ function M.update(c, tree)
 			return
 		end
 		node._keep = nil
-		roots[#roots + 1] = { node = node, bgs = bgs, old = old }
+		roots[#roots + 1] = { node = node, rect = visible, bgs = bgs, old = old and clip.intersect(old, old_clip) }
 	end
 	walk(tree, {})
 
 	-- Phase 1: blank every root's old and new area (stale cells, wherever the
 	-- next phase doesn't repaint them, must read as empty)...
 	local rows = {}
-	local function mark_rows(rect)
+	local function blank_rect(rect)
+		-- Empty clips must not touch a neighboring wide glyph or mark damage.
+		if rect.w <= 0 or rect.h <= 0 then return end
+		c:blank_rect(rect)
 		for y = math.max(rect.y, 0), math.min(rect.y + rect.h, c.h) - 1 do
 			rows[y] = true
 		end
 	end
 	for _, r in ipairs(roots) do
 		if r.node then
-			c:blank_rect(r.node.rect)
-			mark_rows(r.node.rect)
+			blank_rect(r.rect)
 		end
-		if r.old and (not r.node or not rects_equal(r.old, r.node.rect)) then
-			c:blank_rect(r.old)
-			mark_rows(r.old)
+		if r.old and (not r.node or not rects_equal(r.old, r.rect)) then
+			blank_rect(r.old)
 		end
 	end
 	-- ...phase 2: restore what the (unrepainted) ancestors had contributed to
@@ -418,7 +426,7 @@ function M.update(c, tree)
 		for i = #r.bgs, 1, -1 do -- outermost background first
 			local bg = r.bgs[i]
 			if r.node then
-				c:hl_rect(intersect(bg.rect, r.node.rect), bg.hl)
+				c:hl_rect(intersect(bg.rect, r.rect), bg.hl)
 			end
 			if r.old then
 				c:hl_rect(intersect(bg.rect, r.old), bg.hl)

@@ -67,6 +67,16 @@ The registry spans every mount, so any fibrous UI (this one, third-party
 plugins, anything) becomes flash-navigable for free, with no cooperation from
 the app.
 
+## Inline overflow
+
+Set `overflow = "hidden"` on an inline `ui.col` or `ui.row` to clip its
+descendants to the allocated content box, including hover, activation, Tab
+navigation, and jump targets. No extra buffer or window is created.
+
+In a fixed-height mount, put a `grow = 1, overflow = "hidden"` content column
+above a fixed-height footer button to keep the footer accessible. Use a popup
+to view the full content, or `ui.container` for independent scrolling.
+
 ## Nix
 
 The flake packages the plugin and wraps the dev entry points (no local `nvim`

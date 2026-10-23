@@ -18,6 +18,7 @@
 -- jumps there and <CR>/click activates through the existing interaction layer.
 
 local width = require("fibrous.inline.width")
+local clip = require("fibrous.inline.clip")
 
 local M = {}
 
@@ -78,10 +79,12 @@ end
 function M.collect(tree, resolve)
   local out = {}
   local function walk(node)
+    local visible = node.rect and clip.visible(node)
+    if visible and (visible.w <= 0 or visible.h <= 0) then return end
     if node.props and node.props.role and not node.subwin then
       -- rect is the full border-box (themed padding/background included) so the
       -- flash label spans the WHOLE widget, not just its inner text.
-      local box = node.rect or node.content
+      local box = visible or node.content
       if box then
         local geo = resolve(box)
         if geo then
@@ -105,7 +108,8 @@ function M.collect(tree, resolve)
         for _, run in ipairs(runs) do
           local w = width.str(run.text)
           if run.id and (run.on_click or run.role) and not seen[run.id] then
-            local geo = resolve({ x = cx, y = content.y + li - 1, w = w, h = 1 })
+            local box = clip.visible(node, { x = cx, y = content.y + li - 1, w = w, h = 1 })
+            local geo = box.w > 0 and box.h > 0 and resolve(box) or nil
             if geo then
               seen[run.id] = true
               out[#out + 1] = {
