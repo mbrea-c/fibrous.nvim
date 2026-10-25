@@ -30,17 +30,17 @@ local M = {}
 -- fields, so its wrapped runs can be grouped back together downstream.
 ---@param list Span[]
 ---@return string text, SpanRange[] ranges
-function M.flatten(list)
+function M.flatten(list, default_source)
   local parts, ranges = {}, {}
   local pos = 1
   local next_id = 0
   for i, span in ipairs(list) do
-    local text, hl, hover_hl, on_click, role
+    local text, hl, hover_hl, on_click, role, source
     if type(span) == "string" then
       text = span
     elseif type(span) == "table" and type(span[1]) == "string" then
       text = span[1]
-      on_click, role = span.on_click, span.role
+      on_click, role, source = span.on_click, span.role, span.source
       if span.style ~= nil then
         local ss = style.span_style(span.style)
         hl = ss.base.text_hl
@@ -55,8 +55,11 @@ function M.flatten(list)
     end
     parts[#parts + 1] = text
     local interactive = hover_hl ~= nil or on_click ~= nil or role ~= nil
-    if hl or interactive then
+    if hl or interactive or source or default_source then
       local range = { s = pos, e = pos + #text, hl = hl }
+      if source or default_source then
+        range.source, range.source_base = source or default_source, source and 1 or pos
+      end
       if interactive then
         next_id = next_id + 1
         range.id = next_id
@@ -124,13 +127,25 @@ function M.runs(pieces, ranges)
       local chunk = p.text:sub(i, j - 1)
       local hl = r and r.hl or nil
       local id = r and r.id or nil
+      local source = r and r.source
+      local positions
+      if source then
+        positions = {}
+        for k = i, j - 1 do
+          local at = r.source_base + p.s + k - 1 - r.s
+          local mapped = source.map and source.map[at] or not source.map and at - 1
+          positions[#positions + 1] = type(mapped) == "number" and (source.offset or 0) + mapped or false
+        end
+      end
       local last = runs[#runs]
-      if last and last.hl == hl and last.id == id then
+      if last and last.hl == hl and last.id == id and last.source == source then
         last.text = last.text .. chunk
+        if positions then for _, position in ipairs(positions) do last.source_positions[#last.source_positions + 1] = position end end
       else
         runs[#runs + 1] = {
           text = chunk,
           hl = hl,
+          source = source, source_positions = positions,
           id = id,
           hover_hl = r and r.hover_hl or nil,
           on_click = r and r.on_click or nil,

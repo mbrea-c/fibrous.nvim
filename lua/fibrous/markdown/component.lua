@@ -21,7 +21,7 @@ local ui = require("fibrous.inline.components")
 -- Props threaded onto the widget's outer node: layout/style, plus the
 -- node-level interaction props (on_key routes app keys to the whole block).
 local PASS =
-  { "style", "grow", "width", "height", "min_width", "max_width", "align_self", "gap", "on_key" }
+  { "style", "grow", "width", "height", "min_width", "max_width", "align_self", "gap", "on_key", "source_entry" }
 
 return function(ctx, props)
   local text = props.text or ""
@@ -29,13 +29,13 @@ return function(ctx, props)
   local vnode
   if props.live then
     -- streaming: cheap plain render, no parse
-    vnode = { comp = ui.paragraph, props = { text = text } }
+    vnode = { comp = ui.paragraph, props = { text = text, source = props.source } }
   else
     local cache = ctx.use_ref()
-    if not cache.current or cache.current.text ~= text then
-      cache.current = { text = text, doc = markdown.parse(text) }
+    if not cache.current or cache.current.text ~= text or cache.current.mapped ~= (props.source ~= nil) then
+      cache.current = { text = text, mapped = props.source ~= nil, doc = markdown.parse(text, { source = props.source ~= nil }) }
     end
-    vnode = render.render(cache.current.doc, { on_link = props.on_link, highlight = props.highlight })
+    vnode = render.render(cache.current.doc, { on_link = props.on_link, highlight = props.highlight, source = props.source })
   end
 
   vnode.props = vnode.props or {}

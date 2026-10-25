@@ -285,8 +285,8 @@ function measure(node, avail_w)
 		-- Span-list text ("Style rework" S4) flattens once; the ranges are
 		-- re-applied to every (re)wrap so node.line_runs tracks node.lines.
 		local text, ranges = node.text or "", nil
-		if type(text) == "table" then
-			text, ranges = spans.flatten(text)
+		if type(text) == "table" or (node.props or {}).source then
+			text, ranges = spans.flatten(type(text) == "table" and text or { text }, (node.props or {}).source)
 		end
 		node._text, node._ranges = text, ranges
 		if props.wrap then
@@ -608,8 +608,8 @@ function layout(node, x, y, w, h, inherited_clip)
 		-- Generate the row from the now-final content width (nowrap: the fill fn
 		-- returns exactly that many cells). Runs every layout, so a resize re-fills.
 		local text, ranges = node.fill(math.max(node.content.w, 0))
-		if type(text) == "table" then
-			text, ranges = spans.flatten(text)
+		if type(text) == "table" or (node.props or {}).source then
+			text, ranges = spans.flatten(type(text) == "table" and text or { text }, (node.props or {}).source)
 		end
 		node.lines, node.line_runs = split_text(text, ranges)
 	elseif node.kind == "text" and (node.props or {}).wrap and node.content.w ~= node._wrap_w then

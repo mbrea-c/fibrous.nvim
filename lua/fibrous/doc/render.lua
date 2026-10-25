@@ -38,7 +38,7 @@ end
 -- A span for `text` under the current context: a bare string when nothing
 -- styles or handles it, else a SpanStyle/interaction table.
 local function span(text, ctx)
-  if not ctx.text_hl and not ctx.hover_hl and not ctx.on_click and not ctx.role then
+  if not ctx.text_hl and not ctx.hover_hl and not ctx.on_click and not ctx.role and not ctx.source then
     return text
   end
   local sp = { text }
@@ -51,6 +51,7 @@ local function span(text, ctx)
   end
   sp.on_click = ctx.on_click
   sp.role = ctx.role
+  if ctx.source then sp.source = ctx.source end
   return sp
 end
 
@@ -82,14 +83,18 @@ local MARK_HL = {
 local function walk_inline(nodes, ctx, opts, out)
   for _, n in ipairs(nodes) do
     local t = n.type
+    local source
+    if opts.source and n.source_map then
+      source = vim.tbl_extend("force", {}, opts.source, { map = n.source_map })
+    end
     if t == "text" then
-      out[#out + 1] = span(n.text, ctx)
+      out[#out + 1] = span(n.text, source and merge(ctx, { source = source }) or ctx)
     elseif t == "code_span" then
-      out[#out + 1] = span(n.text, merge(ctx, { text_hl = "@markup.raw" }))
+      out[#out + 1] = span(n.text, merge(ctx, { text_hl = "@markup.raw", source = source }))
     elseif t == "softbreak" or t == "hardbreak" then
       -- both collapse to a space: a paragraph is one wrapping text node, so the
       -- break becomes a wrap opportunity rather than a forced newline (v1).
-      out[#out + 1] = " "
+      out[#out + 1] = span(" ", source and merge(ctx, { source = source }) or ctx)
     elseif MARK_HL[t] then
       walk_inline(n.children, merge(ctx, { text_hl = MARK_HL[t] }), opts, out)
     elseif t == "link" then
@@ -116,7 +121,7 @@ local function walk_inline(nodes, ctx, opts, out)
     elseif t == "image" then
       -- a terminal shows the alt text; keep it visually link-like
       local alt = (n.alt and n.alt ~= "") and n.alt or (n.url or "image")
-      out[#out + 1] = span(alt, merge(ctx, { text_hl = "@markup.link" }))
+      out[#out + 1] = span(alt, merge(ctx, { text_hl = "@markup.link", source = source }))
     end
   end
 end
@@ -182,10 +187,11 @@ function render_block(node, opts)
     -- the default highlighter (e.g. a host that resolves languages differently).
     local hl = opts.highlight or require("fibrous.doc.highlight").code
     local ok, spans = pcall(hl, text, node.lang)
+    local source = opts.source and node.source_map and vim.tbl_extend("force", {}, opts.source, { map = node.source_map })
     if ok and spans then
-      return { comp = ui.text, props = { text = spans, wrap = false } }
+      return { comp = ui.text, props = { text = spans, wrap = false, source = source } }
     end
-    return { comp = ui.text, props = { text = text, wrap = false, style = { text_hl = "@markup.raw" } } }
+    return { comp = ui.text, props = { text = text, wrap = false, source = source, style = { text_hl = "@markup.raw" } } }
   elseif t == "blockquote" then
     return {
       comp = ui.col,

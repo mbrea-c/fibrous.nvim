@@ -50,6 +50,7 @@ local style = require("fibrous.inline.style")
 local theme = require("fibrous.inline.theme")
 local visualsel = require("fibrous.inline.visualsel")
 local width = require("fibrous.inline.width")
+local sources = require("fibrous.sources")
 
 local M = {}
 
@@ -652,6 +653,7 @@ function M.new(opts)
 			local damage = flush_target(target, t_tree, cw, ch or t_tree.size.h)
 			note_damage(target, damage)
 			target.tree = t_tree
+			sources.update(target.bufnr, t_tree)
 			local subs = {}
 			collect_subwins(t_tree, subs)
 			target.subwins = subs

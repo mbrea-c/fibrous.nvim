@@ -11,6 +11,7 @@
 -- identifiers and space-separated asterisks — are exact.
 
 local ast = require("fibrous.doc.ast")
+local Source = require("fibrous.doc.source")
 
 local M = {}
 
@@ -34,7 +35,7 @@ end
 
 -- A code span opening with a run of `n` backticks at `i`: match a CLOSING run of
 -- exactly n backticks. Returns the code text and the index past the close, or nil.
-local function code_span(text, i)
+local function code_span(text, i, map)
   local open = text:match("^`+", i)
   local n = #open
   local j = i + n
@@ -46,12 +47,14 @@ local function code_span(text, i)
     local run = text:match("^`+", s)
     if #run == n then
       local content = text:sub(i + n, s - 1)
+      local start, finish = i + n, s - 1
       -- CommonMark strips one leading and trailing space when both are present
       content = content:gsub("\n", " ")
       if content:match("^ .* $") then
         content = content:sub(2, -2)
+        start, finish = start + 1, finish - 1
       end
-      return ast.code_span(content), s + n
+      return Source.node(ast.code_span(content), Source.slice(map, start, finish)), s + n
     end
     j = s + #run
   end
@@ -60,7 +63,7 @@ end
 -- A link/image body `[text](url "title")` starting at the label's `[` (index
 -- `lb`). `is_image` shifts nothing (caller already consumed the `!`). Returns
 -- the node and the index past the close, or nil when it is not a valid link.
-local function link_like(text, lb, is_image)
+local function link_like(text, lb, is_image, map)
   -- balanced label up to the matching ]
   local depth, i = 0, lb
   local label_end
@@ -96,9 +99,9 @@ local function link_like(text, lb, is_image)
     url = dest:match("^%s*(%S*)%s*$") or dest
   end
   if is_image then
-    return ast.image(url, label, title), close + 1
+    return Source.node(ast.image(url, label, title), Source.slice(map, lb + 1, label_end - 1)), close + 1
   end
-  return ast.link(url, title, parse(label)), close + 1
+  return ast.link(url, title, parse(label, Source.slice(map, lb + 1, label_end - 1))), close + 1
 end
 
 -- Simplified flanking (the CommonMark common cases without the full
@@ -130,7 +133,7 @@ end
 -- An emphasis/strong/strikethrough run with delimiter `d` at `i`. Finds the
 -- next matching `d` that may close (skipping candidates flanking forbids),
 -- parses the inside, wraps it in `make`. Returns node, next index.
-local function delimited(text, i, d, make)
+local function delimited(text, i, d, make, map)
   if not can_open(text, i, d) then
     return nil
   end
@@ -145,16 +148,22 @@ local function delimited(text, i, d, make)
   if inner == "" then
     return nil
   end
-  return make(parse(inner)), close + #d
+  return make(parse(inner, Source.slice(map, i + #d, close - 1))), close + #d
 end
 
-parse = function(text)
+parse = function(text, map)
   local out = {}
-  local buf = {}
-  local function flush()
+  local buf, positions = {}, map and {}
+  local function push(value, from)
+    buf[#buf + 1] = value
+    if positions then for j = 1, #value do positions[#positions + 1] = map[from + j - 1] end end
+  end
+  local function flush(trim)
     if #buf > 0 then
-      out[#out + 1] = ast.text(table.concat(buf))
-      buf = {}
+      local text = table.concat(buf)
+      if trim then text = text:sub(1, trim) end
+      out[#out + 1] = Source.node(ast.text(text), positions and Source.slice(positions, 1, #text))
+      buf, positions = {}, map and {}
     end
   end
 
@@ -164,28 +173,25 @@ parse = function(text)
     local two = text:sub(i, i + 1)
 
     if c == "\\" and i < n and text:sub(i + 1, i + 1):match("%p") then
-      buf[#buf + 1] = text:sub(i + 1, i + 1)
+      push(text:sub(i + 1, i + 1), i + 1)
       i = i + 2
     elseif c == "\n" then
       -- two+ trailing spaces (or a trailing backslash) before the newline = a
       -- hard break; otherwise a soft break. Trim the trailing marker either way.
       local acc = table.concat(buf)
-      buf = {}
       local hard = acc:match("  +$") ~= nil or acc:match("\\$") ~= nil
       local trimmed = (acc:gsub("%s+$", "")):gsub("\\$", "")
-      if trimmed ~= "" then
-        out[#out + 1] = ast.text(trimmed)
-      end
-      out[#out + 1] = hard and ast.hardbreak() or ast.softbreak()
+      if trimmed ~= "" then flush(#trimmed) else buf, positions = {}, map and {} end
+      out[#out + 1] = Source.node(hard and ast.hardbreak() or ast.softbreak(), Source.slice(map, i, i))
       i = i + 1
     elseif c == "`" then
-      local node, nexti = code_span(text, i)
+      local node, nexti = code_span(text, i, map)
       if node then
         flush()
         out[#out + 1] = node
         i = nexti
       else
-        buf[#buf + 1] = c
+        push(c, i)
         i = i + 1
       end
     elseif c == "$" and text:sub(i + 1, i + 1) ~= "$" then
@@ -205,27 +211,27 @@ parse = function(text)
         out[#out + 1] = ast.math_inline(text:sub(i + 1, close - 1))
         i = close + 1
       else
-        buf[#buf + 1] = c
+        push(c, i)
         i = i + 1
       end
     elseif two == "![" then
-      local node, nexti = link_like(text, i + 1, true)
+      local node, nexti = link_like(text, i + 1, true, map)
       if node then
         flush()
         out[#out + 1] = node
         i = nexti
       else
-        buf[#buf + 1] = c
+        push(c, i)
         i = i + 1
       end
     elseif c == "[" then
-      local node, nexti = link_like(text, i, false)
+      local node, nexti = link_like(text, i, false, map)
       if node then
         flush()
         out[#out + 1] = node
         i = nexti
       else
-        buf[#buf + 1] = c
+        push(c, i)
         i = i + 1
       end
     elseif c == "<" then
@@ -237,44 +243,47 @@ parse = function(text)
       if url then
         flush()
         local shown = url:gsub("^mailto:", "")
-        out[#out + 1] = ast.link(url, nil, { ast.text(shown) })
+        local skip = #(text:sub(i + 1, nexti - 2)) - #shown
+        local label = Source.node(ast.text(shown), Source.slice(map, i + 1 + skip, nexti - 2))
+        out[#out + 1] = ast.link(url, nil, { label })
         i = nexti
       else
-        buf[#buf + 1] = c
+        push(c, i)
         i = i + 1
       end
     elseif two == "**" or two == "__" then
-      local node, nexti = delimited(text, i, two, ast.strong)
+      local node, nexti = delimited(text, i, two, ast.strong, map)
       if node then
         flush()
         out[#out + 1] = node
         i = nexti
       else
-        buf[#buf + 1] = two
+        push(two, i)
         i = i + 2
       end
     elseif two == "~~" then
-      local node, nexti = delimited(text, i, "~~", ast.strikethrough)
+      local node, nexti = delimited(text, i, "~~", ast.strikethrough, map)
       if node then
         flush()
         out[#out + 1] = node
         i = nexti
       else
-        buf[#buf + 1] = two
+        push(two, i)
         i = i + 2
       end
     elseif c == "*" or c == "_" then
-      local node, nexti = delimited(text, i, c, ast.emph)
+      local node, nexti = delimited(text, i, c, ast.emph, map)
       if node then
         flush()
         out[#out + 1] = node
         i = nexti
       else
-        buf[#buf + 1] = c
+        push(c, i)
         i = i + 1
       end
     else
       buf[#buf + 1] = c
+      if positions then positions[#positions + 1] = map[i] end
       i = i + 1
     end
   end
@@ -285,8 +294,8 @@ end
 -- Parse a run of inline source text into fibrous.doc.ast inline nodes.
 ---@param text string
 ---@return table[] nodes
-function M.parse(text)
-  return parse(text)
+function M.parse(text, map)
+  return parse(text, map)
 end
 
 return M

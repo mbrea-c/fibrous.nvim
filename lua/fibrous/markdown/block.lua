@@ -16,6 +16,7 @@
 -- headings, indented code blocks, and loose-list spacing are not modeled yet.
 
 local M = {}
+local Source = require("fibrous.doc.source")
 
 local function split_lines(text)
   text = text:gsub("\r\n?", "\n")
@@ -132,7 +133,7 @@ end
 
 local parse_lines -- forward
 
-local function parse_list(lines, start)
+local function parse_list(lines, start, maps)
   local first = marker(lines[start])
   local ordered = first.ordered
   local items = {}
@@ -144,6 +145,7 @@ local function parse_list(lines, start)
     end
     local contw = m.markw
     local item_lines = { m.rest }
+    local item_maps = maps and { Source.slice(maps[i], #lines[i] - #m.rest + 1, #lines[i]) }
     i = i + 1
     while i <= n and not is_blank(lines[i]) do
       local l = lines[i]
@@ -153,6 +155,7 @@ local function parse_list(lines, start)
       end
       if lead >= contw then
         item_lines[#item_lines + 1] = l:sub(contw + 1)
+        if item_maps then item_maps[#item_maps + 1] = Source.slice(maps[i], contw + 1, #l) end
         i = i + 1
       else
         break
@@ -163,9 +166,10 @@ local function parse_list(lines, start)
     local box, after = item_lines[1]:match("^%[([ xX])%]%s+(.*)$")
     if box then
       checked = box == "x" or box == "X"
+      if item_maps then item_maps[1] = Source.slice(item_maps[1], #item_lines[1] - #after + 1, #item_lines[1]) end
       item_lines[1] = after
     end
-    items[#items + 1] = { blocks = parse_lines(item_lines), checked = checked }
+    items[#items + 1] = { blocks = parse_lines(item_lines, item_maps), checked = checked }
     -- allow a single blank line before a continuing sibling (rendered tight)
     if i <= n and is_blank(lines[i]) then
       local j = i
@@ -183,7 +187,7 @@ local function parse_list(lines, start)
   return { kind = "list", ordered = ordered, start = first.start, tight = true, items = items }, i
 end
 
-function parse_lines(lines)
+function parse_lines(lines, maps)
   local blocks = {}
   local i, n = 1, #lines
   while i <= n do
@@ -192,11 +196,13 @@ function parse_lines(lines)
       i = i + 1
     elseif atx(line) then
       local level, text = atx(line)
-      blocks[#blocks + 1] = { kind = "heading", level = level, text = text }
+      local start = line:match("^#+%s+()") or (#line + 1)
+      blocks[#blocks + 1] = { kind = "heading", level = level, text = text,
+        source_map = maps and Source.slice(maps[i], start, start + #text - 1) }
       i = i + 1
     elseif fence(line) then
       local ch, len, info = fence(line)
-      local body = {}
+      local body, body_maps = {}, maps and {}
       i = i + 1
       while i <= n do
         local fch, flen = fence(lines[i])
@@ -205,10 +211,12 @@ function parse_lines(lines)
           break
         end
         body[#body + 1] = lines[i]
+        if body_maps then body_maps[#body_maps + 1] = maps[i] end
         i = i + 1
       end
       local lang = info ~= "" and info:match("^(%S+)") or nil
-      blocks[#blocks + 1] = { kind = "code_block", lang = lang, text = table.concat(body, "\n") }
+      local text, map = Source.join(body, body_maps)
+      blocks[#blocks + 1] = { kind = "code_block", lang = lang, text = text, source_map = map }
     elseif line:match("^%s*%$%$") then
       -- display math block: $$ ... $$ (same line, or opening $$ then lines then $$)
       local rest = line:gsub("^%s*%$%$", "")
@@ -235,28 +243,35 @@ function parse_lines(lines)
       blocks[#blocks + 1] = { kind = "thematic_break" }
       i = i + 1
     elseif line:match("^%s*>") then
-      local inner = {}
+      local inner, inner_maps = {}, maps and {}
       while i <= n and lines[i]:match("^%s*>") do
-        inner[#inner + 1] = (lines[i]:gsub("^%s*> ?", ""))
+        local value = (lines[i]:gsub("^%s*> ?", ""))
+        inner[#inner + 1] = value
+        if inner_maps then inner_maps[#inner_maps + 1] = Source.slice(maps[i], #lines[i] - #value + 1, #lines[i]) end
         i = i + 1
       end
-      blocks[#blocks + 1] = { kind = "blockquote", blocks = parse_lines(inner) }
+      blocks[#blocks + 1] = { kind = "blockquote", blocks = parse_lines(inner, inner_maps) }
     elseif line:find("|") and i < n and delimiter_align(lines[i + 1]) then
       local align = delimiter_align(lines[i + 1])
-      local header = split_cells(line)
+      local header, header_maps
+      if maps then header, header_maps = Source.cells(line, maps[i]) else header = split_cells(line) end
       i = i + 2
-      local rows = {}
+      local rows, row_maps = {}, maps and {}
       while i <= n and not is_blank(lines[i]) and lines[i]:find("|") do
-        rows[#rows + 1] = split_cells(lines[i])
+        if maps then
+          local cells, cell_maps = Source.cells(lines[i], maps[i])
+          rows[#rows + 1], row_maps[#row_maps + 1] = cells, cell_maps
+        else rows[#rows + 1] = split_cells(lines[i]) end
         i = i + 1
       end
-      blocks[#blocks + 1] = { kind = "table", align = align, header = header, rows = rows }
+      blocks[#blocks + 1] = { kind = "table", align = align, header = header, rows = rows,
+        header_maps = header_maps, row_maps = row_maps }
     elseif not is_blank(line) and marker(line) then
-      local list, nexti = parse_list(lines, i)
+      local list, nexti = parse_list(lines, i, maps)
       blocks[#blocks + 1] = list
       i = nexti
     else
-      local para = {}
+      local para, para_maps = {}, maps and {}
       while
         i <= n
         and not is_blank(lines[i])
@@ -267,10 +282,13 @@ function parse_lines(lines)
         and not marker(lines[i])
         and not (lines[i]:find("|") and i < n and delimiter_align(lines[i + 1]))
       do
-        para[#para + 1] = (lines[i]:gsub("^%s+", ""))
+        local value = (lines[i]:gsub("^%s+", ""))
+        para[#para + 1] = value
+        if para_maps then para_maps[#para_maps + 1] = Source.slice(maps[i], #lines[i] - #value + 1, #lines[i]) end
         i = i + 1
       end
-      blocks[#blocks + 1] = { kind = "paragraph", text = table.concat(para, "\n") }
+      local text, map = Source.join(para, para_maps)
+      blocks[#blocks + 1] = { kind = "paragraph", text = text, source_map = map }
     end
   end
   return blocks
@@ -279,7 +297,11 @@ end
 -- Parse markdown source into the raw block tree.
 ---@param text string
 ---@return table[] blocks
-function M.parse(text)
+function M.parse(text, mapped)
+  if mapped then
+    local lines, maps = Source.lines(text)
+    return parse_lines(lines, maps)
+  end
   return parse_lines(split_lines(text))
 end
 

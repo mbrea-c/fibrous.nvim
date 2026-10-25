@@ -5,6 +5,7 @@
 -- (including the WASM docs site).
 
 local ast = require("fibrous.doc.ast")
+local Source = require("fibrous.doc.source")
 local block = require("fibrous.markdown.block")
 local inline = require("fibrous.markdown.inline")
 
@@ -15,11 +16,11 @@ local convert_blocks
 local function convert(raw)
   local k = raw.kind
   if k == "heading" then
-    return ast.heading(raw.level, inline.parse(raw.text))
+    return ast.heading(raw.level, inline.parse(raw.text, raw.source_map))
   elseif k == "paragraph" then
-    return ast.paragraph(inline.parse(raw.text))
+    return ast.paragraph(inline.parse(raw.text, raw.source_map))
   elseif k == "code_block" then
-    return ast.code_block(raw.lang, raw.text)
+    return Source.node(ast.code_block(raw.lang, raw.text), raw.source_map)
   elseif k == "thematic_break" then
     return ast.thematic_break()
   elseif k == "math" then
@@ -33,18 +34,18 @@ local function convert(raw)
     end
     return ast.list({ ordered = raw.ordered, start = raw.start, tight = raw.tight, items = items })
   elseif k == "table" then
-    local function cells(row)
+    local function cells(row, maps)
       local out = {}
-      for _, c in ipairs(row) do
-        out[#out + 1] = inline.parse(c)
+      for i, c in ipairs(row) do
+        out[#out + 1] = inline.parse(c, maps and maps[i])
       end
       return out
     end
     local rows = {}
-    for _, r in ipairs(raw.rows) do
-      rows[#rows + 1] = cells(r)
+    for i, r in ipairs(raw.rows) do
+      rows[#rows + 1] = cells(r, raw.row_maps and raw.row_maps[i])
     end
-    return ast.table({ align = raw.align, header = cells(raw.header), rows = rows })
+    return ast.table({ align = raw.align, header = cells(raw.header, raw.header_maps), rows = rows })
   end
   return ast.paragraph({})
 end
@@ -61,8 +62,8 @@ end
 ---@param text string
 ---@param _opts? table  reserved (reference definitions, GFM toggles, …)
 ---@return table document
-function M.parse(text, _opts)
-  return ast.document(convert_blocks(block.parse(text or "")))
+function M.parse(text, opts)
+  return ast.document(convert_blocks(block.parse(text or "", opts and opts.source)))
 end
 
 return M
