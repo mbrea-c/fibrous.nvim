@@ -1,8 +1,9 @@
 -- Markdown benchmark: the cost of turning markdown source into fibrous vnodes,
 -- split into its stages so a regression points at the culprit (parser, renderer,
 -- or the mount/commit). The widget caches the AST per source, so the numbers to
--- watch in a streaming chat are "parse" (paid once on settle) and "render"
--- (paid on every relayout from the cached AST). Invoked as:
+-- watch in a streaming chat are "parse" (paid on settle) and "render"
+-- (paid on a component rerender). Host-only resize reuses the node tree.
+-- Invoked as:
 --   make bench-markdown            # default N=200 sections
 --   make bench-markdown BENCH_N=800
 
@@ -99,7 +100,7 @@ bench("parse (source → AST)", 20, function()
 	markdown.parse(SRC)
 end)
 
--- The renderer alone, from a cached AST → fibrous vnodes (paid every relayout).
+-- The renderer alone, from a cached AST into vnodes (not host-only resize).
 do
 	local doc = markdown.parse(SRC)
 	bench("render (cached AST → vnodes)", 20, function()

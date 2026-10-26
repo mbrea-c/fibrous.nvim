@@ -117,12 +117,24 @@ end
 function M.runs(pieces, ranges)
   local runs = {}
   for _, p in ipairs(pieces) do
-    local i = 1
+    -- Flattened ranges are ordered and disjoint. Seek once per piece, then
+    -- jump between boundaries instead of rescanning the ranges for every byte.
+    -- Each piece seeks independently, so reordered source pieces still work.
+    local lo, hi = 1, #ranges
+    while lo <= hi do
+      local mid = math.floor((lo + hi) / 2)
+      if ranges[mid].e <= p.s then lo = mid + 1 else hi = mid - 1 end
+    end
+    local ri, i = lo, 1
     while i <= #p.text do
-      local r = M.attr_at(ranges, p.s + i - 1)
-      local j = i + 1
-      while j <= #p.text and M.attr_at(ranges, p.s + j - 1) == r do
-        j = j + 1
+      local at = p.s + i - 1
+      while ranges[ri] and ranges[ri].e <= at do ri = ri + 1 end
+      local r = ranges[ri]
+      local j = #p.text + 1
+      if r then
+        if at < r.s then
+          j, r = math.min(j, r.s - p.s + 1), nil
+        else j = math.min(j, r.e - p.s + 1) end
       end
       local chunk = p.text:sub(i, j - 1)
       local hl = r and r.hl or nil

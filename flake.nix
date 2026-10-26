@@ -84,6 +84,34 @@
             cd ${self}
             exec make bench-markdown
           '';
+          bench-markdown-workload = app [ ] "fibrous-bench-markdown-workload" ''
+            cd ${self}
+            exec make bench-markdown-workload
+          '';
+          bench-markdown-maps = app [ ] "fibrous-bench-markdown-maps" ''
+            cd ${self}
+            exec make bench-markdown-maps
+          '';
+          bench-markdown-term = app [ ] "fibrous-bench-markdown-term" ''
+            cd ${self}
+            exec make bench-markdown-term
+          '';
+          bench-resize = app [ ] "fibrous-bench-resize" ''
+            cd ${self}
+            exec make bench-resize
+          '';
+          bench-resize-profile = app [ ] "fibrous-bench-resize-profile" ''
+            cd ${self}
+            exec make bench-resize-profile
+          '';
+          bench-resize-first = app [ ] "fibrous-bench-resize-first" ''
+            cd ${self}
+            exec make bench-resize-first
+          '';
+          bench-resize-term = app [ ] "fibrous-bench-resize-term" ''
+            cd ${self}
+            exec make bench-resize-term
+          '';
           # Terminal-draw throughput: bytes nvim's TUI pushes at a real pty per
           # frame — the tmux+ssh cost (highlight repaints and escape overhead
           # included), one layer below the buffer-write cells/op figure. Spawns

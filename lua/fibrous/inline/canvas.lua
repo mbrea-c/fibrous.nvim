@@ -8,10 +8,10 @@
 -- head cell (width 2) plus a continuation cell (char "", width 0) so joined
 -- lines stay display-aligned; overwriting either half blanks the other.
 --
--- Storage is parallel per-row arrays (chars / widths / highlights) rather than
--- a table per cell — painting is the hot path of every commit (task 8 bench),
--- and per-cell tables made allocation dominate. `text` takes a byte-indexed
--- fast path for printable-ASCII strings (the overwhelmingly common case).
+-- Storage is parallel per-row tables rather than a table per cell. Width rows
+-- store only wide heads and continuations; ordinary cells have implicit width
+-- one, avoiding a second dense grid on each full repaint. `text` takes a
+-- byte-indexed fast path for printable-ASCII strings.
 
 local width = require("fibrous.inline.width")
 local char_width, clusters = width.char, width.clusters
@@ -20,7 +20,7 @@ local char_width, clusters = width.char, width.clusters
 ---@field w integer
 ---@field h integer
 ---@field ch string[][]        per-row cell chars ("" = wide-char continuation)
----@field cw integer[][]       per-row cell widths (1, 2 = wide head, 0 = continuation)
+---@field cw table<integer, integer>[]  sparse widths: 2 = wide head, 0 = continuation; missing = 1
 ---@field hl table<integer, string>[]  per-row cell highlights (sparse)
 local Canvas = {}
 Canvas.__index = Canvas
@@ -33,12 +33,11 @@ local M = {}
 function M.new(w, h)
 	local ch, cw, hl = {}, {}, {}
 	for y = 1, h do
-		local cr, wr = {}, {}
+		local cr = {}
 		for x = 1, w do
 			cr[x] = " "
-			wr[x] = 1
 		end
-		ch[y], cw[y], hl[y] = cr, wr, {}
+		ch[y], cw[y], hl[y] = cr, {}, {}
 	end
 	return setmetatable({ w = w, h = h, ch = ch, cw = cw, hl = hl }, Canvas)
 end
@@ -60,11 +59,11 @@ function Canvas:put(x, y, ch, hl, w)
 	local i = x + 1
 	local old = cwr[i]
 	if old == 0 then -- continuation: blank the wide char's head
-		chr[i - 1], cwr[i - 1] = " ", 1
+		chr[i - 1], cwr[i - 1] = " ", nil
 	elseif old == 2 and i < self.w then -- head: blank its continuation
-		chr[i + 1], cwr[i + 1] = " ", 1
+		chr[i + 1], cwr[i + 1] = " ", nil
 	end
-	chr[i], cwr[i] = ch, w
+	chr[i], cwr[i] = ch, w ~= 1 and w or nil
 	if hl then
 		hlr[i] = hl
 	end
@@ -94,15 +93,24 @@ function Canvas:text(x, y, str, hl)
 		local chr, cwr, hlr = self.ch[y + 1], self.cw[y + 1], self.hl[y + 1]
 		local from = x < 0 and (1 - x) or 1
 		local to = math.min(#str, self.w - x)
+		if next(cwr) == nil then
+			-- No wide cells can need repair. Leave implicit widths untouched.
+			for k = from, to do
+				local i = x + k
+				chr[i] = str:sub(k, k)
+				if hl then hlr[i] = hl end
+			end
+			return
+		end
 		for k = from, to do
 			local i = x + k
 			local old = cwr[i]
 			if old == 0 then
-				chr[i - 1], cwr[i - 1] = " ", 1
+				chr[i - 1], cwr[i - 1] = " ", nil
 			elseif old == 2 and i < self.w then
-				chr[i + 1], cwr[i + 1] = " ", 1
+				chr[i + 1], cwr[i + 1] = " ", nil
 			end
-			chr[i], cwr[i] = str:sub(k, k), 1
+			chr[i], cwr[i] = str:sub(k, k), nil
 			if hl then
 				hlr[i] = hl
 			end
@@ -150,15 +158,21 @@ function Canvas:blank_rect(rect)
 	for y = math.max(rect.y, 0), math.min(rect.y + rect.h, self.h) - 1 do
 		local chr, cwr, hlr = self.ch[y + 1], self.cw[y + 1], self.hl[y + 1]
 		local x0, x1 = math.max(rect.x, 0), math.min(rect.x + rect.w, self.w) - 1
-		-- a wide char straddling the rect edge loses one half: blank the other
-		if x0 > 0 and cwr[x0 + 1] == 0 then
-			chr[x0], cwr[x0] = " ", 1
-		end
-		if x1 + 1 < self.w and cwr[x1 + 2] == 0 then
-			chr[x1 + 2], cwr[x1 + 2] = " ", 1
-		end
-		for x = x0, x1 do
-			chr[x + 1], cwr[x + 1], hlr[x + 1] = " ", 1, nil
+		if next(cwr) == nil then
+			for x = x0, x1 do
+				chr[x + 1], hlr[x + 1] = " ", nil
+			end
+		else
+			-- A wide char straddling the rect edge loses one half: blank the other.
+			if x0 > 0 and cwr[x0 + 1] == 0 then
+				chr[x0], cwr[x0] = " ", nil
+			end
+			if x1 + 1 < self.w and cwr[x1 + 2] == 0 then
+				chr[x1 + 2], cwr[x1 + 2] = " ", nil
+			end
+			for x = x0, x1 do
+				chr[x + 1], cwr[x + 1], hlr[x + 1] = " ", nil, nil
+			end
 		end
 	end
 end
@@ -170,12 +184,11 @@ end
 ---@param h integer
 function Canvas:grow(h)
 	for y = self.h + 1, h do
-		local cr, wr = {}, {}
+		local cr = {}
 		for x = 1, self.w do
 			cr[x] = " "
-			wr[x] = 1
 		end
-		self.ch[y], self.cw[y], self.hl[y] = cr, wr, {}
+		self.ch[y], self.cw[y], self.hl[y] = cr, {}, {}
 	end
 	self.h = math.max(self.h, h)
 end

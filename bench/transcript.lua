@@ -9,9 +9,8 @@
 --   make bench-transcript            # default N=1000 entries
 --   make bench-transcript BENCH_N=4000
 --
--- The pure layout+paint number is the floor the reconciler CANNOT get under
--- while a scroll-mode height change still forces a fresh full-canvas paint
--- (host.lua only repaints incrementally while the canvas size holds).
+-- Pure layout+paint is a full-rebuild reference, not an incremental floor.
+-- The host can grow a retained canvas in place and repaint only changed nodes.
 
 -- Two axes, kept separate so cross-history trends stay honest. The LIBRARY under
 -- test comes from the cwd — bench_history.sh points it at each commit's worktree,
@@ -160,9 +159,8 @@ end
 say(("transcript benchmarks — N = %d entries\n\n"):format(N))
 
 ---------------------------------------------------------------------------
--- The paint floor: layout + full fresh paint at transcript size, no
--- reconciler, no buffer. Until the canvas can grow in place, every
--- height-changing commit (append, streamed line) pays at least this.
+-- Full layout + fresh paint at transcript size, without reconciliation or
+-- buffer writes. Incremental appends and streams can be cheaper than this.
 ---------------------------------------------------------------------------
 
 do

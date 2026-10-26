@@ -17,6 +17,9 @@ local M = {}
 
 local parse -- forward (recursion into emphasis/link content)
 
+-- Syntax starters; all other bytes can be buffered as a single plain run.
+local SPECIAL = "[\\\n`$!%[<*_~]"
+
 -- Index of the next literal `needle` at or after `from` that is not backslash
 -- escaped, or nil.
 local function find_unescaped(text, from, needle)
@@ -169,6 +172,12 @@ parse = function(text, map)
 
   local i, n = 1, #text
   while i <= n do
+    local special = text:find(SPECIAL, i)
+    if special ~= i then
+      push(text:sub(i, (special or n + 1) - 1), i)
+      i = special or n + 1
+      if i > n then break end
+    end
     local c = text:sub(i, i)
     local two = text:sub(i, i + 1)
 

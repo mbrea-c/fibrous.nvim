@@ -263,6 +263,9 @@ local function build_node(fiber, ctx)
 	else
 		node.kind = "text"
 		node.text = props.text or ""
+		-- Inputs stay immutable until build_node replaces this node. Unlike
+		-- mutable raw layout trees, its text preparation can survive resize.
+		node._cache_text = true
 		-- `fill`: content generated from the node's FINAL width at layout time
 		-- (layout.lua) — a width-aware text node that spans its stretched/grown
 		-- box and re-fills on resize with no re-render.

@@ -35,6 +35,32 @@ bench-transcript:
 bench-markdown:
 	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/markdown.lua
 
+# Warm Markdown reflow / annotation queries, private map allocation, and PTY draw:
+.PHONY: bench-markdown-workload bench-markdown-maps bench-markdown-term
+bench-markdown-workload:
+	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/markdown_workload.lua
+
+bench-markdown-maps:
+	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/markdown_maps.lua
+
+bench-markdown-term:
+	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/markdown_term.lua
+
+# Width-change bursts over Markdown, mixed components, and clamped subtrees:
+.PHONY: bench-resize bench-resize-first bench-resize-term bench-resize-profile
+bench-resize-first:
+	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/resize_first.lua
+
+bench-resize:
+	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/resize.lua
+
+bench-resize-term:
+	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/resize_term.lua
+
+# Exclusive phase timings; compares profiled/unprofiled output and latency:
+bench-resize-profile:
+	BENCH_N=$(BENCH_N) $(NVIM_BIN) --headless -u NONE -i NONE -l bench/resize_profile.lua
+
 # Terminal-draw throughput — bytes nvim's TUI pushes at a real pty per frame
 # (the tmux+ssh cost, highlight repaints included), "one layer down" from the
 # buffer-write cells/op figure. Spawns child nvim TUIs, so it runs plain (not

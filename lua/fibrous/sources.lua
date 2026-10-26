@@ -36,7 +36,7 @@ vim.api.nvim_create_autocmd("BufWipeout", {
 })
 
 -- Enumerate only real, fully visible text clusters, not synthetic borders/padding.
-local function clusters(buf, tree, emit, fallback, unmapped)
+local function clusters(buf, tree, emit, fallback, unmapped, query)
   local function walk(node, owner)
     local content = node.content
     owner = node.props and node.props.source_entry or owner
@@ -44,29 +44,42 @@ local function clusters(buf, tree, emit, fallback, unmapped)
       fallback(node.props.source_entry, Clip.visible(node))
     end
     if node.subwin then return end
-    if content and node.line_runs then
+    if emit and content and node.line_runs then
       for li, runs in ipairs(node.line_runs) do
         local x, row = content.x, content.y + li - 1
-        local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
-        for _, run in ipairs(runs) do
-          local byte = 1
-          for ch in Width.clusters(run.text) do
-            local cells = Width.char(ch)
-            local visible = Clip.visible(node, { x = x, y = row, w = cells, h = 1 })
-            local positions = run.source_positions
-            if visible.w == cells and visible.h == 1 and (run.source or unmapped and owner) then
-              local first = positions and positions[byte]
-              local last = positions and positions[byte + #ch - 1]
-              local col, ending = Width.cell_to_byte(line, x), Width.cell_to_byte(line, x + cells)
-              if line:sub(col + 1, ending) == ch then
-                if run.source and type(first) == "number" and type(last) == "number" then
-                  emit(run.source, first, last + 1, row, col, ending, ch)
-                elseif unmapped and owner and ch:find("%S") then
-                  unmapped(owner, row, col, ending)
+        if not query or not query.first_row or row >= query.first_row and row <= query.last_row then
+          local line -- Read only when a requested, fully visible cluster needs checking.
+          for _, run in ipairs(runs) do
+            if query and query.id and (not run.source or run.source.id ~= query.id) then
+              x = x + Width.str(run.text)
+            else
+              local byte, positions = 1, run.source_positions
+              for ch in Width.clusters(run.text) do
+                local cells = Width.char(ch)
+                local first = positions and positions[byte]
+                local last = positions and positions[byte + #ch - 1]
+                local wanted = run.source or unmapped and owner
+                if query and query.id then
+                  wanted = type(first) == "number" and type(last) == "number"
+                    and first < query.finish and last + 1 > query.start
                 end
+                if wanted then
+                  local visible = Clip.visible(node, { x = x, y = row, w = cells, h = 1 })
+                  if visible.w == cells and visible.h == 1 then
+                    if not line then line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or "" end
+                    local col, ending = Width.cell_to_byte(line, x), Width.cell_to_byte(line, x + cells)
+                    if line:sub(col + 1, ending) == ch then
+                      if run.source and type(first) == "number" and type(last) == "number" then
+                        emit(run.source, first, last + 1, row, col, ending, ch)
+                      elseif unmapped and owner and ch:find("%S") then
+                        unmapped(owner, row, col, ending)
+                      end
+                    end
+                  end
+                end
+                x, byte = x + cells, byte + #ch
               end
             end
-            x, byte = x + cells, byte + #ch
           end
         end
       end
@@ -138,7 +151,7 @@ function M.resolve(buf, range)
       if selected(row, col, ending) then
         incomplete[source.data and source.data.entry_id or source.id] = true
       end
-    end)
+    end, { first_row = first, last_row = last })
   end
   local mapped = {}
   for _, value in ipairs(out) do
@@ -169,7 +182,9 @@ function M.project(id, start, finish)
         if last and last.bufnr == buf and last.row == row and last.end_col == col then last.end_col = ending
         else out[#out + 1] = { bufnr = buf, row = row, start_col = col, end_col = ending } end
       end
-      if target.source then raw_clusters(buf, target.source, emit) else clusters(buf, target.tree, emit) end
+      if target.source then
+        if target.source.id == id then raw_clusters(buf, target.source, emit) end
+      else clusters(buf, target.tree, emit, nil, nil, { id = id, start = start, finish = finish }) end
     else buffers[buf] = nil end
   end
   table.sort(out, function(a, b)
@@ -183,7 +198,7 @@ function M.entry_locations(entry_id)
   local out = {}
   for buf, target in pairs(buffers) do
     if vim.api.nvim_buf_is_valid(buf) and target.tree then
-      clusters(buf, target.tree, function() end, function(source, box)
+      clusters(buf, target.tree, nil, function(source, box)
         if source.data and source.data.entry_id == entry_id and box and box.w > 0 and box.h > 0 then
           local line = vim.api.nvim_buf_get_lines(buf, box.y, box.y + 1, false)[1] or ""
           out[#out + 1] = { bufnr = buf, row = box.y, start_col = Width.cell_to_byte(line, box.x),

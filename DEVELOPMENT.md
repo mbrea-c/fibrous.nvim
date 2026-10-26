@@ -83,9 +83,9 @@ type-check the codebase and provide completion to consumers.
 
 ### Benchmarks
 
-Every commit is a full measure and repaint of the whole tree, so performance is
-a standing concern, not an afterthought. The benches answer two separate
-questions, and both matter:
+Commits reuse unchanged subtrees and repaint damage where possible. Width changes
+still reflow text and start a fresh canvas, so performance remains a standing
+concern. The benches answer two separate questions, and both matter:
 
 - **Latency (ms/op):** how long a commit's CPU work takes (build, layout, paint,
   buffer write).
@@ -101,7 +101,8 @@ commit); the *harness* (the bench scenarios and helpers) is loaded from the
 bench script's own directory, so the ruler stays pinned while the thing being
 measured changes. This is what makes cross-history trends honest.
 
-All benches accept `BENCH_N` to size the workload and emit a structured
+CPU workloads accept `BENCH_N` to size the workload. Terminal-draw workloads
+use `BENCH_FRAMES` for the number of redraws. All emit a structured
 `BENCH_JSON=1` object (tagged with `BENCH_LABEL`) that the history driver reads.
 
 #### The bench scripts
@@ -115,6 +116,90 @@ with the `nix run` wrapper (the wrapper only sees committed or staged code):
 | `make bench-transcript` | `nix run .#bench-transcript` | The chat/ACP workload: one long scroll-mode column where the ops that matter are append-at-tail and grow-the-last-entry (streaming), plus a mid-edit. Every entry renders through a `memo = true` child, so this is where memoization pays off. `N` counts entries (default 1000).                                                                                                     |
 | `make bench-term`       | `nix run .#bench-term`       | Terminal-draw throughput: the bytes nvim's TUI pushes at a **real PTY** per frame. Spawns child nvim TUIs (a real terminal, not headless) and sums the pty bytes per redraw.                                                                                                                                                                                                           |
 | `make bench-history`    | `nix run .#bench-history`    | Runs the benches across a span of git history and prints a trend table. Reads the repo read-only (it clones to a temp worktree, never writes your tree) and pins the harness, so only `lua/fibrous/` varies between points. Example: `nix run .#bench-history -- --last 12 --reps 8 --benches transcript`. This is the regression gate: read the newest column against the prior ones. |
+
+#### Markdown optimization experiments
+
+Three additional workloads cover paths the cold parse/mount bench does not:
+
+- `nix run .#bench-markdown-workload`: plain/mixed parsing with and without
+  provenance, warm width changes, dense span attribution, and small annotation
+  queries. Resize rows also report buffer-write cells.
+- `nix run .#bench-markdown-maps`: transient allocation in KiB/op and CPU with
+  GC stopped for private identity/slice maps and a full mapped parse.
+- `nix run .#bench-markdown-term`: real-PTY Markdown resizing, unmapped,
+  mapped, and with comment overlays. Each case checks all frames completed and
+  records content/highlight fingerprints to compare alongside bytes/frame.
+
+Use `--benches markdown_workload,markdown_maps,markdown_term` with
+`bench-history` to keep the harness and runtime fixed while varying the library.
+A dirty candidate can use `--last 1 --reps 8` to compare HEAD with `working`;
+after committing, use `--last 2` if the parent already has the source-mapping
+API. Older revisions without that API cannot run these new scenarios.
+
+For each experiment, establish the benchmark and baseline before changing the
+implementation. Measure CPU and PTY output again before starting the next
+candidate. Reject changes that do not meaningfully help, require disproportionate
+complexity, change the rendered result, or increase draw cost. Keep the raw
+JSONL until the comparison is reviewed. The measured trials are recorded in
+[bench/markdown_experiments.md](bench/markdown_experiments.md).
+
+#### Resize bursts
+
+- `nix run .#bench-resize`: warm twelve-step width bursts over mapped
+  Markdown, mixed rows/columns with a fixed sidebar and scrollable containers,
+  and max-width-clamped text. A height-only case checks work unrelated to
+  wrapping. Reports mean, median and p95 wall time, process CPU time, buffer
+  writes, and content/highlight fingerprints.
+- `nix run .#bench-resize-first`: first width change after a fresh mount and an
+  explicit full GC, including first-use costs that warm resize loops can hide.
+  Uses eight fresh roots per scene and reports mean, median and p95.
+- `nix run .#bench-resize-term`: the same width bursts in a real TUI, reporting
+  terminal bytes and in-child resize-through-`:redraw` median/p95. Those timings
+  exclude input delivery, terminal-emulator painting, and the harness's
+  quiescence wait. Completion receipts reject partial frame loops.
+
+Use `--benches resize,resize_term` with `bench-history`; the additional timing
+fields are retained in raw JSONL. Keep both the runtime and harness fixed,
+shuffle baseline/candidate order within each batch, and compare spread as well
+as medians. Restart a timing run if background load changes materially partway
+through it. Reflow experiments are recorded in
+[bench/resize_experiments.md](bench/resize_experiments.md).
+
+#### Resize phase diagnostics
+
+`nix run .#bench-resize-profile` repeats the warm resize scenes with and without
+benchmark-only timers. It verifies identical buffer-write counts and complete
+text/highlight fingerprints. Normal library execution has no timing hooks.
+
+The exclusive phases are layout (including wrapping and wrapped-run source
+attribution), canvas allocation/growth, painting, text extraction, highlight
+extraction, buffer text writes, buffer highlight API calls, and source updates.
+The source phase times `sources.update` and its listeners, not all provenance
+work or lazy source queries that no listener requests. Nested phases subtract child time,
+so phase means plus `other` add to the instrumented mean. `other` includes
+unwrapped build, splice comparison, bookkeeping and instrumentation overhead.
+There is no separate parser timer: these are already-mounted resize scenes.
+
+The report includes calls/frame, each phase's mean and p95, and the slowest
+frame's actual breakdown. Do not add phase p95s: they need not occur in the same
+frame. Profiler installation/restoration is outside each timed frame; wrapper
+and clock costs during rendering can affect both phase attribution and GC. GC
+pauses are charged to the phase where they happen, not necessarily the phase
+that allocated the collected objects.
+The unprofiled mean and its signed difference from the instrumented mean make
+that disturbance visible, but that difference also includes run-to-run noise.
+Do not use profiled times as optimization acceptance timings.
+
+Use `BENCH_PROFILE_ORDER=profiled-first` to reverse the default plain-first order.
+Alternate the order across repeated runs. Raw results use `BENCH_JSON=1`, and
+`resize_profile` is also accepted by `bench-history --benches`.
+
+`BENCH_PROFILE=1 nix run .#bench-resize-term` adds the same breakdown inside a real
+TUI, plus synchronous `:redraw`. Without that flag, the existing PTY benchmark
+does not install profiling hooks or add profile fields. Compare its normal and
+profiled output/fingerprints and bytes/frame, and continue to use the unprofiled
+benchmark for performance decisions. Neither mode times terminal-emulator paint.
+The first repeated breakdown is recorded in [bench/resize_phases.md](bench/resize_phases.md).
 
 #### The harnesses
 

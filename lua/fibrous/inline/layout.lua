@@ -132,6 +132,7 @@ local function wrap_text(text, ranges, max_w)
 	if not po then
 		return out, nil
 	end
+	---@cast ranges SpanRange[]
 	local runs = {}
 	for i, pieces in ipairs(po) do
 		runs[i] = spans.runs(pieces, ranges)
@@ -183,6 +184,7 @@ local function wrap_text_char(text, ranges, max_w)
 	if not po then
 		return out, nil
 	end
+	---@cast ranges SpanRange[]
 	local runs = {}
 	for i, pieces in ipairs(po) do
 		runs[i] = spans.runs(pieces, ranges)
@@ -284,18 +286,32 @@ function measure(node, avail_w)
 	elseif node.kind == "text" then
 		-- Span-list text ("Style rework" S4) flattens once; the ranges are
 		-- re-applied to every (re)wrap so node.line_runs tracks node.lines.
-		local text, ranges = node.text or "", nil
-		if type(text) == "table" or (node.props or {}).source then
-			text, ranges = spans.flatten(type(text) == "table" and text or { text }, (node.props or {}).source)
+		local text, ranges = node._text, node._ranges
+		local cached_text = node._cache_text and text ~= nil
+		if not cached_text then
+			text, ranges = node.text or "", nil
+			if type(text) == "table" or props.source then
+				text, ranges = spans.flatten(type(text) == "table" and text or { text }, props.source)
+			end
+			node._text, node._ranges = text, ranges
 		end
-		node._text, node._ranges = text, ranges
 		if props.wrap then
-			node.lines, node.line_runs = wrap_by(props.wrap, text, ranges, content_avail)
-			node._wrap_w = content_avail
-		else
+			-- A parent resize need not change this leaf's actual text width.
+			-- Reuse only immutable host text, and recompute its measured size
+			-- below: a preceding position pass may have wrapped at another width.
+			-- Non-ASCII widths can depend on mutable editor options.
+			if not (cached_text and node._wrap_w == content_avail and not text:find("[\128-\255]")) then
+				node.lines, node.line_runs = wrap_by(props.wrap, text, ranges, content_avail)
+				node._wrap_w = content_avail
+			end
+			node.content_size = { w = max_line_width(node.lines), h = #node.lines }
+		elseif not cached_text then
 			node.lines, node.line_runs = split_text(text, ranges)
+			node.content_size = { w = max_line_width(node.lines), h = #node.lines }
+		elseif text:find("[\128-\255]") then
+			-- Lines and source runs are stable; display size may follow options.
+			node.content_size = { w = max_line_width(node.lines), h = #node.lines }
 		end
-		node.content_size = { w = max_line_width(node.lines), h = #node.lines }
 		-- An AUTO-sized container boundary sizes itself to its INNER tree,
 		-- measured here under the same constraint (the host lays the inner
 		-- tree out for real once this leaf's content box is final). A VIEWPORT
@@ -382,9 +398,6 @@ end
 -- Top-down pass: assign the node's margin-box to (x, y, w, h) and derive its
 -- border-box `rect` and `content` box. Wrapped text whose final content width
 -- differs from the width it was measured against reflows once more.
----@param node table
----@param x integer  margin-box origin column (0-indexed)
----@param y integer  margin-box origin row (0-indexed)
 -- Place a container's children inside its content box.
 --
 -- Main axis: non-grow children take their measured size; children with a
@@ -572,6 +585,9 @@ local function layout_children(node)
 	end
 end
 
+---@param node table
+---@param x integer  margin-box origin column (0-indexed)
+---@param y integer  margin-box origin row (0-indexed)
 ---@param w integer  assigned margin-box width
 ---@param h integer  assigned margin-box height
 function layout(node, x, y, w, h, inherited_clip)
