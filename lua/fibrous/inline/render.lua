@@ -223,6 +223,46 @@ function M.paint(tree, w, h)
 	return c
 end
 
+-- Window onto a small canvas using document coordinates. The same geometry
+-- drives painting, hit testing, source mapping and the incremental dirty walk.
+local Band = {}
+Band.__index = Band
+
+function Band:put(x, y, char, hl, width)
+	self.grid:put(x, y - self.top, char, hl, width)
+end
+
+function Band:text(x, y, text, hl)
+	self.grid:text(x, y - self.top, text, hl)
+end
+
+local function relative(rect, top)
+	return { x = rect.x, y = rect.y - top, w = rect.w, h = rect.h }
+end
+
+function Band:hl_rect(rect, hl)
+	self.grid:hl_rect(relative(rect, self.top), hl)
+end
+
+function Band:blank_rect(rect)
+	self.grid:blank_rect(relative(rect, self.top))
+end
+
+-- Returned dirty row numbers use document coordinates. A fresh paint marks
+-- every row dirty implicitly.
+function M.paint_band(tree, width, height, top, previous)
+	local reuse = previous and previous.top == top and previous.grid.w == width
+		and previous.grid.h == height
+	local band = reuse and previous or setmetatable({
+		grid = Canvas.new(width, height), top = top, h = top + height,
+	}, Band)
+	if reuse then
+		return band, M.update(band, tree)
+	end
+	visit(band, tree)
+	return band
+end
+
 ---@param a { x: integer, y: integer, w: integer, h: integer }
 ---@param b { x: integer, y: integer, w: integer, h: integer }|nil
 local function rects_equal(a, b)
@@ -408,7 +448,7 @@ function M.update(c, tree)
 		-- Empty clips must not touch a neighboring wide glyph or mark damage.
 		if rect.w <= 0 or rect.h <= 0 then return end
 		c:blank_rect(rect)
-		for y = math.max(rect.y, 0), math.min(rect.y + rect.h, c.h) - 1 do
+		for y = math.max(rect.y, c.top or 0), math.min(rect.y + rect.h, c.h) - 1 do
 			rows[y] = true
 		end
 	end

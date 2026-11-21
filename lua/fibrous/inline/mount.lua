@@ -254,6 +254,7 @@ end
 ---@field row? integer      default centered
 ---@field col? integer      default centered
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field native_markdown? boolean  override the optional native Markdown default
 ---@field scroll_x? boolean  free the root's horizontal axis; default false (a scroll-mode canvas lays out at the viewport width, so x-scroll only drags the page off its floats)
 ---@field scroll_y? boolean  free the root's vertical axis; default follows mode ("scroll" frees it, "fixed" pins it)
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
@@ -289,6 +290,7 @@ function M.floating(component, props, opts)
 	local g = geom()
 	local manager, interaction -- need the root winid, so attached below
 	local host = inline_host.new({
+		native_markdown = opts.native_markdown,
 		get_size = function()
 			local cur = geom()
 			return { width = cur.width, height = not scroll and cur.height or nil }
@@ -404,6 +406,7 @@ end
 ---@class InlineSplitOpts
 ---@field split? SplitOpts   direction/position/size of the host pane; default vertical/left/40
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field native_markdown? boolean  override the optional native Markdown default
 ---@field scroll_x? boolean  free the root's horizontal axis; default false (a scroll-mode canvas lays out at the viewport width, so x-scroll only drags the page off its floats)
 ---@field scroll_y? boolean  free the root's vertical axis; default follows mode ("scroll" frees it, "fixed" pins it)
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
@@ -472,6 +475,7 @@ end
 ---@class InlineWindowMountOpts
 ---@field winid integer which window to mount on
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field native_markdown? boolean  override the optional native Markdown default
 ---@field scroll_x? boolean  free the root's horizontal axis; default false (a scroll-mode canvas lays out at the viewport width, so x-scroll only drags the page off its floats)
 ---@field scroll_y? boolean  free the root's vertical axis; default follows mode ("scroll" frees it, "fixed" pins it)
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
@@ -507,6 +511,7 @@ function M.window(component, props, opts)
 	local g = pane_size()
 	local manager, interaction -- need the root winid, so attached below
 	local host = inline_host.new({
+		native_markdown = opts.native_markdown,
 		get_size = function()
 			local cur = pane_size()
 			return { width = cur.width, height = not scroll and cur.height or nil }
@@ -611,6 +616,7 @@ end
 ---@class InlineBufferMountOpts
 ---@field winid? integer which window to render into; default the current one
 ---@field mode? "fixed"|"scroll"  root constraint mode; default "fixed"
+---@field native_markdown? boolean  override the optional native Markdown default
 ---@field scroll_x? boolean  free the root's horizontal axis; default false
 ---@field scroll_y? boolean  free the root's vertical axis; default follows mode
 ---@field mouse? InlineMouseOpts|false  { activate?, follow? }; false disables mouse maps
@@ -765,6 +771,7 @@ function M.buffer(component, props, opts)
 
 	local manager, interaction -- need the host buffer in place, so attached below
 	local host = inline_host.new({
+		native_markdown = opts.native_markdown,
 		get_size = function()
 			local cur = win_size()
 			return { width = cur.width, height = not scroll and cur.height or nil }

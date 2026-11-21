@@ -143,6 +143,20 @@ complexity, change the rendered result, or increase draw cost. Keep the raw
 JSONL until the comparison is reviewed. The measured trials are recorded in
 [bench/markdown_experiments.md](bench/markdown_experiments.md).
 
+#### Optional native Markdown
+
+`nix run .#test-native` builds the locked LuaJIT module and runs the installed
+adapter parity tests. `nix flake check` also checks both installed package variants.
+The ordinary package and test app stay Lua-only.
+
+Use `bench-native-markdown`, `bench-native-markdown-term` and
+`bench-native-markdown-features` with an explicit `--out /tmp/fibrous-native`
+directory. These apps pin Neovim and the compiled module; the Lua comparator hook
+exists only in benchmark processes. Record setup cost, edit regressions, source
+and link parity, buffer writes and PTY bytes alongside resize latency. Do not
+infer a benefit for nested Markdown or virtualized Weave transcripts from this
+single-document workload. See [the reproduction guide](bench/native_markdown/README.md).
+
 #### Resize bursts
 
 - `nix run .#bench-resize`: warm twelve-step width bursts over mapped

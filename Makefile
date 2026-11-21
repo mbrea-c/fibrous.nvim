@@ -79,6 +79,22 @@ bench-term:
 bench-history:
 	NVIM_BIN=$(NVIM_BIN) HARNESS_DIR=$${HARNESS_DIR:-$(CURDIR)} scripts/bench_history.sh $(ARGS)
 
+# Optional native renderer: the Nix apps supply the installed module paths.
+.PHONY: test-native bench-native-markdown bench-native-markdown-term bench-native-markdown-features
+test-native:
+	$(NVIM_BIN) --headless -u NONE -i NONE -l tests/run.lua tests/markdown/native_integration_spec.lua
+	$(NVIM_BIN) --headless -u NONE -i NONE -l bench/native_markdown/check.lua
+	python3 -m unittest discover -s bench/native_markdown -p 'test_*.py'
+
+bench-native-markdown:
+	python3 bench/native_markdown/compare.py $(ARGS)
+
+bench-native-markdown-term:
+	python3 bench/native_markdown/compare.py --terminal $(ARGS)
+
+bench-native-markdown-features:
+	python3 bench/native_markdown/features.py $(ARGS)
+
 # Launch an interactive, fully isolated Neovim with only this plugin loaded, and
 # (optionally) open one example straight away:
 #   make example            # opens, then :Examples / :Example <name>

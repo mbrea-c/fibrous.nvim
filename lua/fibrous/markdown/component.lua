@@ -39,6 +39,7 @@ return function(ctx, props)
   end
 
   vnode.props = vnode.props or {}
+  vnode.props._markdown = true
   for _, k in ipairs(PASS) do
     if props[k] ~= nil then
       vnode.props[k] = props[k]

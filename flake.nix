@@ -20,17 +20,51 @@
       # IS the plugin (lua/ at the root), so consumers that take a bare source
       # path (like fibrous-docs' mkNvimWasmWeb) can keep using the flake input
       # directly.
-      packages = forAllSystems (pkgs: rec {
-        default = fibrous;
-        fibrous = pkgs.vimUtils.buildVimPlugin {
-          pname = "fibrous";
-          version = self.shortRev or self.dirtyShortRev or "dev";
-          src = self;
-          # the real gate is the test suite (`nix flake check`); the generic
-          # require-check chokes on modules that need a running UI
-          doCheck = false;
-        };
-      });
+      packages = forAllSystems (
+        pkgs:
+        let
+          nativeSource = pkgs.lib.cleanSource (self + /native/markdown);
+          nativeMarkdown = pkgs.rustPlatform.buildRustPackage {
+            pname = "fibrous-markdown-native";
+            version = "0.1.0";
+            src = nativeSource;
+            cargoLock.lockFile = nativeSource + /Cargo.lock;
+            # A LuaJIT module resolves the Lua symbols in its Neovim host.
+            env.RUSTFLAGS = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin
+              "-C link-arg=-undefined -C link-arg=dynamic_lookup";
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/lib"
+              cp target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release/libfibrous_markdown_native${pkgs.stdenv.hostPlatform.extensions.sharedLibrary} "$out/lib/"
+              runHook postInstall
+            '';
+          };
+          mkFibrous = pkgs.lib.makeOverridable (
+            { withRustMarkdown ? false }:
+            pkgs.vimUtils.buildVimPlugin {
+              pname = "fibrous";
+              version = self.shortRev or self.dirtyShortRev or "dev";
+              src = self;
+              doCheck = false;
+              postInstall = pkgs.lib.optionalString withRustMarkdown ''
+                mkdir -p "$out/lib"
+                ln -s ${nativeMarkdown}/lib/libfibrous_markdown_native${pkgs.stdenv.hostPlatform.extensions.sharedLibrary} "$out/lib/"
+                substituteInPlace "$out/lua/fibrous/_native_defaults.lua" --replace-fail "return false" "return true"
+              '';
+              passthru = {
+                inherit withRustMarkdown;
+                nativeMarkdown = if withRustMarkdown then nativeMarkdown else null;
+              };
+            }
+          );
+        in
+        rec {
+          default = fibrous;
+          fibrous = mkFibrous { };
+          fibrous-rust-markdown = fibrous.override { withRustMarkdown = true; };
+          markdown-native = nativeMarkdown;
+        }
+      );
 
       # Runnable entry points — the CANONICAL, complete surface. Each wraps the
       # matching Makefile target (so the actual `nvim` invocation lives in ONE
@@ -71,6 +105,30 @@
             cd ${self}
             if [ "$#" -gt 0 ]; then exec make test-file FILE="$1"; fi
             exec make test
+          '';
+          test-native = app [ pkgs.python3 ] "fibrous-test-native" ''
+            export FIBROUS_TEST_NATIVE=${self.packages.${pkgs.stdenv.hostPlatform.system}.fibrous-rust-markdown}
+            export FIBROUS_BENCH_MARKDOWN=${self.packages.${pkgs.stdenv.hostPlatform.system}.markdown-native}/lib/libfibrous_markdown_native${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}
+            cd ${self}
+            exec make test-native
+          '';
+          bench-native-markdown = app [ pkgs.python3 ] "fibrous-bench-native-markdown" ''
+            export FIBROUS_BENCH_MARKDOWN=${self.packages.${pkgs.stdenv.hostPlatform.system}.markdown-native}/lib/libfibrous_markdown_native${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}
+            export NVIM_BIN=${pkgs.lib.getExe pkgs.neovim}
+            cd ${self}
+            exec make bench-native-markdown ARGS="$*"
+          '';
+          bench-native-markdown-term = app [ pkgs.python3 ] "fibrous-bench-native-markdown-term" ''
+            export FIBROUS_BENCH_MARKDOWN=${self.packages.${pkgs.stdenv.hostPlatform.system}.markdown-native}/lib/libfibrous_markdown_native${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}
+            export NVIM_BIN=${pkgs.lib.getExe pkgs.neovim}
+            cd ${self}
+            exec make bench-native-markdown-term ARGS="$*"
+          '';
+          bench-native-markdown-features = app [ pkgs.python3 ] "fibrous-bench-native-markdown-features" ''
+            export FIBROUS_BENCH_MARKDOWN=${self.packages.${pkgs.stdenv.hostPlatform.system}.markdown-native}/lib/libfibrous_markdown_native${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}
+            export NVIM_BIN=${pkgs.lib.getExe pkgs.neovim}
+            cd ${self}
+            exec make bench-native-markdown-features ARGS="$*"
           '';
           bench = app [ ] "fibrous-bench" ''
             cd ${self}
@@ -155,6 +213,23 @@
       # `nix flake check` runs the full test suite in the build sandbox, in a
       # fully isolated headless Neovim (no user config, no plugins).
       checks = forAllSystems (pkgs: {
+        package = pkgs.runCommandLocal "fibrous-package" { nativeBuildInputs = [ pkgs.neovim ]; } ''
+          export HOME="$TMPDIR"
+          export FIBROUS_PACKAGE=${self.packages.${pkgs.stdenv.hostPlatform.system}.default}
+          EXPECT_NATIVE=0 nvim --headless -u NONE -i NONE -l ${self}/tests/native_package.lua
+          touch "$out"
+        '';
+        native-markdown = pkgs.runCommandLocal "fibrous-native-markdown-tests"
+          { nativeBuildInputs = [ pkgs.neovim pkgs.gnumake pkgs.python3 ]; } ''
+          cp -r ${self}/. work && chmod -R +w work && cd work
+          export HOME="$TMPDIR"
+          export FIBROUS_PACKAGE=${self.packages.${pkgs.stdenv.hostPlatform.system}.fibrous-rust-markdown}
+          EXPECT_NATIVE=1 nvim --headless -u NONE -i NONE -l tests/native_package.lua
+          export FIBROUS_TEST_NATIVE="$FIBROUS_PACKAGE"
+          export FIBROUS_BENCH_MARKDOWN=${self.packages.${pkgs.stdenv.hostPlatform.system}.markdown-native}/lib/libfibrous_markdown_native${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}
+          make test-native
+          touch "$out"
+        '';
         tests =
           pkgs.runCommandLocal "fibrous-tests"
             {

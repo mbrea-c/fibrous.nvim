@@ -77,6 +77,34 @@ In a fixed-height mount, put a `grow = 1, overflow = "hidden"` content column
 above a fixed-height footer button to keep the footer accessible. Use a popup
 to view the full content, or `ui.container` for independent scrolling.
 
+## Optional rendering optimizations
+
+Weave-style long histories can opt into viewport rendering with
+`fibrous.inline.visibility`. The owner builds only the requested entry range;
+offscreen entries reserve blank native buffer rows. Normal `/` search and
+multi-page yanks cannot read unmounted text. This is separate from native
+Markdown reflow.
+
+The Rust Markdown renderer is experimental and **off by default**. It retains a
+single scroll-mode Markdown document between width changes. Parsing, component
+execution, highlighting and edits remain in Lua. It supports paragraphs, lists,
+quotes, tables, math, links and source mapping. Missing/incompatible native
+modules, fixed-height UIs, whole-entry comment anchors, general UI trees and
+unsupported styling use
+the normal Lua renderer. It does not accelerate Markdown nested inside an
+arbitrary UI or Weave's virtualized transcript.
+
+With the module installed, enable it before mounting:
+
+```lua
+require("fibrous").setup({ native_markdown = true })
+-- Any mount can opt out with opts.native_markdown = false.
+```
+
+The Nix variant below both installs the module and enables this default.
+`setup({ native_markdown = false })` disables it again. A source install remains
+portable pure Lua, including the browser/Wasm documentation site.
+
 ## Nix
 
 The flake packages the plugin and wraps the dev entry points (no local `nvim`
@@ -95,4 +123,29 @@ Apps run against the flake's snapshot of the source (i.e. what's committed or
 staged). Use the `make` targets against the working tree during development.
 
 The plugin itself is also exposed as a flake output: `packages.<system>.default`
-(built with `vimUtils.buildVimPlugin`).
+(built with `vimUtils.buildVimPlugin`). No Rust toolchain or module is built for
+this default package.
+
+Opt in through a package argument, or select its named equivalent:
+
+```nix
+fibrous.packages.${system}.default.override { withRustMarkdown = true; }
+# Equivalent: fibrous.packages.${system}.fibrous-rust-markdown
+```
+
+The flake builds the LuaJIT module with a locked Cargo dependency set and places
+it inside the plugin. No manual shared-library path or environment variable is
+needed. Linux x86-64 is tested; other declared systems still need native runtime
+verification.
+
+```sh
+nix run .#test-native
+nix run .#bench-native-markdown -- --rounds 8 --out /tmp/fibrous-native
+nix run .#bench-native-markdown-term -- --rounds 3 --out /tmp/fibrous-native
+nix run .#bench-native-markdown-features -- --out /tmp/fibrous-native
+```
+
+The benchmarks compare against a benchmark-only optimized Lua wrapper, verify
+rendering fingerprints, and include real PTY traffic. Native setup costs extra;
+short documents and frequently edited text may not benefit. See
+[the benchmark guide](bench/native_markdown/README.md).

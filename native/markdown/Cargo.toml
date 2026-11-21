@@ -1,0 +1,11 @@
+[package]
+name = "fibrous-markdown-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mlua = { version = "0.12.2", features = ["luajit", "module"] }

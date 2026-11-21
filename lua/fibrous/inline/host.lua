@@ -51,6 +51,7 @@ local theme = require("fibrous.inline.theme")
 local visualsel = require("fibrous.inline.visualsel")
 local width = require("fibrous.inline.width")
 local sources = require("fibrous.sources")
+local config = require("fibrous.config")
 
 local M = {}
 
@@ -329,6 +330,7 @@ end
 
 ---@class InlineHostOpts
 ---@field get_size fun(): { width: integer, height: integer|nil }  read at every flush; nil height = scroll mode
+---@field native_markdown? boolean  override the optional native Markdown default for this host
 ---@field on_flush? fun(damage: { top: integer, bot: integer }|nil)  called after every flush (commit or relayout); damage nil = canvas unchanged
 
 ---@class InlineHost : HostConfig
@@ -338,6 +340,8 @@ end
 ---@field subwins table[] laid-out subwindow nodes of the root's last flush (document order)
 ---@field canvas_lines string[]  the root's last painted canvas — the pre-mirror ground truth a subwin restores from
 ---@field targets table<any, FlushTarget>  all flush targets: the root (keyed by the host) plus one per live container boundary (keyed by its fiber)
+---@field markdown_backend? "lua"|"rust"  selected backend on an opted-in host
+---@field markdown_fallback? string  reason a native candidate was declined
 ---@field root_target FlushTarget  the root's target record (tree/subwins/canvas_lines above alias its fields)
 ---@field take_damage fun(fiber: Fiber): { top: integer, bot: integer }|nil|false  consume a container target's accumulated damage
 ---@field drop_target fun(fiber: Fiber)  retire a container target's buffer (its boundary is gone)
@@ -652,8 +656,20 @@ function M.new(opts)
 				target = { bufnr = buf, pending = "all", subwins = {}, canvas_lines = {} }
 				targets[key] = target
 			end
-			layout.compute(t_tree, { width = cw, height = ch })
-			local damage = flush_target(target, t_tree, cw, ch or t_tree.size.h)
+			local list = t_tree
+			if list.children and #list.children == 1 and not list.props.content_visibility then
+				list = list.children[1]
+			end
+			local damage
+			if not ch and list.props.content_visibility == "auto" and list.props.visibility then
+				damage = list.props.visibility:flush(target, t_tree, list, cw, ns)
+			else
+				if target.visible_band then
+					target.visible_band, target.prev_lines, target.prev_hl_rows, target.canvas = nil, nil, nil, nil
+				end
+				layout.compute(t_tree, { width = cw, height = ch })
+				damage = flush_target(target, t_tree, cw, ch or t_tree.size.h)
+			end
 			note_damage(target, damage)
 			target.tree = t_tree
 			sources.update(target.bufnr, t_tree)
@@ -822,6 +838,13 @@ function M.new(opts)
 	targets[host] = { bufnr = bufnr, pending = "all", subwins = {}, canvas_lines = {} }
 	host.targets = targets
 	host.root_target = targets[host]
+	local native_markdown = opts.native_markdown
+	if native_markdown == nil then
+		native_markdown = config.native_markdown
+	end
+	if native_markdown then
+		require("fibrous.markdown.native").install(host, opts)
+	end
 	return host
 end
 

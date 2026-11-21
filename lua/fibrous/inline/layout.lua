@@ -639,6 +639,7 @@ end
 ---@class ComputeOpts
 ---@field width integer    root margin-box width (the viewport width)
 ---@field height? integer  fixed root height (app mode); nil = content height (scroll mode)
+---@field origin_y? integer  document-row origin for a viewport band; default 0
 
 -- Run both passes over `tree`. The root always fills `opts.width`.
 ---@param tree table
@@ -646,7 +647,7 @@ end
 ---@return table tree  the same tree, annotated
 function M.compute(tree, opts)
 	measure(tree, opts.width)
-	layout(tree, 0, 0, opts.width, opts.height or tree.size.h)
+	layout(tree, 0, opts.origin_y or 0, opts.width, opts.height or tree.size.h)
 	return tree
 end
 

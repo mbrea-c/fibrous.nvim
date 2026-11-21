@@ -7,6 +7,10 @@ local mount = require("fibrous.inline.mount")
 
 local M = {}
 
+-- Optional native optimizations; source installs use Lua unless explicitly enabled.
+---@type fun(opts?: { native_markdown?: boolean })
+M.setup = require("fibrous.config").setup
+
 -- Mount a component as a standalone floating application.
 ---@type fun(component: Component, props?: table, opts?: InlineFloatingOpts): InlineAppHandle
 M.mount = mount.floating
