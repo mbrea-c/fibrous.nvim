@@ -53,6 +53,24 @@ describe("opt-in native Markdown", function()
     assert.equal(1, calls)
   end)
 
+  it("keeps the fit-content layout in charge when native Markdown is enabled", function()
+    fibrous.setup({ native_markdown = true })
+    local size, fitted = { width = 40 }, nil
+    local host = Host.new({
+      get_size = function() return size end,
+      on_fit_width = function(width) fitted = width end,
+    })
+    local root = runtime.create_root(ui.markdown, { text = "hello" }, { host = host })
+    root:render()
+    size.width = 3
+    host.relayout()
+    local backend, reason = host.markdown_backend, host.markdown_fallback
+    root:unmount()
+    assert.equal(3, fitted)
+    assert.equal("lua", backend)
+    assert.equal("content-fitted width", reason)
+  end)
+
   it("rejects invalid configuration without changing the previous setting", function()
     fibrous.setup({ native_markdown = false })
     assert.has_error(function()

@@ -228,6 +228,45 @@ local function max_line_width(lines)
 	return w
 end
 
+-- Natural (unwrapped) width for fit-content floats. Keep this probe separate
+-- from the live wrapping and positioning caches. A scrolling child's contents
+-- contribute to width even when its height is a fixed viewport.
+function M.content_width(node, limit)
+	if not node or node.subwin == "popup" then return 0 end
+	local p = node.props or {}
+	local r = node.style_resolved or box.resolve(p)
+	local w = p.width
+	if not w then
+		local inner = 0
+		local cap = math.max(0, math.min(limit, p.max_width or limit) - box.h_inner(r))
+		if node.inner then
+			inner = M.content_width(node.inner, cap)
+		elseif node.children then
+			local row = node.kind == "row"
+			for i, child in ipairs(node.children) do
+				local cw = M.content_width(child, cap)
+				inner = row and inner + cw + (i > 1 and (p.gap or 0) or 0) or math.max(inner, cw)
+				if inner >= cap then break end
+			end
+		elseif node.kind == "image" then
+			inner = p.image and p.image.cols or 0
+		else
+			local s = node._text or node.text or ""
+			if type(s) == "table" then s = spans.flatten(s) end
+			for line in s:gmatch("[^\n]+") do
+				inner = math.max(inner, str_width(line))
+				if inner >= cap then break end
+			end
+		end
+		w = inner + box.h_inner(r)
+		if r.border.title then
+			w = math.max(w, str_width(r.border.title.text) + r.border.sides.left + r.border.sides.right)
+		end
+	end
+	w = math.max(p.min_width or 0, math.min(w, p.max_width or w))
+	return math.min(limit, w + r.margin.left + r.margin.right)
+end
+
 -- Bottom-up pass: resolve the box model and compute node.size — the intrinsic
 -- margin-box size under an available-width constraint. Wrapping text reflows
 -- here, so heights already reflect the constrained width.

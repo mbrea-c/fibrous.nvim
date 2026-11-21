@@ -249,6 +249,7 @@ local function wire(component, props, host, winid, group, attachments, sync, on_
 end
 
 ---@class InlineFloatingOpts
+---@field fit_width? boolean  fit the content, using width as a ceiling (default false)
 ---@field width? integer    default 60% of columns
 ---@field height? integer   default 60% of lines
 ---@field row? integer      default centered
@@ -276,8 +277,13 @@ function M.floating(component, props, opts)
 
 	-- Explicit opts pin the geometry; defaults track the editor size (VimResized
 	-- re-derives them through this same function).
+	local fitted_width
+	local function width_limit()
+		return opts.width or math.floor(vim.o.columns * 0.6)
+	end
 	local function geom()
-		local width = opts.width or math.floor(vim.o.columns * 0.6)
+		local limit = width_limit()
+		local width = math.min(fitted_width or limit, limit)
 		local height = opts.height or math.floor(vim.o.lines * 0.6)
 		return {
 			width = width,
@@ -288,13 +294,19 @@ function M.floating(component, props, opts)
 	end
 
 	local g = geom()
+	local winid
 	local manager, interaction -- need the root winid, so attached below
 	local host = inline_host.new({
 		native_markdown = opts.native_markdown,
 		get_size = function()
-			local cur = geom()
-			return { width = cur.width, height = not scroll and cur.height or nil }
+			return { width = width_limit(), height = not scroll and geom().height or nil }
 		end,
+		on_fit_width = opts.fit_width and function(width)
+			if width == fitted_width then return end
+			fitted_width = width
+			local cur = geom()
+			vim.api.nvim_win_set_config(winid, { relative = "editor", width = width, row = cur.row, col = cur.col })
+		end or nil,
 		on_flush = function(damage)
 			if manager then
 				-- nil damage = the canvas didn't change: nothing under the floats
@@ -338,7 +350,7 @@ function M.floating(component, props, opts)
 		vim.wo[backdrop_win].winblend = blend
 	end
 
-	local winid = open_root_float(host.bufnr, {
+	winid = open_root_float(host.bufnr, {
 		relative = "editor",
 		row = g.row,
 		col = g.col,

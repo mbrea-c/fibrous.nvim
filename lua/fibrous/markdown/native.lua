@@ -58,6 +58,11 @@ function M.install(host, opts)
     target.canvas_lines, target.subwins, host.canvas_lines = {}, {}, {}
     return result
   end
+  -- The retained renderer consumes a final width, not a content-width ceiling.
+  if opts.on_fit_width then
+    host.markdown_fallback = "content-fitted width"
+    return
+  end
   host.commit = function(...)
     local result = commit(...)
     if installed or opts.get_size().height or not eligible(host.tree) or attempted == host.tree then

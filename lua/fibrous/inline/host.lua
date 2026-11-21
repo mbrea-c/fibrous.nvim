@@ -329,6 +329,7 @@ local function collect_subwins(node, out)
 end
 
 ---@class InlineHostOpts
+---@field on_fit_width? fun(width: integer)  measure the root under get_size().width and paint at the fitted width
 ---@field get_size fun(): { width: integer, height: integer|nil }  read at every flush; nil height = scroll mode
 ---@field native_markdown? boolean  override the optional native Markdown default for this host
 ---@field on_flush? fun(damage: { top: integer, bot: integer }|nil)  called after every flush (commit or relayout); damage nil = canvas unchanged
@@ -714,8 +715,13 @@ function M.new(opts)
 
 		---@type { top: integer, bot: integer }|nil
 		local root_damage
+		local cw = size.width
+		if opts.on_fit_width then
+			cw = math.max(1, layout.content_width(tree, cw))
+			opts.on_fit_width(cw)
+		end
 		if tree then
-			root_damage = process(host, tree, size.width, size.height)
+			root_damage = process(host, tree, cw, size.height)
 		else
 			root_target.canvas = nil
 			root_target.tree = nil

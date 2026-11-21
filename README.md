@@ -89,9 +89,8 @@ The Rust Markdown renderer is experimental and **off by default**. It retains a
 single scroll-mode Markdown document between width changes. Parsing, component
 execution, highlighting and edits remain in Lua. It supports paragraphs, lists,
 quotes, tables, math, links and source mapping. Missing/incompatible native
-modules, fixed-height UIs, whole-entry comment anchors, general UI trees and
-unsupported styling use
-the normal Lua renderer. It does not accelerate Markdown nested inside an
+modules, fixed-height or content-fitted UIs, whole-entry comment anchors,
+general UI trees and unsupported styling use the normal Lua renderer. It does not accelerate Markdown nested inside an
 arbitrary UI or Weave's virtualized transcript.
 
 With the module installed, enable it before mounting:

@@ -51,6 +51,45 @@ describe("inline.mount", function()
     assert.is_false(vim.api.nvim_buf_is_valid(handle.bufnr))
   end)
 
+  it("fits and recenters on same-row content changes, using the configured width as a ceiling", function()
+    local function App(_, props)
+      return { comp = col, props = { style = { padding = { x = 2 } } }, children = {
+        { comp = { __host = "row" }, props = { gap = 1 }, children = {
+          { comp = text, props = { text = "x" } }, { comp = text, props = { text = props.label } },
+        } },
+      } }
+    end
+    local app = mount.floating(App, { label = "abc" }, { width = 30, height = 1, fit_width = true })
+    local function check(w)
+      local cfg = vim.api.nvim_win_get_config(app.winid)
+      assert.equal(w, cfg.width)
+      assert.equal(math.floor((vim.o.columns - w) / 2), cfg.col)
+      assert.equal(w, vim.fn.strdisplaywidth(lines_of(app.bufnr)[1]))
+    end
+    check(9)
+    app.set_props({ label = ("a"):rep(32) })
+    check(30)
+    app.set_props({ label = "界" })
+    check(8)
+    app.unmount()
+  end)
+
+  it("fits a scrolling container to its children and ignores overlay content", function()
+    local ui = require("fibrous.inline.components")
+    local app = mount.floating(function()
+      return { comp = ui.col, props = {}, children = {
+        { comp = ui.container, props = { grow = 1 }, children = {
+          { comp = ui.label, props = { text = "inside viewport" } },
+        } },
+        { comp = ui.popup, props = { open = false }, children = {
+          { comp = ui.label, props = { text = ("x"):rep(60) } },
+        } },
+      } }
+    end, {}, { width = 50, height = 4, fit_width = true })
+    assert.equal(15, vim.api.nvim_win_get_width(app.winid))
+    app.unmount()
+  end)
+
   it("floating scroll mode: the buffer grows past the window height", function()
     local function App()
       local children = {}
