@@ -1510,7 +1510,8 @@ function M.attach(host, root_winid, opts)
 		if float_normal then
 			local cur = vim.wo[winid].winhighlight
 			local remap = "NormalFloat:" .. float_normal
-			vim.wo[winid].winhighlight = cur ~= "" and (cur .. "," .. remap) or remap
+			-- Keep the override local to this buffer so new popups use NormalFloat.
+			vim.wo[winid][0].winhighlight = cur ~= "" and (cur .. "," .. remap) or remap
 		end
 		-- text_input never wraps (rect math); raw_buffer is the native-wrapping
 		-- escape hatch and wraps unless told not to.

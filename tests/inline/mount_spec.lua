@@ -583,6 +583,20 @@ describe("inline.mount", function()
     vim.cmd("tabclose")
   end)
 
+  it("keeps the embedded surface local when its container opens a popup", function()
+    local pane = mount.split(ContainerApp, {}, { render = "buffer", split = { direction = "vertical" } })
+    local container = anchored_floats(pane.winid)[1]
+    vim.api.nvim_set_current_win(container)
+    local popup = mount.floating(ContainerApp, {}, { width = 12, height = 6, border = "rounded" })
+    local root_hl = vim.wo[popup.winid].winhighlight
+    local child_hl = vim.wo[anchored_floats(popup.winid)[1]].winhighlight
+    popup.unmount()
+    pane.unmount()
+
+    assert.falsy(root_hl:find("NormalFloat:Normal", 1, true))
+    assert.falsy(child_hl:find("NormalFloat:Normal", 1, true))
+  end)
+
   it("floating: sub-buffer floats keep NormalFloat (overlay look, no remap)", function()
     local handle = mount.floating(ContainerApp, {}, { width = 12, height = 6 })
 

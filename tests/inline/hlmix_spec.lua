@@ -96,6 +96,47 @@ describe("inline.hlmix composition", function()
 		handle.unmount()
 	end)
 
+	it("adds a newly opaque fill underneath an existing foreground run", function()
+		vim.api.nvim_set_hl(0, "TestClearFill", {})
+		local mark_hl = require("fibrous.inline.hlmix").mix("TestClearFill", "TestFg")
+		assert.is_nil(resolved(mark_hl).bg)
+		vim.api.nvim_set_hl(0, "TestClearFill", { bg = fill_bg })
+		vim.api.nvim_exec_autocmds("ColorScheme", { pattern = "hlmix_test" })
+		local updated = vim.wait(250, function() return resolved(mark_hl).bg == fill_bg end)
+		assert.is_true(updated)
+		assert.is_nil(resolved("TestFg").bg)
+	end)
+
+	it("updates an existing mark after other ColorScheme callbacks restore its colors", function()
+		local function App()
+			return {
+				comp = col,
+				props = { style = { hl = "TestFill" } },
+				children = { { comp = text, props = { text = "draft", style = { text_hl = "TestFg" } } } },
+			}
+		end
+		local handle = mount.floating(App, {}, { width = 10, height = 2 })
+		local mark = mark_resolving(handle.bufnr, { bg = fill_bg, fg = fg_red })
+		assert.is_not_nil(mark)
+		vim.api.nvim_set_hl(0, "TestFill", {})
+		vim.api.nvim_set_hl(0, "TestFg", {})
+		vim.api.nvim_create_autocmd("ColorScheme", {
+			pattern = "hlmix_test",
+			once = true,
+			callback = function()
+				vim.api.nvim_set_hl(0, "TestFill", { bg = 0x223344 })
+				vim.api.nvim_set_hl(0, "TestFg", { fg = 0x99aabb, bold = true })
+			end,
+		})
+		vim.api.nvim_exec_autocmds("ColorScheme", { pattern = "hlmix_test" })
+		local updated = vim.wait(250, function()
+			local hl = resolved(mark.hl)
+			return hl.bg == 0x223344 and hl.fg == 0x99aabb and hl.bold
+		end)
+		handle.unmount()
+		assert.is_true(updated, "the existing extmark must pick up the final fill and text colors")
+	end)
+
 	it("an incremental repaint composes like the full paint", function()
 		local setter
 		local function App(ctx)

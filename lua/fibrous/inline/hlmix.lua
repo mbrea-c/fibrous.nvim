@@ -29,7 +29,8 @@ local function derive(name, fill, over)
 	local f = vim.api.nvim_get_hl(0, { name = fill, link = false })
 	if not (f.bg or f.ctermbg) then
 		vim.api.nvim_set_hl(0, name, { link = over })
-		return over -- the fill contributes no bg either; nothing to compose
+		-- Keep the pair on the extmark so a later scheme can give this fill a background.
+		return name
 	end
 	o.link = nil
 	o.bg = f.bg
@@ -78,7 +79,8 @@ end
 
 vim.api.nvim_create_autocmd("ColorScheme", {
 	group = vim.api.nvim_create_augroup("FibrousHlMix", { clear = true }),
-	callback = refresh,
+	-- Themes and widgets can restore either source in their own ColorScheme callbacks.
+	callback = vim.schedule_wrap(refresh),
 })
 
 return M
