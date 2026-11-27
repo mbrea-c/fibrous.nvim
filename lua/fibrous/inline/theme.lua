@@ -29,6 +29,7 @@ local M = {}
 -- `apply()` never clobbers an existing definition.
 M.groups = {
   FibrousHover = { link = "CursorLine" },
+  FibrousWidgetMode = { link = "ModeMsg" },
   FibrousDim = { link = "Comment" },
   FibrousButton = { link = "Pmenu" },
   FibrousButtonHover = { link = "PmenuSel" },

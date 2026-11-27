@@ -5,6 +5,7 @@
 -- link that breaks across lines lights up whole. All headless-safe: it inspects
 -- the handler side effect and the extmark placement, not a redraw.
 
+local it_with_free_cursor = require("tests.inline.free_cursor")
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
 
@@ -33,7 +34,7 @@ local function press(handle, key)
 end
 
 describe("inline.interact interactive spans", function()
-  it("fires on_click on <CR> and <Space> when the cursor is on the span", function()
+  it_with_free_cursor("fires on_click on <CR> and <Space> when the cursor is on the span", function()
     local clicks = 0
     local function App()
       return {

@@ -7,6 +7,7 @@
 -- so the container scrolls natively; its own subwindows (text inputs, deeper
 -- containers) anchor to it recursively.
 
+local it_with_free_cursor = require("tests.inline.free_cursor")
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
 
@@ -403,7 +404,7 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
-  it("focus hops: <CR> enters the container, <CR> again enters its input, edges exit level by level", function()
+  it_with_free_cursor("focus hops: <CR> enters the container, <CR> again enters its input, edges exit level by level", function()
     local function App()
       return {
         comp = ui.col,
@@ -490,7 +491,7 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
-  it("hover reaches into an UNFOCUSED container: the root cursor over a button highlights it, focus stays on the root", function()
+  it_with_free_cursor("hover reaches into an UNFOCUSED container: the root cursor over a button highlights it, focus stays on the root", function()
     local function App()
       return {
         comp = ui.col,
@@ -543,7 +544,7 @@ describe("inline.container", function()
     handle.unmount()
   end)
 
-  it("dead space past a container's content never hovers or activates its last line", function()
+  it_with_free_cursor("dead space past a container's content never hovers or activates its last line", function()
     -- container box is TALLER than its content (rows below the last line are
     -- blank padding). A parent cursor over that dead space must NOT clamp onto
     -- the last content line — hover and <CR> there do nothing, even though the

@@ -12,6 +12,7 @@
 -- the child layer as data, leaving the float's cursor to the app (follow-to-
 -- bottom owns an unfocused container's cursor).
 
+local it_with_free_cursor = require("tests.inline.free_cursor")
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
 
@@ -108,7 +109,7 @@ describe("inline hover drive (no cursor writes into unfocused floats)", function
     handle.unmount()
   end)
 
-  it("hover still paints on the container when driven without a cursor write", function()
+  it_with_free_cursor("hover still paints on the container when driven without a cursor write", function()
     tick = 0
     local handle = mount.floating(App, {}, { width = 24, height = 10 })
     vim.api.nvim_set_current_win(handle.winid)

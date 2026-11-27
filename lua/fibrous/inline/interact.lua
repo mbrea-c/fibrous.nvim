@@ -238,7 +238,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
   target = target or host.root_target
   local anchor_enabled = anchor ~= false
   local bufnr = target.bufnr
-  local group = vim.api.nvim_create_augroup("FibrousInlineInteract_" .. root_winid, { clear = true })
+  local group = vim.api.nvim_create_augroup("FibrousInlineInteract_" .. root_winid .. "_" .. bufnr, { clear = true })
 
   -- A parent-DRIVEN pointer (buffer row, display cell), delegated here by the
   -- parent's subwin.hover_at when its cursor sits over this (container)
@@ -1053,7 +1053,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     group = group,
     buffer = bufnr,
     callback = function()
-      if widget_mode then widget_mode.snap() end
+      widget_mode.snap()
       capture_anchor()
       -- A real cursor move in THIS buffer means the cursor is live here, so
       -- force hover liveness (the bare autocmd used to pass its event table,
@@ -1079,11 +1079,12 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
 
   local maps = { "<CR>", "<Space>" }
   vim.keymap.set("n", "<CR>", function()
+    widget_mode.snap()
     activate(true)
   end, { buffer = bufnr, nowait = true, desc = "fibrous: activate" })
   vim.keymap.set("n", "<Space>", function()
-    activate(false, false, widget_mode and widget_mode.snap())
-  end, { buffer = bufnr, nowait = true, desc = "fibrous: activate" })
+    activate(false, false, widget_mode.snap())
+  end, { buffer = bufnr, desc = "fibrous: activate" })
   -- <Tab> shadows <C-i> (jumplist-forward) inside the canvas buffer — the
   -- usual trade for UI buffers.
   maps[#maps + 1] = "<Tab>"
@@ -1181,10 +1182,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       end, { buffer = bufnr, nowait = true, desc = "fibrous: edit subwindow (operator)" })
     end
   end
-  if target == host.root_target then
-    widget_mode = require("fibrous.inline.widget_mode").attach(root_winid, target, subwins, cursor_cell, group)
-    maps[#maps + 1] = "<Esc>"
-  end
+  widget_mode = require("fibrous.inline.widget_mode").attach(root_winid, target, subwins, cursor_cell, group)
   local saved_mousemoveevent = nil
   if mouse.follow then
     saved_mousemoveevent = vim.o.mousemoveevent
@@ -1235,7 +1233,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     -- pointer leaves the container (the clear half of `subwins.hover_at`).
     clear_hover = clear_hover,
     teardown = function()
-      if widget_mode then widget_mode.leave() end
+      widget_mode.teardown()
       mousemove.unregister(root_winid)
       pcall(vim.api.nvim_del_augroup_by_id, group)
       if saved_mousemoveevent ~= nil then

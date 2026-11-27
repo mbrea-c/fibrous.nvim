@@ -29,15 +29,30 @@ See [`examples/README.md`](examples/README.md) for the full list.
 
 ## Widget mode
 
-Press `<Esc>` in Normal mode on any toplevel Fibrous view to snap to a widget.
-Use `h`, `j`, `k`, and `l` to move to the nearest widget in that direction.
-Counts work, so `3j` moves down three widgets. Other Normal-mode motions run
-first and snap to the nearest widget in the resulting viewport.
+Widget mode starts on in each Neovim session. Press `<leader>w` in Normal mode
+in any focused Fibrous window, including a prompt or cell editor, to toggle it
+for all open and future Fibrous views. Ordinary windows use their own bindings,
+even when they display the same buffer as a Fibrous editor. An existing
+buffer-local mapping for the chord takes precedence.
 
-Press `<CR>` to leave widget mode and activate the widget, or `<Esc>` to leave
-at the current cell. `<Space>` activates a button, checkbox, or link and keeps
-widget mode active. Entering another Vim mode or leaving the view ends widget
-mode. Inside a focused child window, Normal-mode `<Esc>` returns to its parent.
+With Space as leader, press Space then `w`. Space alone activates the current
+control after Neovim's mapping timeout. To choose a different shortcut, set
+`vim.g.fibrous_widget_mode_key` to your preferred keys. Set it to `false` for
+command-only use. `:FibrousToggleWidgetMode` is also available for dotfile mappings.
+
+When enabled, `h`, `j`, `k`, and `l` move to the nearest widget in that
+direction on the focused Fibrous canvas. Counts repeat the move. Other Normal
+motions move first, then snap in the new viewport. `<Space>` activates in
+place. `<CR>` activates and can focus a child. A focused container navigates
+its own controls. Text inputs and raw buffers keep their editing keys, and
+Normal-mode `<Esc>` returns from a child to its parent.
+
+A `WIDGET` label appears at the upper right wherever widget navigation is
+active, even if the view has no controls. It uses a free top border or a small
+overlay. The highlight group is `FibrousWidgetMode`. Statuslines can read
+`vim.w[winid].fibrous_widget_mode`, which is `true` on the navigating window
+and `nil` elsewhere. Returning to a Fibrous canvas in Normal mode resumes
+navigation until you toggle it off.
 
 ## Jump to widgets with flash.nvim
 
@@ -50,9 +65,6 @@ wants to take advantage of this for easier navigation, they can set a global
 keybind in their own config:
 
 ```lua
--- bind this to a <C-...> key, NOT a <Space>-leader chord: fibrous maps
--- <Space>/<CR>/<Tab>/i/a/d/c/v… buffer-locally, so a <Space> leader is
--- swallowed inside a fibrous window.
 vim.keymap.set({ "n", "v" }, "<C-f>", function()
   require("flash").jump({
     -- wrap=true labels matches before the cursor too (else forward-only in

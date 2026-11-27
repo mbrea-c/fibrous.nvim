@@ -1575,6 +1575,9 @@ function M.attach(host, root_winid, opts)
 			-- mirror — reposition_popup is the entry's whole lifecycle.
 			return entry
 		end
+		if node.subwin ~= "container" then
+			entry.unregister_widget_key = require("fibrous.inline.widget_mode").register_window(winid, bufnr)
+		end
 		map_motions(entry)
 		-- The native half of click-to-insert: a click on a VISIBLE float never
 		-- reaches the root's <LeftRelease> map — core focuses the float on the
@@ -1637,6 +1640,7 @@ function M.attach(host, root_winid, opts)
 	end
 
 	local function destroy(entry)
+		if entry.unregister_widget_key then entry.unregister_widget_key() end
 		entry.dead = true -- detaches the on_lines watcher on its next callback
 		-- Innermost first: a container's own widgets die before it does. Their
 		-- destroys run their own focus-strand exits, which land in THIS entry's

@@ -6,6 +6,7 @@
 -- <CR>/<Space> (buffer-local, normal mode) activate: button → on_press(),
 -- checkbox → on_toggle(not checked).
 
+local it_with_free_cursor = require("tests.inline.free_cursor")
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
 
@@ -60,7 +61,7 @@ describe("inline.interact", function()
     handle.unmount()
   end)
 
-  it("<CR> activates the button under the cursor; inert rows do nothing", function()
+  it_with_free_cursor("<CR> activates the button under the cursor; inert rows do nothing", function()
     local pressed = 0
     local function App()
       return {
@@ -270,7 +271,7 @@ describe("inline.interact", function()
       end
     end
 
-    it("<LeftRelease> activates like <CR>; inert cells do nothing", function()
+    it_with_free_cursor("<LeftRelease> activates like <CR>; inert cells do nothing", function()
       local pressed = 0
       local handle = mount.floating(ButtonApp(function()
         pressed = pressed + 1
@@ -358,7 +359,7 @@ describe("inline.interact", function()
       }
     end
 
-    it("<Tab> cycles forward through interactive nodes in document order, wrapping", function()
+    it_with_free_cursor("<Tab> cycles forward through interactive nodes in document order, wrapping", function()
       local handle = mount.floating(FormApp, {}, { width = 12, height = 6 })
       move_cursor(handle, 1, 0) -- the inert title
 
