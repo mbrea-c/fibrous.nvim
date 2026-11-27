@@ -94,7 +94,7 @@ describe("inline.interact", function()
     handle.unmount()
   end)
 
-  it("on_press receives the cursor-local column within the widget", function()
+  it_with_free_cursor("on_press receives the cursor-local column within the widget", function()
     -- a widget can act on WHERE it was pressed (e.g. ripple at the click).
     local got = {}
     local function App()

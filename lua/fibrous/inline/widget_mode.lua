@@ -73,16 +73,50 @@ local function clamp(value, start, size)
   return math.max(start, math.min(value, start + size - 1))
 end
 
-local function nearest(boxes, x, y, key, preferred)
-  local current
-  for _, target in ipairs(boxes) do
-    if clip.contains(target.box, x, y) then current = target end
+local function intersection(box, bounds)
+  local part = clip.intersect(box, bounds)
+  if part.w > 0 and part.h > 0 then return part end
+end
+
+local function place_cursor(winid, x, y, viewport)
+  local byte = vim.fn.virtcol2col(winid, y + 1, x + 1)
+  local pos = { y + 1, math.max(0, byte - 1) }
+  if not clip.contains(viewport, x, y) then
+    vim.api.nvim_win_set_cursor(winid, pos)
+    return
   end
+
+  -- Placing the cursor on an already visible edge must not scroll it away.
+  -- Save the window-local values so inherited margins stay inherited.
+  local clearance = {
+    scrolloff = math.min(y - viewport.y, viewport.y + viewport.h - 1 - y),
+    sidescrolloff = math.min(x - viewport.x, viewport.x + viewport.w - 1 - x),
+  }
+  local opts, saved = vim.wo[winid], {}
+  for name, cells in pairs(clearance) do
+    if opts[name] > cells then
+      saved[name] = opts[0][name]
+      opts[0][name] = 0
+    end
+  end
+  local ok, err = pcall(vim.api.nvim_win_set_cursor, winid, pos)
+  for name, value in pairs(saved) do opts[0][name] = value end
+  if not ok then error(err) end
+end
+
+local function target_at(boxes, x, y)
+  for i = #boxes, 1, -1 do
+    if clip.contains(boxes[i].box, x, y) then return boxes[i] end
+  end
+end
+
+local function nearest(boxes, x, y, key, preferred)
+  local current = target_at(boxes, x, y)
   if current and not key then return x, y end
 
   local vertical = key == "j" or key == "k"
   local aim = vertical and preferred or x
-  local best, best_x, best_y
+  local distance, hit_x, hit_y
   for _, target in ipairs(boxes) do
     local box = target.box
     local nx, ny = clamp(aim, box.x, box.w), clamp(y, box.y, box.h)
@@ -91,12 +125,34 @@ local function nearest(boxes, x, y, key, preferred)
     local same = current and current.node == target.node and current.span == target.span
     if ahead and not same then
       local score = (nx - aim) ^ 2 + (ny - y) ^ 2
-      if not best or score < best then
-        best, best_x, best_y = score, nx, ny
+      if not distance or score < distance then
+        distance, hit_x, hit_y = score, nx, ny
       end
     end
   end
-  return best_x, best_y
+  return hit_x, hit_y
+end
+
+-- Later boxes win hit-testing. A child at the start of a card or an inline
+-- link at the start of a button must not steal its parent's activation.
+local function landing(boxes, first_fragment, hit_x, hit_y)
+  local target = target_at(boxes, hit_x, hit_y)
+  local spans = first_fragment[target.node]
+  local part = spans and spans[target.span] or target
+  local area = part.anchor
+  for y = area.y, area.y + area.h - 1 do
+    local x = area.x
+    while x < area.x + area.w do
+      local next_x = x
+      for i = part.index + 1, #boxes do
+        local box = boxes[i].box
+        if clip.contains(box, x, y) then next_x = math.max(next_x, box.x + box.w) end
+      end
+      if next_x == x then return x, y end
+      x = next_x
+    end
+  end
+  return hit_x, hit_y
 end
 
 local title = { { " WIDGET ", "FibrousWidgetMode" } }
@@ -174,33 +230,40 @@ function M.attach(winid, target, subwins, cursor_cell, group)
     local vertical = key == "j" or key == "k"
     if not vertical or x ~= last_x or y ~= last_y then preferred = x end
 
-    -- A page motion has already positioned the viewport. Snap within it.
-    -- Directional steps can reach the next widget beyond a viewport edge.
-    local bounds
-    if not key then
-      local info = vim.fn.getwininfo(winid)[1]
-      bounds = { x = vim.fn.winsaveview().leftcol, y = info.topline - 1,
-        w = info.width - info.textoff, h = info.botline - info.topline + 1 }
-    end
-    local boxes = {}
-    targets.visit_boxes(target.tree, function(node, box, run)
-      box = clip.intersect(box, bounds)
-      if box.w > 0 and box.h > 0 then
-        boxes[#boxes + 1] = { box = box, node = node, span = run and run.id }
+    local info = vim.fn.getwininfo(winid)[1]
+    local viewport = { x = vim.fn.winsaveview().leftcol, y = info.topline - 1,
+      w = info.width - info.textoff, h = info.botline - info.topline + 1 }
+    local boxes, first_fragment = {}, {}
+    targets.visit_boxes(target.tree, function(node, box, run, content)
+      if box.w <= 0 or box.h <= 0 then return end
+      local visible = intersection(box, viewport)
+      -- A native motion has already positioned the viewport. Only a directional
+      -- step may select a widget beyond its edge.
+      if not visible and not key then return end
+      local anchor = visible or box
+      if content then anchor = intersection(anchor, content) or anchor end
+      local part = { box = key and box or visible, node = node, span = run and run.id,
+        anchor = anchor, index = #boxes + 1 }
+      boxes[part.index] = part
+      if run and visible then
+        local spans = first_fragment[node] or {}
+        first_fragment[node] = spans
+        spans[run.id] = spans[run.id] or part
       end
     end, subwins and subwins.visit_subwindow)
     local old_y, old_x = y, x
     for _ = 1, count do
-      local nx, ny = nearest(boxes, x, y, key, preferred)
-      if not nx or (x == nx and y == ny) then break end
+      local hit_x, hit_y = nearest(boxes, x, y, key, preferred)
+      if not hit_x then break end
+      local nx, ny = landing(boxes, first_fragment, hit_x, hit_y)
+      if key and not vertical then preferred = hit_x end
+      if x == nx and y == ny then break end
       x, y = nx, ny
     end
     if y ~= old_y or x ~= old_x then
-      local byte = vim.fn.virtcol2col(winid, y + 1, x + 1)
-      vim.api.nvim_win_set_cursor(winid, { y + 1, math.max(0, byte - 1) })
+      place_cursor(winid, x, y, viewport)
     end
     last_y, last_x = cursor_cell()
-    if not vertical then preferred = last_x end
   end
 
   -- CursorMoved can be deferred while Neovim drains typeahead. Also settle

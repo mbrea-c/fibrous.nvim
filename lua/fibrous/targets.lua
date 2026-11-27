@@ -73,7 +73,7 @@ end
 -- wrapped link carries the same (node, run.id). Consumers decide whether they
 -- need every fragment or just the first one that resolves to a visible cell.
 ---@param tree table?
----@param visit fun(node: table, box: table, run?: table)
+---@param visit fun(node: table, box: table, run?: table, content?: table)
 ---@param subwindow? fun(node: table, visit: function)
 function M.visit_boxes(tree, visit, subwindow)
   local function walk(node)
@@ -83,7 +83,7 @@ function M.visit_boxes(tree, visit, subwindow)
       if subwindow then subwindow(node, visit) end
     elseif node.props and node.props.role then
       local box = visible or node.content
-      if box then visit(node, box) end
+      if box then visit(node, box, nil, node.content) end
     end
     if node.kind == "text" and node.line_runs then
       for li, runs in ipairs(node.line_runs) do

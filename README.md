@@ -41,7 +41,10 @@ control after Neovim's mapping timeout. To choose a different shortcut, set
 command-only use. `:FibrousToggleWidgetMode` is also available for dotfile mappings.
 
 When enabled, `h`, `j`, `k`, and `l` move to the nearest widget in that
-direction on the focused Fibrous canvas. Counts repeat the move. Other Normal
+direction on the focused Fibrous canvas. The cursor lands at the top left of
+the widget's visible content. On a button it lands on the label, and on a
+wrapped link it lands at the start of the first visible fragment. Vertical
+moves remember the column you aimed at. Counts repeat the move. Other Normal
 motions move first, then snap in the new viewport. `<Space>` activates in
 place. `<CR>` activates and can focus a child. A focused container navigates
 its own controls. Text inputs and raw buffers keep their editing keys, and

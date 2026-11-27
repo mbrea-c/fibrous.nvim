@@ -57,7 +57,7 @@ local M = {}
 ---@field enter_at fun(row: integer, x: integer, insert?: boolean): boolean  focus the subwindow at root cell (row, x), in insert mode when `insert` and the policy allows; false if none there
 ---@field activate_at fun(row: integer, x: integer, via_click?: boolean): boolean  focus the subwindow at (row, x) AND run its interaction once (press a role / hop deeper) — one-keystroke activation across the boundary; false if none there
 ---@field hover_at fun(row: integer, x: integer): InteractHandle?  drive hover at the parent cursor and return the child interaction there, if any
----@field visit_subwindow fun(node: table, visit: fun(node: table, box: table, run?: table))  project the subwindow's widget boxes into parent coordinates
+---@field visit_subwindow fun(node: table, visit: fun(node: table, box: table, run?: table, content?: table))  project the subwindow's widget boxes into parent coordinates
 ---@field clear_hover fun()  drop any parent-driven container hover
 ---@field teardown fun()  destroy all floats/buffers and the autocmds
 
@@ -1982,7 +1982,7 @@ function M.attach(host, root_winid, opts)
 		local entry = node.fiber and floats[node.fiber.instance]
 		if not entry or entry.dead or node.subwin == "popup" or not vim.api.nvim_win_is_valid(entry.winid) then return end
 		if not entry.child_target then
-			visit(node, clip.visible(node))
+			visit(node, clip.visible(node), nil, node.content)
 			return
 		end
 		local c = node.content
@@ -1993,15 +1993,18 @@ function M.attach(host, root_winid, opts)
 			dy = c.y + (entry.clip or 0) - (info.topline - 1)
 		end
 		local bounds = clip.visible(node, c)
+		local function project(box)
+			return clip.intersect({ x = box.x + dx, y = box.y + dy, w = box.w, h = box.h }, bounds)
+		end
 		local found = false
-		targets.visit_boxes(entry.child_target.tree, function(child, box, run)
-			local mapped = clip.intersect({ x = box.x + dx, y = box.y + dy, w = box.w, h = box.h }, bounds)
+		targets.visit_boxes(entry.child_target.tree, function(child, box, run, content)
+			local mapped = project(box)
 			if mapped.w > 0 and mapped.h > 0 then
 				found = true
-				visit(child, mapped, run)
+				visit(child, mapped, run, content and project(content))
 			end
 		end, entry.child_manager and entry.child_manager.visit_subwindow)
-		if not found then visit(node, clip.visible(node)) end
+		if not found then visit(node, clip.visible(node), nil, node.content) end
 	end
 
 	-- ── Interactive target geometry (fibrous.targets / flash) ───────────────────

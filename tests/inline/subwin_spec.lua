@@ -11,6 +11,7 @@
 -- resync through the same code path the autocmd calls); the swim itself is
 -- interactive-only and gets evaluated by eye.
 
+local it_with_free_cursor = require("tests.inline.free_cursor")
 local mount = require("fibrous.inline.mount")
 
 local col = { __host = "col" }
@@ -228,7 +229,7 @@ describe("inline.subwin", function()
       return buf
     end
 
-    it("entering lands on the line and column the mirror shows", function()
+    it_with_free_cursor("entering lands on the line and column the mirror shows", function()
       local buf = editor_buf()
       local handle = mount.floating(editor_app(buf), {}, { width = 10, height = 12 })
       local sub = subwin_of(handle)
@@ -296,7 +297,7 @@ describe("inline.subwin", function()
       vim.api.nvim_buf_delete(buf, { force = true })
     end)
 
-    it("entering through a WRAPPED widget lands on the line the row shows", function()
+    it_with_free_cursor("entering through a WRAPPED widget lands on the line the row shows", function()
       -- wrap is raw_buffer's default (and the playground's): one buffer line
       -- can occupy several box rows, so row → line is the mirror's row map,
       -- not base + offset — arithmetic teleports by one line per wrapped row

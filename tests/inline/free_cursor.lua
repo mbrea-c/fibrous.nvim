@@ -1,4 +1,4 @@
--- For interactions that deliberately place the cursor on inert text or padding.
+-- For interactions that need an exact cursor cell, including inert text and padding.
 return function(name, test)
   it(name, function()
     local mode = require("fibrous.inline.widget_mode")

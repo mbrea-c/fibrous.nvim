@@ -11,6 +11,7 @@
 --        back to the root and scroll it (page motions are never trapped).
 --        <C-w> is NOT an exit: it acts on the host pane (see below)
 
+local it_with_free_cursor = require("tests.inline.free_cursor")
 local mount = require("fibrous.inline.mount")
 local ui = require("fibrous.inline.components")
 
@@ -42,7 +43,7 @@ local function PaddedApp()
 end
 
 describe("inline.focus", function()
-  it("moving the root cursor across an input region does NOT steal focus", function()
+  it_with_free_cursor("moving the root cursor across an input region does NOT steal focus", function()
     local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
 
     vim.api.nvim_set_current_win(handle.winid)
@@ -55,7 +56,7 @@ describe("inline.focus", function()
     handle.unmount()
   end)
 
-  it("<CR> over the input focuses its float at the corresponding cell", function()
+  it_with_free_cursor("<CR> over the input focuses its float at the corresponding cell", function()
     local handle = mount.floating(PaddedApp, {}, { width = 10, height = 3 })
     local sub = subwin_of(handle)
 

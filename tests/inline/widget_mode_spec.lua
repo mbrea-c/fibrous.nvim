@@ -187,7 +187,7 @@ describe("widget mode", function()
     })
     vim.api.nvim_win_set_cursor(0, { 1, 4 })
     press("<Leader>w")
-    assert.same({ 1, 2 }, pos())
+    assert.same({ 1, 0 }, pos())
     press("l")
     assert.same({ 1, 6 }, pos())
     press("2j")
@@ -195,11 +195,65 @@ describe("widget mode", function()
     press("j")
     assert.same({ 4, 6 }, pos())
     press("h")
-    assert.same({ 4, 2 }, pos())
+    assert.same({ 4, 0 }, pos())
     press("2k")
-    assert.same({ 1, 2 }, pos())
+    assert.same({ 1, 0 }, pos())
     press("<Leader>wl")
-    assert.same({ 1, 3 }, pos())
+    assert.same({ 1, 1 }, pos())
+    handle.unmount()
+  end)
+
+  it("anchors a padded button at its label from either side and after a native motion", function()
+    local handle = view({ row({
+      item("L"), { comp = ui.button, props = { label = "Wide" } }, item("R"),
+    }) })
+    local start = assert(vim.api.nvim_get_current_line():find("Wide", 1, true)) - 1
+    press("<Leader>wl")
+    assert.same({ 1, start }, pos())
+    press("lh")
+    assert.same({ 1, start }, pos())
+    vim.api.nvim_win_set_cursor(0, { 1, start + 2 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
+    assert.same({ 1, start }, pos())
+    handle.unmount()
+  end)
+
+  it("keeps a parent action reachable when its first cell belongs to a child", function()
+    local activated = {}
+    local outer = row({
+      item("child", function() table.insert(activated, "child") end),
+      gap("parent"),
+    })
+    outer.props = { role = "button", on_press = function() table.insert(activated, "parent") end }
+    local handle = view({ outer })
+    vim.api.nvim_win_set_cursor(0, { 1, 8 })
+    press("<Leader>w<Space>")
+    assert.same({ "parent" }, activated)
+    assert.same({ 1, 5 }, pos())
+    press("h<Space>")
+    assert.same({ "parent", "child" }, activated)
+    assert.same({ 1, 0 }, pos())
+    handle.unmount()
+  end)
+
+  it("remembers the aimed column while displaying the start of a wide widget", function()
+    local handle = view({
+      item("0123456789"),
+      row({ item("left"), gap("    "), item("right") }),
+      item("0123456789"),
+      row({ item("left"), gap("    "), item("right") }),
+    })
+    vim.api.nvim_win_set_cursor(0, { 1, 9 })
+    press("<Leader>w")
+    assert.same({ 1, 0 }, pos())
+    press("j")
+    assert.same({ 2, 8 }, pos())
+    press("j")
+    assert.same({ 3, 0 }, pos())
+    press("j")
+    assert.same({ 4, 8 }, pos())
+    press("2k")
+    assert.same({ 2, 8 }, pos())
     handle.unmount()
   end)
 
@@ -233,7 +287,7 @@ describe("widget mode", function()
     assert.same({ 1, 4 }, pos())
     press("$")
     vim.api.nvim_exec_autocmds("CursorMoved", { buffer = handle.bufnr })
-    assert.same({ 1, 7 }, pos())
+    assert.same({ 1, 4 }, pos())
     handle.unmount()
   end)
 
@@ -344,6 +398,36 @@ describe("widget mode", function()
     assert.same({ "17", "9" }, rows)
   end)
 
+  it("anchors a wrapped link on its first visible line after scrolling", function()
+    local log = vim.fn.tempname()
+    require("fibrous.bench.termdraw").drive({
+      rtp = { vim.fn.getcwd() },
+      init = [[
+        vim.o.scrolloff = 1
+        local ui = require("fibrous.inline.components")
+        local wm = require("fibrous.inline.widget_mode")
+        wm.toggle()
+        local h = require("fibrous.inline.mount").floating(function()
+          return { comp = ui.paragraph, props = { text = {
+            { ("word "):rep(60), role = "link" },
+          } } }
+        end, {}, { width = 12, height = 4, mode = "scroll" })
+        h.focus()
+        vim.fn.winrestview({ lnum = 10, col = 2, topline = 8 })
+        vim.keymap.set("n", "X", wm.toggle, { buffer = h.bufnr })
+        vim.keymap.set("n", "Q", function()
+          vim.fn.writefile({
+            vim.fn.line("."), vim.fn.col("."), vim.fn.line("w0"), vim.wo[0][0].scrolloff, vim.wo.scrolloff,
+          }, ]] .. string.format("%q", log) .. [[)
+        end, { buffer = h.bufnr })
+      ]],
+      steps = { { send = "X", wait_ms = 80 }, { send = "Q", wait_ms = 60 } },
+    })
+    local seen = vim.fn.readfile(log)
+    vim.fn.delete(log)
+    assert.same({ "8", "1", "8", "-1", "1" }, seen)
+  end)
+
   it("restores a buffer-local motion mapping on exit", function()
     local handle = view({ item("one"), item("two") })
     local called = 0
@@ -356,11 +440,12 @@ describe("widget mode", function()
 
   it("navigates controls inside a container while focus stays on the root", function()
     local pressed = 0
+    local button = { comp = ui.button, props = { label = "inside", on_press = function() pressed = pressed + 1 end } }
     local handle = view({ item("top"), { comp = ui.container, props = { height = 3 },
-      children = { gap("first"), item("inside", function() pressed = pressed + 1 end), item("next") } } })
+      children = { gap("first"), button, item("next") } } })
     press("<Leader>wj")
     assert.equal(handle.winid, vim.api.nvim_get_current_win())
-    assert.same({ 3, 0 }, pos())
+    assert.same({ 3, 2 }, pos())
     press("<Space>")
     assert.equal(1, pressed)
     assert.equal(handle.winid, vim.api.nvim_get_current_win())
