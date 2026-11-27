@@ -22,14 +22,14 @@
 
 local M = {}
 
--- Highlight groups, all namespaced Fibrous*, all links into groups every
--- colorscheme defines. These are FILLS: they own their background (a hovered
+-- Highlight groups, all namespaced Fibrous*. The widget-mode label has a green
+-- foreground. The other groups are fills that own their background (a hovered
 -- row, a button chip, a popup row) and are meant to stand out against the
 -- surface. Override with a plain `:hi` / nvim_set_hl of the same name —
 -- `apply()` never clobbers an existing definition.
 M.groups = {
   FibrousHover = { link = "CursorLine" },
-  FibrousWidgetMode = { link = "ModeMsg" },
+  FibrousWidgetMode = { fg = "#398548", ctermfg = 2, bold = true },
   FibrousDim = { link = "Comment" },
   FibrousButton = { link = "Pmenu" },
   FibrousButtonHover = { link = "PmenuSel" },

@@ -24,6 +24,18 @@ describe("inline.theme", function()
     assert.equal("Special", link_of("FibrousCheckboxMark"))
   end)
 
+  it("gives the widget-mode label a green foreground", function()
+    local mode_msg = vim.api.nvim_get_hl(0, { name = "ModeMsg" })
+    vim.api.nvim_set_hl(0, "ModeMsg", { fg = "#ee4444" })
+    theme.apply()
+    local hl = resolve("FibrousWidgetMode")
+    vim.api.nvim_set_hl(0, "ModeMsg", mode_msg)
+    local fg = assert(hl.fg, "widget mode needs a foreground")
+    local red, green, blue = math.floor(fg / 65536), math.floor(fg / 256) % 256, fg % 256
+    assert.is_true(green > red and green > blue)
+    assert.equal(2, hl.ctermfg)
+  end)
+
   -- Borders and titles are PAINTED over the host surface, so they must take
   -- their source's COLOUR without its background — LineNr's gutter bg or
   -- FloatTitle's float bg would otherwise stamp a darker rectangle around

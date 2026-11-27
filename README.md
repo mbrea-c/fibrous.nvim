@@ -47,9 +47,11 @@ place. `<CR>` activates and can focus a child. A focused container navigates
 its own controls. Text inputs and raw buffers keep their editing keys, and
 Normal-mode `<Esc>` returns from a child to its parent.
 
-A `WIDGET` label appears at the upper right wherever widget navigation is
-active, even if the view has no controls. It uses a free top border or a small
-overlay. The highlight group is `FibrousWidgetMode`. Statuslines can read
+A green `WIDGET` label marks the view with active widget navigation. In a
+bordered popup it sits at the top right of the frame, including while a nested
+list has focus. When no enclosing border has room for a title, the label uses
+the focused view's upper-right corner. Override its color with the
+`FibrousWidgetMode` highlight group. Statuslines can read
 `vim.w[winid].fibrous_widget_mode`, which is `true` on the navigating window
 and `nil` elsewhere. Returning to a Fibrous canvas in Normal mode resumes
 navigation until you toggle it off.

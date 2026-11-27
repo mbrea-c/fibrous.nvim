@@ -101,17 +101,27 @@ end
 
 local title = { { " WIDGET ", "FibrousWidgetMode" } }
 
--- Use a free top border when possible. A separate corner float keeps titled
--- and borderless views intact, including their scroll and widget coordinates.
+-- A popup may focus a borderless scrolling child. Use the closest free
+-- Fibrous border so the badge stays clear of the child's controls.
+local function border_for_indicator(win)
+  local seen = {}
+  while win and not seen[win] and vim.api.nvim_win_is_valid(win) do
+    seen[win] = true
+    local config = vim.api.nvim_win_get_config(win)
+    local top = type(config.border) == "table" and config.border[2]
+    if type(top) == "table" then top = top[1] end
+    if top and top ~= "" and not config.title then return win end
+    win = vim.w[win].fibrous_anchor
+  end
+end
+
 local function show_indicator(winid, group)
-  local config = vim.api.nvim_win_get_config(winid)
-  local top = type(config.border) == "table" and config.border[2]
-  if type(top) == "table" then top = top[1] end
-  if top and top ~= "" and not config.title then
-    vim.api.nvim_win_set_config(winid, { title = title, title_pos = "right" })
+  local frame = border_for_indicator(winid)
+  if frame then
+    vim.api.nvim_win_set_config(frame, { title = title, title_pos = "right" })
     return function()
-      if vim.api.nvim_win_is_valid(winid) and vim.deep_equal(vim.api.nvim_win_get_config(winid).title, title) then
-        vim.api.nvim_win_set_config(winid, { title = "" })
+      if vim.api.nvim_win_is_valid(frame) and vim.deep_equal(vim.api.nvim_win_get_config(frame).title, title) then
+        vim.api.nvim_win_set_config(frame, { title = "" })
       end
     end
   end
@@ -125,7 +135,7 @@ local function show_indicator(winid, group)
     relative = "win", win = winid, anchor = "NE", row = 0, col = width,
     width = math.min(width, #label), height = 1, border = "none",
     style = "minimal", focusable = false, noautocmd = true,
-    zindex = math.max(99, (config.zindex or 0) + 1),
+    zindex = math.max(99, (vim.api.nvim_win_get_config(winid).zindex or 0) + 1),
   })
   vim.wo[badge].winhighlight = "Normal:FibrousWidgetMode,NormalFloat:FibrousWidgetMode"
   local resize = vim.api.nvim_create_autocmd("WinResized", {

@@ -131,7 +131,14 @@ describe("widget mode", function()
         vim.g.mapleader = " "
         local mount = require("fibrous.inline.mount")
         local ui = require("fibrous.inline.components")
-        local function page() return { comp = ui.label, props = { text = "page" } } end
+        local child
+        local function page()
+          return { comp = ui.col, children = {
+            { comp = ui.label, props = { text = "page" } },
+            { comp = ui.container, props = { height = 2, on_create = function(_, win) child = win end },
+              children = { { comp = ui.button, props = { label = "select" } } } },
+          } }
+        end
         local h = mount.floating(page, {}, { width = 28, height = 6, border = "rounded" })
         vim.api.nvim_set_current_win(h.winid)
         vim.keymap.set("n", "Q", function()
@@ -147,6 +154,7 @@ describe("widget mode", function()
               found = y < pos.row and "border" or "corner"
             end
           end
+          if vim.api.nvim_get_current_win() == child then found = "child:" .. found end
           vim.fn.writefile({ found }, ]] .. string.format("%q", log) .. [[, "a")
         end)
         vim.keymap.set("n", "B", function()
@@ -158,6 +166,8 @@ describe("widget mode", function()
       ]],
       steps = {
         { send = "Q", wait_ms = 30 },
+        { send = "\r", wait_ms = 80 }, { send = "Q", wait_ms = 30 },
+        { send = "\027", wait_ms = 80 },
         { send = " ", wait_ms = 50 }, { send = "w", wait_ms = 100 }, { send = "Q", wait_ms = 30 },
         { send = "B", wait_ms = 100 }, { send = "Q", wait_ms = 30 },
         { send = " w", wait_ms = 100 }, { send = "Q", wait_ms = 30 },
@@ -167,7 +177,7 @@ describe("widget mode", function()
     })
     local seen = vim.fn.readfile(log)
     vim.fn.delete(log)
-    assert.same({ "border", "absent", "absent", "corner", "corner", "absent" }, seen)
+    assert.same({ "border", "child:border", "absent", "absent", "corner", "corner", "absent" }, seen)
   end)
 
   it("snaps on <Leader>w and walks rectangles, keeping the column across uneven rows", function()
