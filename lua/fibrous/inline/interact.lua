@@ -207,7 +207,7 @@ end
 ---@field update_at fun(row: integer, x: integer)  re-evaluate hover at a parent-DRIVEN pointer (buffer row / display cell, 0-indexed) without touching this surface's real cursor
 ---@field reanchor fun(damage: any)  after a flush, put the cursor back on its anchored keyed entry (no-op when damage is false/nil or the surface is unfocused)
 ---@field recapture fun()  re-capture the anchor at the current cursor NOW (subwin.enter calls this after placing the cursor, before any CursorMoved can run)
----@field activate fun(enter_subwins: boolean, via_click?: boolean)  run activation at the current cursor (roles + subwindow entry); a parent delegates into this after focusing the layer
+---@field activate fun(enter_subwins: boolean, via_click?: boolean, widget_space?: boolean)  run activation at the current cursor (roles + subwindow entry); a parent delegates into this after focusing the layer
 ---@field clear_hover fun()  drop this layer's hover (and any it drives in nested containers)
 ---@field teardown fun()
 
@@ -843,7 +843,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
   -- a button in a container is pressed in ONE <CR> (focus crosses in, the
   -- container's layer presses the role or hops into a nested subwindow) — no
   -- more "one <CR> to enter, one to act" at each level.
-  local function activate(enter_subwins, via_click)
+  local function activate(enter_subwins, via_click, widget_space)
     local source = via_click and "mouse" or "key"
     -- Mouse activation acts where the POINTER is. Normally the same cell as
     -- the cursor (the click that got us here just moved it), but a parked
@@ -861,6 +861,13 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     end
     if not row then
       row, x = cursor_cell()
+    end
+    if widget_space and subwins and row then
+      local child = subwins.hover_at(row, x)
+      if child then
+        child.activate(false, false, true)
+        return
+      end
     end
     if enter_subwins and subwins then
       if row and subwins.activate_at(row, x, via_click) then
@@ -1041,10 +1048,12 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     end)
   end
 
+  local widget_mode
   vim.api.nvim_create_autocmd("CursorMoved", {
     group = group,
     buffer = bufnr,
     callback = function()
+      if widget_mode then widget_mode.snap() end
       capture_anchor()
       -- A real cursor move in THIS buffer means the cursor is live here, so
       -- force hover liveness (the bare autocmd used to pass its event table,
@@ -1073,7 +1082,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     activate(true)
   end, { buffer = bufnr, nowait = true, desc = "fibrous: activate" })
   vim.keymap.set("n", "<Space>", function()
-    activate(false)
+    activate(false, false, widget_mode and widget_mode.snap())
   end, { buffer = bufnr, nowait = true, desc = "fibrous: activate" })
   -- <Tab> shadows <C-i> (jumplist-forward) inside the canvas buffer — the
   -- usual trade for UI buffers.
@@ -1172,6 +1181,10 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
       end, { buffer = bufnr, nowait = true, desc = "fibrous: edit subwindow (operator)" })
     end
   end
+  if target == host.root_target then
+    widget_mode = require("fibrous.inline.widget_mode").attach(root_winid, target, subwins, cursor_cell, group)
+    maps[#maps + 1] = "<Esc>"
+  end
   local saved_mousemoveevent = nil
   if mouse.follow then
     saved_mousemoveevent = vim.o.mousemoveevent
@@ -1222,6 +1235,7 @@ function M.attach(host, root_winid, mouse, subwins, target, keys, anchor)
     -- pointer leaves the container (the clear half of `subwins.hover_at`).
     clear_hover = clear_hover,
     teardown = function()
+      if widget_mode then widget_mode.leave() end
       mousemove.unregister(root_winid)
       pcall(vim.api.nvim_del_augroup_by_id, group)
       if saved_mousemoveevent ~= nil then

@@ -69,69 +69,58 @@ function M.visible_range(winid)
   return info.topline, info.botline
 end
 
---- Walk `tree`; for each ROLE-carrying (non-subwindow) node, call
---- `resolve(content_box) -> { winid, pos, end_pos } | nil` and, when it resolves,
---- emit a target. `resolve` owns coordinate mapping + on-screen filtering, so the
---- same walk serves the root buffer, a visible float, and a parent mirror.
---- @param tree table|nil
---- @param resolve fun(box: {x:integer,y:integer,w:integer,h:integer}): table|nil
---- @return table[]
-function M.collect(tree, resolve)
-  local out = {}
+-- Walk the laid-out interactive geometry in display cells. Each fragment of a
+-- wrapped link carries the same (node, run.id). Consumers decide whether they
+-- need every fragment or just the first one that resolves to a visible cell.
+---@param tree table?
+---@param visit fun(node: table, box: table, run?: table)
+---@param subwindow? fun(node: table, visit: function)
+function M.visit_boxes(tree, visit, subwindow)
   local function walk(node)
     local visible = node.rect and clip.visible(node)
     if visible and (visible.w <= 0 or visible.h <= 0) then return end
-    if node.props and node.props.role and not node.subwin then
-      -- rect is the full border-box (themed padding/background included) so the
-      -- flash label spans the WHOLE widget, not just its inner text.
+    if node.subwin then
+      if subwindow then subwindow(node, visit) end
+    elseif node.props and node.props.role then
       local box = visible or node.content
-      if box then
-        local geo = resolve(box)
-        if geo then
-          out[#out + 1] = {
-            winid = geo.winid,
-            pos = geo.pos,
-            end_pos = geo.end_pos,
-            kind = M.node_kind(node),
-            role = node.props.role,
-          }
-        end
-      end
+      if box then visit(node, box) end
     end
-    -- Interactive spans (links) inside a text leaf: one target per logical span,
-    -- anchored at its first VISIBLE fragment's cell (resolve viewport-filters).
     if node.kind == "text" and node.line_runs then
-      local content = node.content
-      local seen = {}
       for li, runs in ipairs(node.line_runs) do
-        local cx = content.x
+        local x = node.content.x
         for _, run in ipairs(runs) do
           local w = width.str(run.text)
-          if run.id and (run.on_click or run.role) and not seen[run.id] then
-            local box = clip.visible(node, { x = cx, y = content.y + li - 1, w = w, h = 1 })
-            local geo = box.w > 0 and box.h > 0 and resolve(box) or nil
-            if geo then
-              seen[run.id] = true
-              out[#out + 1] = {
-                winid = geo.winid,
-                pos = geo.pos,
-                end_pos = geo.end_pos,
-                kind = run.role or "span",
-                role = run.role,
-              }
-            end
+          if run.id and (run.on_click or run.role) then
+            local box = clip.visible(node, { x = x, y = node.content.y + li - 1, w = w, h = 1 })
+            if box.w > 0 and box.h > 0 then visit(node, box, run) end
           end
-          cx = cx + w
+          x = x + w
         end
       end
     end
-    for _, child in ipairs(node.children or {}) do
-      walk(child)
+    for _, child in ipairs(node.children or {}) do walk(child) end
+  end
+  if tree then walk(tree) end
+end
+
+--- Collect one resolved Flash target per role node or logical span.
+function M.collect(tree, resolve)
+  local out, seen = {}, {}
+  M.visit_boxes(tree, function(node, box, run)
+    if run and seen[node] and seen[node][run.id] then return end
+    local geo = resolve(box)
+    if not geo then return end
+    local kind, role = M.node_kind(node), node.props and node.props.role
+    if run then
+      kind, role = run.role or "span", run.role
+      seen[node] = seen[node] or {}
+      seen[node][run.id] = true
     end
-  end
-  if tree then
-    walk(tree)
-  end
+    out[#out + 1] = {
+      winid = geo.winid, pos = geo.pos, end_pos = geo.end_pos,
+      kind = kind, role = role,
+    }
+  end)
   return out
 end
 

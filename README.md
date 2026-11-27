@@ -27,6 +27,18 @@ make example EX=counter   # opens and runs one example directly
 
 See [`examples/README.md`](examples/README.md) for the full list.
 
+## Widget mode
+
+Press `<Esc>` in Normal mode on any toplevel Fibrous view to snap to a widget.
+Use `h`, `j`, `k`, and `l` to move to the nearest widget in that direction.
+Counts work, so `3j` moves down three widgets. Other Normal-mode motions run
+first and snap to the nearest widget in the resulting viewport.
+
+Press `<CR>` to leave widget mode and activate the widget, or `<Esc>` to leave
+at the current cell. `<Space>` activates a button, checkbox, or link and keeps
+widget mode active. Entering another Vim mode or leaving the view ends widget
+mode. Inside a focused child window, Normal-mode `<Esc>` returns to its parent.
+
 ## Jump to widgets with flash.nvim
 
 `require("fibrous.targets").targets(opts?)` returns every interactive element
